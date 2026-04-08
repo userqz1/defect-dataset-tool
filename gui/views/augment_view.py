@@ -59,10 +59,13 @@ class AugmentView(QWidget):
         self.flip_v_chk = CheckBox("随机垂直翻转")
         self.rot_chk = CheckBox("随机旋转 90/180/270°")
         self.crop_chk = CheckBox("随机裁剪 (0.85x)")
+        self.copy_paste_chk = CheckBox("Copy-Paste(复制标注目标到随机位置)")
+        self.copy_paste_chk.setToolTip("从所有标注目标里随机抠一个,贴到新图的随机位置,标注同步")
         geo_grid.addWidget(self.flip_h_chk, 0, 0)
         geo_grid.addWidget(self.flip_v_chk, 0, 1)
         geo_grid.addWidget(self.rot_chk, 0, 2)
         geo_grid.addWidget(self.crop_chk, 0, 3)
+        geo_grid.addWidget(self.copy_paste_chk, 1, 0, 1, 4)
         root.addLayout(geo_grid)
 
         # 光度变换
@@ -169,6 +172,7 @@ class AugmentView(QWidget):
             flip_v=self.flip_v_chk.isChecked(),
             rotate90=self.rot_chk.isChecked(),
             random_crop=self.crop_chk.isChecked(),
+            copy_paste=self.copy_paste_chk.isChecked(),
             brightness=self.bright_chk.isChecked(),
             contrast=self.contrast_chk.isChecked(),
             color_jitter=self.color_chk.isChecked(),
