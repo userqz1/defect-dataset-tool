@@ -1,0 +1,62 @@
+"""On-disk thumbnail cache. Pure Python — no PyQt."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import diskcache
+from PIL import Image, ImageOps
+
+_DEFAULT_CACHE_DIR = Path.home() / ".defect_dataset_tool" / "thumbnails"
+
+
+class ThumbnailCache:
+    def __init__(self, cache_dir: Path | None = None, size_gb: float = 2.0) -> None:
+        cache_dir = cache_dir or _DEFAULT_CACHE_DIR
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._cache = diskcache.Cache(str(cache_dir), size_limit=int(size_gb * 1024**3))
+
+    @staticmethod
+    def _key(path: Path, size: int) -> str:
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        return f"{path}|{mtime}|{size}"
+
+    def get_or_generate(self, path: Path, size: int = 170) -> bytes | None:
+        """Return JPEG bytes of a thumbnail, generating + caching if missing."""
+        key = self._key(path, size)
+        data = self._cache.get(key)
+        if data is not None:
+            return data  # type: ignore[return-value]
+        try:
+            with Image.open(path) as im:
+                im = ImageOps.exif_transpose(im)
+                im.thumbnail((size, size), Image.Resampling.LANCZOS)
+                if im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                import io
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=85)
+                data = buf.getvalue()
+        except Exception:
+            return None
+        self._cache.set(key, data)
+        return data
+
+    def get_dimensions(self, path: Path) -> tuple[int, int] | None:
+        """Return (w, h) reading only the header — cheap."""
+        key = f"dim|{path}|{path.stat().st_mtime_ns if path.exists() else 0}"
+        dim = self._cache.get(key)
+        if dim is not None:
+            return dim  # type: ignore[return-value]
+        try:
+            with Image.open(path) as im:
+                dim = im.size  # (w, h)
+        except Exception:
+            return None
+        self._cache.set(key, dim)
+        return dim
+
+    def close(self) -> None:
+        self._cache.close()

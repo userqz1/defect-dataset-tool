@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy)",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" -c \":*)",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" -c \"import sys; sys.path.insert\\(0,''C:/Users/zq/Desktop/defect_dataset_tool''\\); from PyQt6.QtWidgets import QApplication; from gui.main_window import MainWindow; app=QApplication\\([]\\); w=MainWindow\\(\\); print\\(''OK''\\)\")",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" --version)",
+      "Read(//c/ProgramData/miniconda3/envs/defect-tool/**)",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" -c \"from PyQt6.QtWidgets import QApplication:*)",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" -c \"print\\(''hello''\\)\")",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" _smoke.py)",
+      "Bash(rm C:/Users/zq/Desktop/defect_dataset_tool/_smoke.py)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(\"C:/ProgramData/miniconda3/envs/defect-tool/python.exe\" main.py)",
+      "Bash(C:/ProgramData/miniconda3/envs/defect-tool/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding=''utf-8''\\).read\\(\\)\\) for f in [''gui/views/browser_view.py'',''gui/dialogs/op_dialogs.py'',''gui/workers/batch_worker.py'',''core/exporter/subset.py'']]; print\\(''OK''\\)\")",
+      "Bash(C:/ProgramData/miniconda3/envs/defect-tool/python.exe main.py)",
+      "Bash(C:/ProgramData/miniconda3/envs/defect-tool/python.exe -c \"import ast; ast.parse\\(open\\('gui/views/browser_view.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(C:/ProgramData/miniconda3/envs/defect-tool/python.exe -c \"from core import dataset; print\\(sorted\\(dataset.DEFAULT_IMAGE_EXTS\\)\\)\")",
+      "Bash(C:/ProgramData/miniconda3/envs/defect-tool/python.exe -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\) for f in ['gui/views/browser_view.py','gui/dialogs/op_dialogs.py']]; print\\('OK'\\)\")",
+      "mcp__github__create_repository",
+      "mcp__github__get_file_contents",
+      "mcp__github__push_files",
+      "mcp__github__create_or_update_file"
+    ]
+  }
+}

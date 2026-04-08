@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+*.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# App runtime/cache
+~/.defect_dataset_tool/
+*.sqlite
+*.db
+
+# Local config overrides
+config/local_*.yaml
+
+# Logs
+*.log

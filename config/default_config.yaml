@@ -1,0 +1,20 @@
+app:
+  name: 故障数据集管理工具
+  version: 0.1.0
+
+cache:
+  # 索引和缩略图缓存目录（相对用户目录）
+  index_db: ~/.defect_dataset_tool/index.sqlite
+  thumbnail_dir: ~/.defect_dataset_tool/thumbnails
+
+ui:
+  theme: light            # light / dark / auto
+  accent_color: "#c96442" # Claude 赤陶橙
+  thumbnail_size: 170     # 缩略图正方形边长 (px)
+
+scan:
+  # 默认支持的图像扩展名。工业/显微图常见为 TIFF，已默认开启。
+  # 若要扩展更多格式，可追加如 ".jp2", ".ppm" 等 Pillow 原生支持项。
+  image_exts: [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"]
+  label_subdir: labels
+  image_subdir: images

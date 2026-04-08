@@ -1,0 +1,213 @@
+"""File operations on image+label pairs. Pure Python — no PyQt.
+
+All operations work on the (image, optional label JSON) pair as a unit.
+Destructive ops use send2trash so the user can recover from Recycle Bin.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from send2trash import send2trash
+
+from .models import ImageInfo
+
+
+@dataclass
+class OpResult:
+    succeeded: list[Path] = field(default_factory=list)
+    failed: list[tuple[Path, str]] = field(default_factory=list)
+
+    @property
+    def ok_count(self) -> int:
+        return len(self.succeeded)
+
+    @property
+    def fail_count(self) -> int:
+        return len(self.failed)
+
+
+# ---------- 路径推断 ----------
+
+def label_path_for_image(image_path: Path) -> Path | None:
+    """Try common LabelMe layouts to find the JSON for an image."""
+    # 1) <category>/labels/<stem>.json
+    parent = image_path.parent
+    if parent.name == "images":
+        cat_root = parent.parent
+        candidate = cat_root / "labels" / (image_path.stem + ".json")
+        if candidate.is_file():
+            return candidate
+    # 2) sibling .json
+    sibling = image_path.with_suffix(".json")
+    if sibling.is_file():
+        return sibling
+    return None
+
+
+def _new_label_path(new_image_path: Path, original_label: Path) -> Path:
+    """Compute the destination path for a label file given the new image location."""
+    # 如果原 label 在 labels/ 子目录里 → 新位置也用 labels/
+    if original_label.parent.name == "labels":
+        new_cat = new_image_path.parent
+        if new_cat.name == "images":
+            new_cat = new_cat.parent
+        new_dir = new_cat / "labels"
+        new_dir.mkdir(parents=True, exist_ok=True)
+        return new_dir / (new_image_path.stem + ".json")
+    # sibling
+    return new_image_path.with_suffix(".json")
+
+
+def _update_image_path_in_json(json_path: Path, new_image_name: str) -> None:
+    """Update the `imagePath` field of a LabelMe JSON in-place. Best-effort."""
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if isinstance(data, dict):
+        data["imagePath"] = new_image_name
+        try:
+            json_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+
+# ---------- 删除 ----------
+
+def delete_pairs(images: list[ImageInfo], to_trash: bool = True) -> OpResult:
+    """Delete image + corresponding label JSON. Defaults to Recycle Bin."""
+    result = OpResult()
+    for img in images:
+        try:
+            label = img.label_path or label_path_for_image(img.path)
+            if to_trash:
+                send2trash(str(img.path))
+                if label and label.is_file():
+                    send2trash(str(label))
+            else:
+                img.path.unlink(missing_ok=True)
+                if label and label.is_file():
+                    label.unlink(missing_ok=True)
+            result.succeeded.append(img.path)
+        except Exception as e:  # noqa: BLE001
+            result.failed.append((img.path, str(e)))
+    return result
+
+
+# ---------- 移动到其他类别 ----------
+
+def move_to_category(
+    images: list[ImageInfo],
+    dataset_root: Path,
+    target_category: str,
+) -> OpResult:
+    """Move image+label pairs into <dataset_root>/<target_category>/{images,labels}/."""
+    result = OpResult()
+    target_images_dir = dataset_root / target_category / "images"
+    target_images_dir.mkdir(parents=True, exist_ok=True)
+
+    for img in images:
+        try:
+            new_image = target_images_dir / img.path.name
+            new_image = _ensure_unique(new_image)
+            shutil.move(str(img.path), str(new_image))
+
+            label = img.label_path or label_path_for_image(img.path)
+            if label and label.is_file():
+                new_label = _new_label_path(new_image, label)
+                new_label = _ensure_unique(new_label)
+                shutil.move(str(label), str(new_label))
+                _update_image_path_in_json(new_label, new_image.name)
+
+            result.succeeded.append(new_image)
+        except Exception as e:  # noqa: BLE001
+            result.failed.append((img.path, str(e)))
+    return result
+
+
+# ---------- 重命名 ----------
+
+def rename_pair(image: ImageInfo, new_stem: str) -> OpResult:
+    """Rename a single image and its label JSON to a new stem (no extension)."""
+    result = OpResult()
+    try:
+        new_image = image.path.with_name(new_stem + image.path.suffix)
+        if new_image.exists():
+            raise FileExistsError(f"target exists: {new_image.name}")
+        image.path.rename(new_image)
+
+        label = image.label_path or label_path_for_image(image.path)
+        if label and label.is_file():
+            new_label = label.with_name(new_stem + ".json")
+            label.rename(new_label)
+            _update_image_path_in_json(new_label, new_image.name)
+
+        result.succeeded.append(new_image)
+    except Exception as e:  # noqa: BLE001
+        result.failed.append((image.path, str(e)))
+    return result
+
+
+def batch_rename(
+    images: list[ImageInfo],
+    pattern: str = "{cat}_{idx:04d}",
+    start: int = 1,
+) -> OpResult:
+    """Batch rename using a Python format pattern.
+
+    Available placeholders:
+        {cat}    - category name
+        {idx}    - 1-based index
+        {stem}   - original stem
+    """
+    result = OpResult()
+    # 两阶段重命名以避免冲突：先全部加临时前缀
+    temp_paths: list[tuple[ImageInfo, Path, Path | None]] = []
+    for i, img in enumerate(images):
+        try:
+            tmp = img.path.with_name(f"__renaming__{i}__{img.path.name}")
+            img.path.rename(tmp)
+            label = img.label_path or label_path_for_image(img.path)
+            tmp_label: Path | None = None
+            if label and label.is_file():
+                tmp_label = label.with_name(f"__renaming__{i}__{label.name}")
+                label.rename(tmp_label)
+            temp_paths.append((img, tmp, tmp_label))
+        except Exception as e:  # noqa: BLE001
+            result.failed.append((img.path, f"stage1: {e}"))
+
+    for i, (img, tmp_image, tmp_label) in enumerate(temp_paths):
+        try:
+            new_stem = pattern.format(cat=img.category, idx=start + i, stem=img.path.stem)
+            new_image = tmp_image.with_name(new_stem + img.path.suffix)
+            tmp_image.rename(new_image)
+            if tmp_label is not None:
+                new_label = tmp_label.with_name(new_stem + ".json")
+                tmp_label.rename(new_label)
+                _update_image_path_in_json(new_label, new_image.name)
+            result.succeeded.append(new_image)
+        except Exception as e:  # noqa: BLE001
+            result.failed.append((tmp_image, f"stage2: {e}"))
+    return result
+
+
+# ---------- 助手 ----------
+
+def _ensure_unique(path: Path) -> Path:
+    """If `path` exists, append _1, _2, ..."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    i = 1
+    while True:
+        candidate = parent / f"{stem}_{i}{suffix}"
+        if not candidate.exists():
+            return candidate
+        i += 1
