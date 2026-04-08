@@ -1,0 +1,217 @@
+/* App-wide style overrides. Loaded by gui.theme.load_qss() and applied to the
+ * MainWindow so the rules cascade into FluentWindow's painted children.
+ *
+ * Token placeholders ({{SIDEBAR}}, {{ACCENT}}, ...) are filled at load time
+ * by str.format on the active Tokens dataclass.
+ *
+ * RULES:
+ *   - 这个文件只放无法靠 qfluentwidgets 组件 API 解决的样式
+ *   - 文字字号/前景色 → 用 BodyLabel/CaptionLabel/SubtitleLabel/...，不要在这里写
+ *   - 不要把任何颜色字面量写进 widget 代码：所有颜色一律来自 tokens
+ */
+
+/* ============================================================
+ * 1. 顶层容器（FluentWindow / 导航 / 标题栏）
+ * ============================================================ */
+
+FluentWindow {{
+    background-color: {SIDEBAR};
+}}
+
+/* 标题栏 — 与下方内容区之间的 1px 分界线（参考 Claude / VS Code） */
+FluentTitleBar {{
+    border-bottom: 1px solid {BORDER};
+}}
+
+/* 标题栏里的数据集 chip：圆角胶囊，柔和背景 */
+QWidget#datasetChip {{
+    background-color: {HOVER};
+    border: 1px solid {BORDER};
+    border-radius: 14px;
+    min-height: 28px;
+    max-height: 28px;
+}}
+QLabel#datasetChipName {{ color: {TEXT}; }}
+QLabel#datasetChipPath {{ color: {TEXT_3}; }}
+
+#stackedWidget, #stackedWidget > QWidget {{
+    background-color: {CONTENT};
+}}
+
+QWidget#overviewView, QWidget#browserView, QWidget#detailView,
+QWidget#qualityView, QWidget#exportView,
+QStackedWidget#browserStack {{
+    background-color: {CONTENT};
+}}
+
+NavigationInterface, NavigationInterface > QWidget {{
+    background-color: {SIDEBAR};
+    border-right: 1px solid {BORDER};
+}}
+
+TitleBar, TitleBar > QWidget {{
+    background-color: {SIDEBAR};
+}}
+
+/* ============================================================
+ * 2. 通用卡片
+ * ============================================================ */
+
+QFrame#statCard, QFrame#chartFrame {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS_LG}px;
+}}
+
+QLabel#hintWarn {{
+    color: {WARNING};
+}}
+
+/* ============================================================
+ * 3. 按钮族
+ * ============================================================ */
+
+QPushButton#filterChip {{
+    background-color: transparent;
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+    padding: 5px 14px;
+    color: {TEXT_2};
+}}
+QPushButton#filterChip:hover {{
+    background-color: {HOVER};
+    color: {TEXT};
+}}
+QPushButton#filterChip:checked {{
+    background-color: {ACCENT_SOFT};
+    border-color: {ACCENT};
+    color: {ACCENT};
+}}
+
+QPushButton#ghostButton {{
+    background-color: transparent;
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+    padding: 5px 14px;
+    color: {TEXT_2};
+}}
+QPushButton#ghostButton:hover {{
+    background-color: {HOVER};
+    color: {ACCENT};
+    border-color: {ACCENT};
+}}
+
+/* ============================================================
+ * 4. Browser 左侧类别栏
+ * ============================================================ */
+
+QFrame#categorySidebar {{
+    background-color: {SIDEBAR};
+    border-right: 1px solid {BORDER};
+}}
+
+QLabel#sectionHeader {{
+    color: {TEXT_2};
+    border-bottom: 1px solid {BORDER};
+    padding-left: 14px;
+}}
+
+QListWidget#categoryTree {{
+    background-color: {SIDEBAR};
+    border: none;
+    padding: 6px;
+    outline: 0;
+}}
+QListWidget#categoryTree::item {{
+    padding: 8px 10px;
+    border-radius: {RADIUS}px;
+    color: {TEXT};
+    margin-bottom: 1px;
+}}
+QListWidget#categoryTree::item:hover {{
+    background-color: {HOVER_STRONG};
+}}
+QListWidget#categoryTree::item:selected {{
+    background-color: {ACCENT_SOFT};
+    color: {ACCENT};
+}}
+
+/* ============================================================
+ * 5. Detail 视图
+ * ============================================================ */
+
+QFrame#detailTopBar {{
+    background-color: {CONTENT};
+    border-bottom: 1px solid {BORDER};
+}}
+
+QFrame#detailSidebar {{
+    background-color: {SIDEBAR};
+    border-left: 1px solid {BORDER};
+}}
+
+QListWidget#shapeList {{
+    background-color: transparent;
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+    outline: 0;
+}}
+QListWidget#shapeList::item {{
+    padding: 6px 10px;
+    color: {TEXT};
+}}
+QListWidget#shapeList::item:hover {{
+    background-color: {HOVER_STRONG};
+}}
+
+/* ============================================================
+ * 6. 缩略图网格
+ * ============================================================ */
+
+QListWidget#thumbnailGrid {{
+    background-color: {CONTENT};
+    border: none;
+    padding: 12px;
+}}
+QListWidget#thumbnailGrid::item {{
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+}}
+QListWidget#thumbnailGrid::item:selected {{
+    background: transparent;
+}}
+
+QFrame#thumbCard {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+}}
+QFrame#thumbCard[selected="true"] {{
+    border: 2px solid {ACCENT};
+}}
+
+QLabel#thumbImage {{
+    background-color: {SURFACE_DIM};
+    color: {TEXT_3};
+}}
+
+QWidget#thumbMeta {{
+    background-color: {CONTENT};
+    border-top: 1px solid {BORDER};
+}}
+
+QLabel#thumbBadge {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    padding: 0 8px;
+    color: {TEXT_2};
+}}
+QLabel#thumbBadge[state="labeled"] {{
+    color: {SUCCESS};
+}}
+QLabel#thumbBadge[state="unlabeled"] {{
+    color: {WARNING};
+}}

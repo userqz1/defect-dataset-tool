@@ -2,30 +2,32 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QKeyEvent
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import FluentIcon as FIF, ToolButton
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    EditableComboBox,
+    FluentIcon as FIF,
+    InfoBar,
+    InfoBarPosition,
+    MessageBox,
+    StrongBodyLabel,
+    ToolButton,
+)
 
-from core.annotation import parse_labelme
-from core.models import Annotation, ImageInfo
+from core.annotation_formats import load_yolo_classes, parse_annotation
+from core.annotation_writer import write_annotation
+from core.models import Annotation, ImageInfo, Shape
+from gui.theme import T
 from gui.widgets.image_viewer import ImageViewer, color_for_label
-
-BG = "#ffffff"
-SIDEBAR = "#f5f4ef"
-BORDER = "#e8e5dc"
-TEXT = "#2d2a26"
-TEXT_2 = "#6b6760"
-TEXT_3 = "#9a958a"
-ACCENT = "#c96442"
 
 
 class DetailView(QWidget):
@@ -35,7 +37,6 @@ class DetailView(QWidget):
         super().__init__()
         self.setObjectName("detailView")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(f"QWidget#detailView {{ background-color: {BG}; }}")
 
         self._images: list[ImageInfo] = []
         self._index: int = -1
@@ -47,21 +48,18 @@ class DetailView(QWidget):
 
         # 顶部条
         topbar = QFrame()
+        topbar.setObjectName("detailTopBar")
         topbar.setFixedHeight(48)
-        topbar.setStyleSheet(
-            f"background-color: {BG}; border-bottom: 1px solid {BORDER};"
-        )
         top_layout = QHBoxLayout(topbar)
         top_layout.setContentsMargins(12, 0, 16, 0)
         top_layout.setSpacing(8)
 
         self.back_btn = ToolButton(FIF.LEFT_ARROW)
         self.back_btn.setToolTip("返回浏览 (Esc)")
-        self.back_btn.clicked.connect(self.back_requested.emit)
+        self.back_btn.clicked.connect(self._on_back_clicked)
         top_layout.addWidget(self.back_btn)
 
-        self.crumb_label = QLabel("—")
-        self.crumb_label.setStyleSheet(f"color: {TEXT_2}; font-size: 12px;")
+        self.crumb_label = BodyLabel("—")
         top_layout.addWidget(self.crumb_label)
         top_layout.addStretch(1)
 
@@ -71,13 +69,82 @@ class DetailView(QWidget):
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
         self.next_btn.setToolTip("下一张 (D)")
         self.next_btn.clicked.connect(self.next_image)
+        self.zoom_out_btn = ToolButton(FIF.REMOVE)
+        self.zoom_out_btn.setToolTip("缩小")
+        self.zoom_out_btn.clicked.connect(lambda: self.viewer.zoom_out())
+        self.zoom_in_btn = ToolButton(FIF.ADD)
+        self.zoom_in_btn.setToolTip("放大")
+        self.zoom_in_btn.clicked.connect(lambda: self.viewer.zoom_in())
         self.fit_btn = ToolButton(FIF.ZOOM)
         self.fit_btn.setToolTip("适应窗口")
         self.fit_btn.clicked.connect(lambda: self.viewer.reset_view())
+        self.actual_btn = ToolButton(FIF.FULL_SCREEN)
+        self.actual_btn.setToolTip("实际像素 1:1")
+        self.actual_btn.clicked.connect(lambda: self.viewer.zoom_to_actual())
+        self.toggle_anno_btn = ToolButton(FIF.VIEW)
+        self.toggle_anno_btn.setCheckable(True)
+        self.toggle_anno_btn.setChecked(True)
+        self.toggle_anno_btn.setToolTip("显示 / 隐藏标注 (H)")
+
+        # 编辑模式
+        self.edit_btn = ToolButton(FIF.EDIT)
+        self.edit_btn.setCheckable(True)
+        self.edit_btn.setToolTip("编辑标注 (E) — 拖拽绘制矩形 / 点选删除")
+        self.edit_btn.toggled.connect(self._on_edit_toggled)
+
+        self.shape_rect_btn = ToolButton(FIF.LAYOUT)
+        self.shape_rect_btn.setCheckable(True)
+        self.shape_rect_btn.setChecked(True)
+        self.shape_rect_btn.setToolTip("矩形 (R)")
+        self.shape_poly_btn = ToolButton(FIF.IOT)
+        self.shape_poly_btn.setCheckable(True)
+        self.shape_poly_btn.setToolTip("多边形 (P) — 左键加点，双击/回车闭合，右键取消")
+        self.shape_rect_btn.clicked.connect(lambda: self._set_shape_type("rectangle"))
+        self.shape_poly_btn.clicked.connect(lambda: self._set_shape_type("polygon"))
+        self.shape_rect_btn.hide()
+        self.shape_poly_btn.hide()
+
+        self.label_combo = EditableComboBox()
+        self.label_combo.setMinimumWidth(120)
+        self.label_combo.setToolTip("绘制时使用的标签名")
+        self.label_combo.currentTextChanged.connect(
+            lambda t: self.viewer.set_draw_label(t)
+        )
+        self.label_combo.hide()
+
+        self.save_btn = ToolButton(FIF.SAVE)
+        self.save_btn.setToolTip("保存标注 (Ctrl+S)")
+        self.save_btn.clicked.connect(self._on_save)
+        self.save_btn.hide()
+
+        self.delete_shape_btn = ToolButton(FIF.DELETE)
+        self.delete_shape_btn.setToolTip("删除选中标注 (Del)")
+        self.delete_shape_btn.clicked.connect(lambda: self.viewer.delete_selected())
+        self.delete_shape_btn.hide()
+
+        self.zoom_label = BodyLabel("100%")
+        self.zoom_label.setMinimumWidth(48)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         top_layout.addWidget(self.prev_btn)
         top_layout.addWidget(self.next_btn)
+        top_layout.addWidget(self.zoom_out_btn)
+        top_layout.addWidget(self.zoom_label)
+        top_layout.addWidget(self.zoom_in_btn)
         top_layout.addWidget(self.fit_btn)
+        top_layout.addWidget(self.actual_btn)
+        top_layout.addWidget(self.toggle_anno_btn)
+        top_layout.addWidget(self.edit_btn)
+        top_layout.addWidget(self.shape_rect_btn)
+        top_layout.addWidget(self.shape_poly_btn)
+        top_layout.addWidget(self.label_combo)
+        top_layout.addWidget(self.delete_shape_btn)
+        top_layout.addWidget(self.save_btn)
+
+        self.help_btn = ToolButton(FIF.HELP)
+        self.help_btn.setToolTip("快捷键帮助")
+        self.help_btn.clicked.connect(self._show_shortcuts)
+        top_layout.addWidget(self.help_btn)
 
         root.addWidget(topbar)
 
@@ -87,14 +154,17 @@ class DetailView(QWidget):
         body.setSpacing(0)
 
         self.viewer = ImageViewer()
+        self.viewer.zoom_changed.connect(self._on_zoom_changed)
+        self.viewer.shapes_changed.connect(self._on_shapes_changed)
+        self.viewer.selection_changed.connect(self._on_selection_changed)
+        self.toggle_anno_btn.toggled.connect(self.viewer.set_annotation_visible)
         body.addWidget(self.viewer, 1)
+        self._dirty: bool = False
 
         # 右侧元信息
         sidebar = QFrame()
-        sidebar.setFixedWidth(280)
-        sidebar.setStyleSheet(
-            f"background-color: {SIDEBAR}; border-left: 1px solid {BORDER};"
-        )
+        sidebar.setObjectName("detailSidebar")
+        sidebar.setFixedWidth(T.DETAIL_SIDEBAR_WIDTH)
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(20, 20, 20, 20)
         side_layout.setSpacing(14)
@@ -114,19 +184,7 @@ class DetailView(QWidget):
         side_layout.addSpacing(8)
         side_layout.addWidget(self._section_label("标注列表"))
         self.shape_list = QListWidget()
-        self.shape_list.setStyleSheet(
-            f"""
-            QListWidget {{
-                background-color: transparent;
-                border: 1px solid {BORDER};
-                border-radius: 6px;
-                font-size: 12px;
-                outline: 0;
-            }}
-            QListWidget::item {{ padding: 6px 10px; color: {TEXT}; }}
-            QListWidget::item:hover {{ background-color: #ede9de; }}
-            """
-        )
+        self.shape_list.setObjectName("shapeList")
         side_layout.addWidget(self.shape_list, 1)
 
         body.addWidget(sidebar)
@@ -146,14 +204,36 @@ class DetailView(QWidget):
     def prev_image(self) -> None:
         if not self._images:
             return
+        if not self._confirm_discard():
+            return
         self._index = (self._index - 1) % len(self._images)
         self._load_current()
 
     def next_image(self) -> None:
         if not self._images:
             return
+        if not self._confirm_discard():
+            return
         self._index = (self._index + 1) % len(self._images)
         self._load_current()
+
+    def _on_back_clicked(self) -> None:
+        if not self._confirm_discard():
+            return
+        self.back_requested.emit()
+
+    def _confirm_discard(self) -> bool:
+        """Return True if it's OK to discard unsaved changes (or none)."""
+        if not self._dirty:
+            return True
+        box = MessageBox(
+            "未保存的修改",
+            "当前标注有未保存的修改，是否放弃？",
+            self.window(),
+        )
+        box.yesButton.setText("放弃修改")
+        box.cancelButton.setText("继续编辑")
+        return bool(box.exec())
 
     # ---------- 内部 ----------
 
@@ -166,7 +246,10 @@ class DetailView(QWidget):
         # 解析标注
         self._annotation = None
         if img.has_label and img.label_path:
-            result = parse_labelme(img.label_path, img.path)
+            classes = None
+            if img.label_path.suffix.lower() == ".txt":
+                classes = load_yolo_classes(img.label_path.parent) or None
+            result = parse_annotation(img.label_path, img.path, yolo_class_names=classes)
             if result.ok:
                 self._annotation = result.annotation
         self.viewer.set_annotation(self._annotation)
@@ -174,7 +257,7 @@ class DetailView(QWidget):
         # 元信息
         self.crumb_label.setText(
             f"{img.category}  /  {img.path.name}   "
-            f"<span style='color:{TEXT_3}'>{self._index + 1} / {len(self._images)}</span>"
+            f"{self._index + 1} / {len(self._images)}"
         )
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
@@ -194,8 +277,69 @@ class DetailView(QWidget):
         self.info_cat.setText(img.category)
 
         # 标注列表
+        self._refresh_shape_list()
+        if self.edit_btn.isChecked():
+            self._refresh_label_combo()
+        self._dirty = False
+
+    def _show_shortcuts(self) -> None:
+        from gui.dialogs.op_dialogs import ShortcutsDialog
+        ShortcutsDialog(self.window()).exec()
+
+    def _on_zoom_changed(self, scale: float) -> None:
+        self.zoom_label.setText(f"{scale * 100:.0f}%")
+
+    # ---------- 编辑 ----------
+
+    def _on_edit_toggled(self, on: bool) -> None:
+        self.viewer.set_edit_mode(on)
+        self.label_combo.setVisible(on)
+        self.delete_shape_btn.setVisible(on)
+        self.save_btn.setVisible(on)
+        self.shape_rect_btn.setVisible(on)
+        self.shape_poly_btn.setVisible(on)
+        if on:
+            # 初始化标签下拉：使用当前标注里出现过的所有 label
+            self._refresh_label_combo()
+            # 同步当前 draw label
+            self.viewer.set_draw_label(self.label_combo.currentText() or "object")
+
+    def _set_shape_type(self, st: str) -> None:
+        self.shape_rect_btn.setChecked(st == "rectangle")
+        self.shape_poly_btn.setChecked(st == "polygon")
+        self.viewer.set_draw_shape_type(st)
+
+    def _refresh_label_combo(self) -> None:
+        existing = sorted({s.label for s in (self._annotation.shapes if self._annotation else [])})
+        current = self.label_combo.currentText()
+        self.label_combo.blockSignals(True)
+        self.label_combo.clear()
+        if existing:
+            self.label_combo.addItems(existing)
+        else:
+            self.label_combo.addItem("object")
+        if current:
+            self.label_combo.setCurrentText(current)
+        self.label_combo.blockSignals(False)
+
+    def _on_shapes_changed(self) -> None:
+        self._dirty = True
+        self._annotation = self.viewer.get_annotation()
+        self._refresh_shape_list()
+        self._refresh_label_combo()
+        self.save_btn.setToolTip("保存标注 (Ctrl+S) — 有未保存修改")
+
+    def _on_selection_changed(self, idx: int) -> None:
+        self.shape_list.blockSignals(True)
+        if 0 <= idx < self.shape_list.count():
+            self.shape_list.setCurrentRow(idx)
+        else:
+            self.shape_list.clearSelection()
+        self.shape_list.blockSignals(False)
+
+    def _refresh_shape_list(self) -> None:
         self.shape_list.clear()
-        if self._annotation:
+        if self._annotation and self._annotation.shapes:
             for shape in self._annotation.shapes:
                 item = QListWidgetItem(f"●  {shape.label}   ({shape.shape_type})")
                 color = color_for_label(shape.label)
@@ -204,29 +348,60 @@ class DetailView(QWidget):
         else:
             self.shape_list.addItem(QListWidgetItem("（无标注）"))
 
+    def _on_save(self) -> None:
+        if not (0 <= self._index < len(self._images)):
+            return
+        img = self._images[self._index]
+        if self._annotation is None:
+            self._annotation = Annotation(image_path=img.path, shapes=[])
+        # 推断 label_path：已有就用原路径；没有则用 LabelMe JSON 旁置
+        label_path = img.label_path
+        if label_path is None:
+            label_path = self._infer_label_path(img.path)
+        try:
+            write_annotation(self._annotation, label_path, img.path)
+        except Exception as e:  # noqa: BLE001
+            InfoBar.error(
+                title="保存失败", content=str(e),
+                isClosable=True, position=InfoBarPosition.TOP,
+                duration=4000, parent=self.window(),
+            )
+            return
+        # 更新 ImageInfo 状态
+        img.has_label = True
+        img.label_path = label_path
+        self._dirty = False
+        InfoBar.success(
+            title="已保存", content=str(label_path.name),
+            isClosable=True, position=InfoBarPosition.TOP,
+            duration=2000, parent=self.window(),
+        )
+
+    def _infer_label_path(self, image_path):
+        # 优先 <category>/labels/<stem>.json，否则同目录
+        parent = image_path.parent
+        if parent.name == "images":
+            cand = parent.parent / "labels" / (image_path.stem + ".json")
+            cand.parent.mkdir(parents=True, exist_ok=True)
+            return cand
+        return parent / (image_path.stem + ".json")
+
     # ---------- 助手 ----------
 
-    def _section_label(self, text: str) -> QLabel:
-        lbl = QLabel(text.upper())
-        lbl.setStyleSheet(
-            f"color: {TEXT_2}; font-size: 11px; font-weight: 600; letter-spacing: 0.6px;"
-        )
-        return lbl
+    def _section_label(self, text: str) -> StrongBodyLabel:
+        return StrongBodyLabel(text.upper())
 
-    def _meta_value(self, text: str, small: bool = False) -> QLabel:
-        lbl = QLabel(text)
+    def _meta_value(self, text: str, small: bool = False):
+        lbl = CaptionLabel(text) if small else BodyLabel(text)
         lbl.setWordWrap(True)
-        size = 10 if small else 12
-        lbl.setStyleSheet(f"color: {TEXT}; font-size: {size}px;")
         return lbl
 
-    def _meta_row(self, label: str, value_widget: QLabel) -> QHBoxLayout:
+    def _meta_row(self, label: str, value_widget) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        key = QLabel(label)
+        row.setSpacing(T.GAP)
+        key = CaptionLabel(label)
         key.setFixedWidth(48)
-        key.setStyleSheet(f"color: {TEXT_3}; font-size: 11px;")
         key.setAlignment(Qt.AlignmentFlag.AlignTop)
         row.addWidget(key)
         row.addWidget(value_widget, 1)
@@ -235,11 +410,26 @@ class DetailView(QWidget):
     # ---------- 快捷键 ----------
 
     def keyPressEvent(self, e: QKeyEvent) -> None:  # type: ignore[override]
-        if e.key() == Qt.Key.Key_A:
+        if e.key() in (Qt.Key.Key_A, Qt.Key.Key_Left):
             self.prev_image()
-        elif e.key() == Qt.Key.Key_D:
+        elif e.key() in (Qt.Key.Key_D, Qt.Key.Key_Right):
             self.next_image()
+        elif e.key() == Qt.Key.Key_H:
+            self.toggle_anno_btn.toggle()
+        elif e.key() == Qt.Key.Key_E:
+            self.edit_btn.toggle()
+        elif e.key() == Qt.Key.Key_R and self.edit_btn.isChecked():
+            self._set_shape_type("rectangle")
+        elif e.key() == Qt.Key.Key_P and self.edit_btn.isChecked():
+            self._set_shape_type("polygon")
+        elif e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.edit_btn.isChecked():
+            self.viewer.finish_polygon()
+        elif e.key() == Qt.Key.Key_Delete and self.edit_btn.isChecked():
+            self.viewer.delete_selected()
+        elif e.key() == Qt.Key.Key_S and (e.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if self.edit_btn.isChecked():
+                self._on_save()
         elif e.key() == Qt.Key.Key_Escape:
-            self.back_requested.emit()
+            self._on_back_clicked()
         else:
             super().keyPressEvent(e)

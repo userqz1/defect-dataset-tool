@@ -56,6 +56,35 @@ def _transform_points(
         shape["points"] = new_pts
 
 
+# ---------- 内存版(预览用,不落盘) ----------
+
+def apply_in_memory(image: "Image.Image", op_kind: str, opts) -> "Image.Image":
+    """Run a single transform on a PIL image and return the result. No disk IO."""
+    im = ImageOps.exif_transpose(image)
+    if op_kind == "rotate":
+        if opts.angle == 90:
+            return im.rotate(-90, expand=True)
+        if opts.angle == 180:
+            return im.rotate(180, expand=True)
+        return im.rotate(90, expand=True)
+    if op_kind == "flip":
+        if opts.direction == "horizontal":
+            return ImageOps.mirror(im)
+        return ImageOps.flip(im)
+    if op_kind == "resize":
+        ow, oh = im.size
+        tw, th = opts.width or ow, opts.height or oh
+        if opts.keep_ratio and opts.width and opts.height:
+            ratio = min(tw / ow, th / oh)
+            tw, th = int(ow * ratio), int(oh * ratio)
+        elif opts.keep_ratio and opts.width:
+            th = int(oh * (tw / ow))
+        elif opts.keep_ratio and opts.height:
+            tw = int(ow * (th / oh))
+        return im.resize((tw, th), Image.Resampling.LANCZOS)
+    return im
+
+
 # ---------- Resize ----------
 
 @dataclass

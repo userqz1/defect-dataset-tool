@@ -7,10 +7,12 @@ from PyQt6.QtWidgets import QApplication
 
 from gui.main_window import MainWindow
 
+APP_NAME = "数据坊"  # DataForge
+
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("故障数据集管理工具")
+    app.setApplicationName(APP_NAME)
     window = MainWindow()
     window.show()
     return app.exec()

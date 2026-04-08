@@ -1,65 +1,56 @@
 """Parameter dialogs for batch operations.
 
-Each dialog only collects parameters and exposes them as attributes; running
-the actual operation is the caller's responsibility (via BatchWorker).
+All dialogs are built on `qfluentwidgets.MessageBoxBase` so they share the
+same Fluent look as the rest of the app. Each dialog only collects parameters
+and exposes them as `.options()`; the caller runs the actual op via BatchWorker.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
-    QLabel,
-    QLineEdit,
-    QSpinBox,
-    QVBoxLayout,
+from qfluentwidgets import (
+    BodyLabel,
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    MessageBoxBase,
+    SpinBox,
+    SubtitleLabel,
 )
 
 from core.convert import SUPPORTED_FORMATS, ConvertOptions
 from core.transform import CropOptions, FlipOptions, ResizeOptions, RotateOptions
 
 
-def _wrap(form: QFormLayout) -> QDialog:
-    dlg = QDialog()
-    layout = QVBoxLayout(dlg)
-    layout.addLayout(form)
-    btns = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-    )
-    btns.accepted.connect(dlg.accept)
-    btns.rejected.connect(dlg.reject)
-    layout.addWidget(btns)
-    return dlg
+class _OpDialogBase(MessageBoxBase):
+    """共享的标题/表单基类。子类调用 _add_row 添加表单项。"""
+
+    def __init__(self, title: str, parent=None) -> None:
+        super().__init__(parent=parent)
+        self.titleLabel = SubtitleLabel(title, self)
+        self.viewLayout.addWidget(self.titleLabel)
+        self.widget.setMinimumWidth(360)
+
+    def _add_row(self, label: str, widget) -> None:
+        self.viewLayout.addWidget(BodyLabel(label, self))
+        self.viewLayout.addWidget(widget)
 
 
-class ConvertDialog(QDialog):
+class ConvertDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("格式转换"))
-        form = QFormLayout()
-        self.fmt = QComboBox()
+        super().__init__(self.tr("格式转换"), parent)
+        self.fmt = ComboBox(self)
         self.fmt.addItems(sorted(SUPPORTED_FORMATS.keys()))
         self.fmt.setCurrentText(".png")
-        form.addRow(self.tr("目标格式"), self.fmt)
-        self.quality = QSpinBox()
+        self._add_row(self.tr("目标格式"), self.fmt)
+
+        self.quality = SpinBox(self)
         self.quality.setRange(1, 100)
         self.quality.setValue(92)
-        form.addRow(self.tr("JPEG 质量"), self.quality)
-        self.delete_original = QCheckBox(self.tr("转换后删除原文件"))
-        form.addRow("", self.delete_original)
-        self.overwrite = QCheckBox(self.tr("覆盖已存在文件"))
-        form.addRow("", self.overwrite)
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        self._add_row(self.tr("JPEG 质量"), self.quality)
+
+        self.delete_original = CheckBox(self.tr("转换后删除原文件"), self)
+        self.viewLayout.addWidget(self.delete_original)
+        self.overwrite = CheckBox(self.tr("覆盖已存在文件"), self)
+        self.viewLayout.addWidget(self.overwrite)
 
     def options(self) -> ConvertOptions:
         return ConvertOptions(
@@ -70,23 +61,15 @@ class ConvertDialog(QDialog):
         )
 
 
-class ResizeDialog(QDialog):
+class ResizeDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("缩放"))
-        form = QFormLayout()
-        self.w = QSpinBox(); self.w.setRange(0, 20000); self.w.setValue(1024)
-        self.h = QSpinBox(); self.h.setRange(0, 20000); self.h.setValue(0)
-        self.keep = QCheckBox(self.tr("保持纵横比")); self.keep.setChecked(True)
-        form.addRow(self.tr("宽 (0=自动)"), self.w)
-        form.addRow(self.tr("高 (0=自动)"), self.h)
-        form.addRow("", self.keep)
-        layout = QVBoxLayout(self); layout.addLayout(form)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        super().__init__(self.tr("缩放"), parent)
+        self.w = SpinBox(self); self.w.setRange(0, 20000); self.w.setValue(1024)
+        self.h = SpinBox(self); self.h.setRange(0, 20000); self.h.setValue(0)
+        self._add_row(self.tr("宽 (0=自动)"), self.w)
+        self._add_row(self.tr("高 (0=自动)"), self.h)
+        self.keep = CheckBox(self.tr("保持纵横比"), self); self.keep.setChecked(True)
+        self.viewLayout.addWidget(self.keep)
 
     def options(self) -> ResizeOptions:
         return ResizeOptions(
@@ -96,25 +79,17 @@ class ResizeDialog(QDialog):
         )
 
 
-class CropDialog(QDialog):
+class CropDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("裁剪"))
-        form = QFormLayout()
-        self.x = QSpinBox(); self.x.setRange(0, 20000)
-        self.y = QSpinBox(); self.y.setRange(0, 20000)
-        self.w = QSpinBox(); self.w.setRange(1, 20000); self.w.setValue(512)
-        self.h = QSpinBox(); self.h.setRange(1, 20000); self.h.setValue(512)
-        form.addRow("X", self.x)
-        form.addRow("Y", self.y)
-        form.addRow(self.tr("宽"), self.w)
-        form.addRow(self.tr("高"), self.h)
-        layout = QVBoxLayout(self); layout.addLayout(form)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        super().__init__(self.tr("裁剪"), parent)
+        self.x = SpinBox(self); self.x.setRange(0, 20000)
+        self.y = SpinBox(self); self.y.setRange(0, 20000)
+        self.w = SpinBox(self); self.w.setRange(1, 20000); self.w.setValue(512)
+        self.h = SpinBox(self); self.h.setRange(1, 20000); self.h.setValue(512)
+        self._add_row("X", self.x)
+        self._add_row("Y", self.y)
+        self._add_row(self.tr("宽"), self.w)
+        self._add_row(self.tr("高"), self.h)
 
     def options(self) -> CropOptions:
         return CropOptions(
@@ -123,58 +98,130 @@ class CropDialog(QDialog):
         )
 
 
-class RotateDialog(QDialog):
+class RotateDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("旋转"))
-        form = QFormLayout()
-        self.angle = QComboBox()
+        super().__init__(self.tr("旋转"), parent)
+        self.angle = ComboBox(self)
         self.angle.addItems(["90", "180", "270"])
-        form.addRow(self.tr("角度 (顺时针)"), self.angle)
-        layout = QVBoxLayout(self); layout.addLayout(form)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        self._add_row(self.tr("角度 (顺时针)"), self.angle)
 
     def options(self) -> RotateOptions:
         return RotateOptions(angle=int(self.angle.currentText()))  # type: ignore[arg-type]
 
 
-class FlipDialog(QDialog):
+class FlipDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("翻转"))
-        form = QFormLayout()
-        self.dir = QComboBox()
+        super().__init__(self.tr("翻转"), parent)
+        self.dir = ComboBox(self)
         self.dir.addItems(["horizontal", "vertical"])
-        form.addRow(self.tr("方向"), self.dir)
-        layout = QVBoxLayout(self); layout.addLayout(form)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        self._add_row(self.tr("方向"), self.dir)
 
     def options(self) -> FlipOptions:
         return FlipOptions(direction=self.dir.currentText())  # type: ignore[arg-type]
 
 
-class RenameDialog(QDialog):
+class RenameDialog(_OpDialogBase):
     def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(self.tr("批量重命名"))
-        form = QFormLayout()
-        self.pattern = QLineEdit("{cat}_{idx:04d}")
-        self.start = QSpinBox(); self.start.setRange(0, 100000); self.start.setValue(1)
-        form.addRow(self.tr("命名模板"), self.pattern)
-        form.addRow(self.tr("起始编号"), self.start)
-        hint = QLabel(self.tr("可用占位符: {cat} {idx} {stem}"))
-        hint.setStyleSheet("color: #9a958a; font-size: 11px;")
-        layout = QVBoxLayout(self); layout.addLayout(form); layout.addWidget(hint)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        super().__init__(self.tr("批量重命名"), parent)
+        self.pattern = LineEdit(self)
+        self.pattern.setText("{cat}_{idx:04d}")
+        self._add_row(self.tr("命名模板"), self.pattern)
+        self.start = SpinBox(self); self.start.setRange(0, 100000); self.start.setValue(1)
+        self._add_row(self.tr("起始编号"), self.start)
+        from qfluentwidgets import CaptionLabel
+        self.viewLayout.addWidget(
+            CaptionLabel(self.tr("可用占位符: {cat} {idx} {stem}"), self)
         )
-        btns.accepted.connect(self.accept); btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+
+
+class MoveToCategoryDialog(_OpDialogBase):
+    def __init__(self, categories: list[str], parent=None) -> None:
+        super().__init__(self.tr("移动到类别"), parent)
+        self.combo = ComboBox(self)
+        self.combo.addItems(categories)
+        self._add_row(self.tr("目标类别"), self.combo)
+
+    def target(self) -> str:
+        return self.combo.currentText()
+
+
+class ProgressDialog(_OpDialogBase):
+    """Fluent 风格的进度对话框（不可取消，由调用方关闭）。"""
+
+    def __init__(self, title: str, parent=None) -> None:
+        super().__init__(title, parent)
+        from qfluentwidgets import IndeterminateProgressBar, ProgressBar
+
+        self.label = BodyLabel("", self)
+        self.viewLayout.addWidget(self.label)
+
+        self.bar = ProgressBar(self)
+        self.bar.setRange(0, 0)
+        self.viewLayout.addWidget(self.bar)
+
+        self.indet = IndeterminateProgressBar(self)
+        self.viewLayout.addWidget(self.indet)
+
+        self.yesButton.hide()
+        self.cancelButton.hide()
+        self.buttonGroup.setFixedHeight(0)
+        self.widget.setMinimumWidth(420)
+        self._has_total = False
+
+    def set_progress(self, done: int, total: int, name: str) -> None:
+        if total > 0:
+            if not self._has_total:
+                self.indet.hide()
+                self._has_total = True
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+        self.label.setText(f"{done}/{total}  {name}" if total else name)
+
+
+class FailureDetailDialog(_OpDialogBase):
+    """显示批量操作的失败明细。"""
+
+    def __init__(self, ok: int, fail: int, details: str, parent=None) -> None:
+        super().__init__(parent.tr("完成（有失败）") if parent else "完成（有失败）", parent)
+        from qfluentwidgets import TextEdit
+
+        msg = BodyLabel(
+            self.tr("成功 {ok} 个，失败 {fail} 个").format(ok=ok, fail=fail), self
+        )
+        self.viewLayout.addWidget(msg)
+        self.detail = TextEdit(self)
+        self.detail.setReadOnly(True)
+        self.detail.setPlainText(details)
+        self.detail.setMinimumSize(560, 320)
+        self.viewLayout.addWidget(self.detail)
+        self.widget.setMinimumWidth(620)
+        self.cancelButton.hide()
+
+
+class ShortcutsDialog(_OpDialogBase):
+    """详情页快捷键速查表。"""
+
+    SHORTCUTS = [
+        ("A  /  ←", "上一张"),
+        ("D  /  →", "下一张"),
+        ("H", "显示 / 隐藏标注"),
+        ("滚轮", "缩放"),
+        ("拖动", "平移"),
+        ("Esc", "返回浏览"),
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__("快捷键", parent)
+        from PyQt6.QtWidgets import QGridLayout
+        from qfluentwidgets import CaptionLabel, StrongBodyLabel
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(8)
+        for i, (key, desc) in enumerate(self.SHORTCUTS):
+            grid.addWidget(StrongBodyLabel(key, self), i, 0)
+            grid.addWidget(CaptionLabel(desc, self), i, 1)
+        self.viewLayout.addLayout(grid)
+        self.cancelButton.hide()
+        self.yesButton.setText("知道了")
+        self.widget.setMinimumWidth(320)

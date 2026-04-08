@@ -6,19 +6,17 @@ signals.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal
-
-from core.fileops import OpResult
 
 
 class BatchWorker(QThread):
     progress = pyqtSignal(int, int, str)   # done, total, current name
-    finished_ok = pyqtSignal(object)       # OpResult
+    finished_ok = pyqtSignal(object)       # 任意结果对象（OpResult / list / ...）
     failed = pyqtSignal(str)
 
-    def __init__(self, fn: Callable[[Callable[[int, int, str], None]], OpResult]) -> None:
+    def __init__(self, fn: Callable[[Callable[[int, int, str], None]], Any]) -> None:
         super().__init__()
         self._fn = fn
 

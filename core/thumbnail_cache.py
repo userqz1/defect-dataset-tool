@@ -58,5 +58,19 @@ class ThumbnailCache:
         self._cache.set(key, dim)
         return dim
 
+    def volume(self) -> int:
+        """Approximate on-disk size in bytes."""
+        try:
+            return int(self._cache.volume())
+        except Exception:
+            return 0
+
+    def clear(self) -> int:
+        """Drop all cached entries. Returns number of items removed."""
+        try:
+            return int(self._cache.clear())
+        except Exception:
+            return 0
+
     def close(self) -> None:
         self._cache.close()

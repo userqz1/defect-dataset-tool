@@ -4,21 +4,23 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QMenu,
-    QMessageBox,
-    QProgressDialog,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import FluentIcon as FIF, LineEdit, ToolButton
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    FluentIcon as FIF,
+    LineEdit,
+    MessageBox,
+    ToolButton,
+)
 
 from core import fileops, index_cache, transform as tx
 from core.convert import convert_batch
@@ -28,61 +30,32 @@ from core.models import Dataset, ImageInfo
 from gui.dialogs.op_dialogs import (
     ConvertDialog,
     CropDialog,
+    FailureDetailDialog,
     FlipDialog,
+    MoveToCategoryDialog,
+    ProgressDialog,
     RenameDialog,
     ResizeDialog,
     RotateDialog,
 )
+from gui.theme import T
 from gui.widgets.category_tree import CategoryTree
+from gui.widgets.chips import FilterChip, GhostButton
 from gui.widgets.thumbnail_grid import ThumbnailGrid
 from gui.workers.batch_worker import BatchWorker
 
 PAGE_SIZE = 60
 
-BG = "#ffffff"
-SIDEBAR = "#f5f4ef"
-BORDER = "#e8e5dc"
-TEXT = "#2d2a26"
-TEXT_2 = "#6b6760"
-TEXT_3 = "#9a958a"
-ACCENT = "#c96442"
-ACCENT_SOFT = "#f4e8e2"
-
-
-class FilterChip(QPushButton):
-    def __init__(self, text: str) -> None:
-        super().__init__(text)
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: transparent;
-                border: 1px solid {BORDER};
-                border-radius: 6px;
-                padding: 5px 14px;
-                font-size: 12px;
-                color: {TEXT_2};
-            }}
-            QPushButton:hover {{ background-color: #faf9f7; color: {TEXT}; }}
-            QPushButton:checked {{
-                background-color: {ACCENT_SOFT};
-                border-color: {ACCENT};
-                color: {ACCENT};
-            }}
-            """
-        )
-
 
 class BrowserView(QWidget):
     image_activated = pyqtSignal(object, list)  # (current ImageInfo, full list)
     thumb_request = pyqtSignal(object)          # Path
+    add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("browserView")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(f"QWidget#browserView {{ background-color: {BG}; }}")
 
         self._dataset: Dataset | None = None
         self._current_category: str = ""
@@ -97,18 +70,15 @@ class BrowserView(QWidget):
 
         # 左侧类别树
         left = QFrame()
-        left.setFixedWidth(240)
-        left.setStyleSheet(f"background-color: {SIDEBAR}; border-right: 1px solid {BORDER};")
+        left.setObjectName("categorySidebar")
+        left.setFixedWidth(T.SIDEBAR_WIDTH)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        header = QLabel("  " + self.tr("类别"))
+        header = CaptionLabel("  " + self.tr("类别"))
+        header.setObjectName("sectionHeader")
         header.setFixedHeight(44)
-        header.setStyleSheet(
-            f"color: {TEXT_2}; font-size: 11px; font-weight: 600; letter-spacing: 0.8px;"
-            f"border-bottom: 1px solid {BORDER}; padding-left: 14px;"
-        )
         left_layout.addWidget(header)
 
         self.tree = CategoryTree()
@@ -151,18 +121,11 @@ class BrowserView(QWidget):
 
         filter_bar.addStretch(1)
 
-        self.dedup_btn = QPushButton(self.tr("查找重复"))
-        self.dedup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.dedup_btn.setStyleSheet(
-            f"QPushButton {{ background:transparent; border:1px solid {BORDER};"
-            f" border-radius:6px; padding:5px 14px; font-size:12px; color:{TEXT_2}; }}"
-            f"QPushButton:hover {{ background:#faf9f7; color:{ACCENT}; border-color:{ACCENT}; }}"
-        )
+        self.dedup_btn = GhostButton(self.tr("查找重复"))
         self.dedup_btn.clicked.connect(self._do_find_duplicates)
         filter_bar.addWidget(self.dedup_btn)
 
-        self.selection_label = QLabel("")
-        self.selection_label.setStyleSheet(f"color: {TEXT_3}; font-size: 11px;")
+        self.selection_label = CaptionLabel("")
         filter_bar.addWidget(self.selection_label)
 
         right_layout.addLayout(filter_bar)
@@ -175,7 +138,7 @@ class BrowserView(QWidget):
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self._on_context_menu)
         self._worker: BatchWorker | None = None
-        self._progress: QProgressDialog | None = None
+        self._progress: ProgressDialog | None = None
         right_layout.addWidget(self.grid, 1)
 
         # 分页栏
@@ -185,8 +148,7 @@ class BrowserView(QWidget):
         self.prev_btn.clicked.connect(self._prev_page)
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
         self.next_btn.clicked.connect(self._next_page)
-        self.page_label = QLabel("—")
-        self.page_label.setStyleSheet(f"color: {TEXT_2}; font-size: 12px;")
+        self.page_label = BodyLabel("—")
         pager.addStretch(1)
         pager.addWidget(self.prev_btn)
         pager.addWidget(self.page_label)
@@ -267,6 +229,9 @@ class BrowserView(QWidget):
         self._search_text = text.strip()
         self._apply_filter_and_show()
 
+    def get_selected_images(self) -> list[ImageInfo]:
+        return list(self.grid.selected_images())
+
     def _on_selection_changed(self, selected: list[ImageInfo]) -> None:
         n = len(selected)
         self.selection_label.setText(
@@ -305,16 +270,23 @@ class BrowserView(QWidget):
         menu.addAction(self.tr("旋转…"), lambda: self._do_transform(sel, tx.rotate_one, RotateDialog))
         menu.addAction(self.tr("翻转…"), lambda: self._do_transform(sel, tx.flip_one, FlipDialog))
         menu.addSeparator()
+        split_menu = menu.addMenu(self.tr("加入手动划分"))
+        split_menu.addAction(self.tr("→ Train"), lambda: self.add_to_split.emit("train", sel))
+        split_menu.addAction(self.tr("→ Val"), lambda: self.add_to_split.emit("val", sel))
+        split_menu.addAction(self.tr("→ Test"), lambda: self.add_to_split.emit("test", sel))
+        menu.addSeparator()
         menu.addAction(self.tr("导出为子集数据集…"), lambda: self._do_export_subset(sel))
         menu.exec(self.grid.viewport().mapToGlobal(pos))
 
     # ---- 各操作 ----
 
     def _do_delete(self, sel: list[ImageInfo]) -> None:
-        if QMessageBox.question(
-            self, self.tr("确认删除"),
+        box = MessageBox(
+            self.tr("确认删除"),
             self.tr("将 {n} 个图片+标注移至回收站，确认？").format(n=len(sel)),
-        ) != QMessageBox.StandardButton.Yes:
+            self.window(),
+        )
+        if not box.exec():
             return
         self._run(
             lambda cb: fileops.delete_pairs(sel, to_trash=True),
@@ -322,8 +294,8 @@ class BrowserView(QWidget):
         )
 
     def _do_rename(self, sel: list[ImageInfo]) -> None:
-        dlg = RenameDialog(self)
-        if dlg.exec() != dlg.DialogCode.Accepted:
+        dlg = RenameDialog(self.window())
+        if not dlg.exec():
             return
         pattern = dlg.pattern.text()
         start = dlg.start.value()
@@ -336,11 +308,11 @@ class BrowserView(QWidget):
         if not self._dataset:
             return
         cats = [c.name for c in self._dataset.categories]
-        from PyQt6.QtWidgets import QInputDialog
-        target, ok = QInputDialog.getItem(
-            self, self.tr("移动到类别"), self.tr("目标类别:"), cats, 0, True
-        )
-        if not ok or not target:
+        dlg = MoveToCategoryDialog(cats, self.window())
+        if not dlg.exec():
+            return
+        target = dlg.target()
+        if not target:
             return
         root = self._dataset.root_path
         self._run(
@@ -349,8 +321,8 @@ class BrowserView(QWidget):
         )
 
     def _do_convert(self, sel: list[ImageInfo]) -> None:
-        dlg = ConvertDialog(self)
-        if dlg.exec() != dlg.DialogCode.Accepted:
+        dlg = ConvertDialog(self.window())
+        if not dlg.exec():
             return
         opts = dlg.options()
         paths = [i.path for i in sel]
@@ -360,8 +332,8 @@ class BrowserView(QWidget):
         )
 
     def _do_transform(self, sel: list[ImageInfo], op_fn, DlgCls) -> None:
-        dlg = DlgCls(self)
-        if dlg.exec() != dlg.DialogCode.Accepted:
+        dlg = DlgCls(self.window())
+        if not dlg.exec():
             return
         opts = dlg.options()
         paths = [i.path for i in sel]
@@ -383,9 +355,13 @@ class BrowserView(QWidget):
 
     def _do_find_duplicates(self) -> None:
         if not self._filtered:
-            QMessageBox.information(
-                self, self.tr("查找重复"), self.tr("当前没有可扫描的图片")
+            box = MessageBox(
+                self.tr("查找重复"),
+                self.tr("当前没有可扫描的图片"),
+                self.window(),
             )
+            box.cancelButton.hide()
+            box.exec()
             return
         imgs = list(self._filtered)
         group_tpl = self.tr("{n} 张: {names}")
@@ -411,15 +387,13 @@ class BrowserView(QWidget):
 
     def _run(self, fn, title: str) -> None:
         if self._worker is not None:
-            QMessageBox.information(
-                self, self.tr("请稍候"), self.tr("已有操作正在执行")
+            box = MessageBox(
+                self.tr("请稍候"), self.tr("已有操作正在执行"), self.window()
             )
+            box.cancelButton.hide()
+            box.exec()
             return
-        self._progress = QProgressDialog(title, self.tr("取消"), 0, 0, self)
-        self._progress.setWindowTitle(self.tr("批量操作"))
-        self._progress.setMinimumDuration(0)
-        self._progress.setAutoClose(False)
-        self._progress.setCancelButton(None)
+        self._progress = ProgressDialog(title, self.window())
         self._progress.show()
 
         self._worker = BatchWorker(fn)
@@ -431,10 +405,7 @@ class BrowserView(QWidget):
     def _on_op_progress(self, done: int, total: int, name: str) -> None:
         if not self._progress:
             return
-        if total:
-            self._progress.setMaximum(total)
-            self._progress.setValue(done)
-        self._progress.setLabelText(f"{done}/{total}  {name}")
+        self._progress.set_progress(done, total, name)
 
     def _on_op_done(self, result) -> None:
         self._cleanup_worker()
@@ -445,28 +416,26 @@ class BrowserView(QWidget):
             except Exception:
                 pass
         if result.fail_count:
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle(self.tr("完成（有失败）"))
-            box.setText(
-                self.tr("成功 {ok} 个，失败 {fail} 个").format(
-                    ok=result.ok_count, fail=result.fail_count
-                )
-            )
             details = "\n".join(f"{p}\n  → {err}" for p, err in result.failed[:200])
-            box.setDetailedText(details)
-            box.exec()
+            FailureDetailDialog(
+                result.ok_count, result.fail_count, details, self.window()
+            ).exec()
         else:
-            QMessageBox.information(
-                self, self.tr("完成"),
+            box = MessageBox(
+                self.tr("完成"),
                 self.tr("成功 {ok} 个").format(ok=result.ok_count),
+                self.window(),
             )
+            box.cancelButton.hide()
+            box.exec()
         # 刷新当前视图
         self._apply_filter_and_show()
 
     def _on_op_failed(self, msg: str) -> None:
         self._cleanup_worker()
-        QMessageBox.critical(self, self.tr("操作失败"), msg)
+        box = MessageBox(self.tr("操作失败"), msg, self.window())
+        box.cancelButton.hide()
+        box.exec()
 
     def _cleanup_worker(self) -> None:
         if self._progress:

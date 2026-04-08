@@ -3,75 +3,49 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
-    QHBoxLayout,
-    QLabel,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import CaptionLabel, LargeTitleLabel, SubtitleLabel
 
 from core.models import Dataset
 from core.stats import DatasetStats, compute_stats
-
-# 调色板
-TEXT = "#2d2a26"
-TEXT_2 = "#6b6760"
-TEXT_3 = "#9a958a"
-BORDER = "#e8e5dc"
-CARD_BG = "#ffffff"
-ACCENT = "#c96442"
-WARNING = "#b8842b"
+from gui.theme import T
 
 
 class StatCard(QFrame):
+    """Label + big value + optional hint. Visual styling in app.qss."""
+
     def __init__(self, label: str, value: str, hint: str = "", hint_warn: bool = False) -> None:
         super().__init__()
         self.setObjectName("statCard")
-        self.setStyleSheet(
-            f"""
-            QFrame#statCard {{
-                background-color: {CARD_BG};
-                border: 1px solid {BORDER};
-                border-radius: 8px;
-            }}
-            """
-        )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(8)
+        layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
+        layout.setSpacing(T.GAP)
 
-        label_widget = QLabel(label.upper())
-        label_widget.setStyleSheet(
-            f"color: {TEXT_2}; font-size: 11px; letter-spacing: 0.6px; font-weight: 600;"
-        )
-
-        self.value_label = QLabel(value)
-        value_font = QFont()
-        value_font.setPointSize(22)
-        value_font.setWeight(QFont.Weight.DemiBold)
-        self.value_label.setFont(value_font)
-        self.value_label.setStyleSheet(f"color: {TEXT};")
-
-        self.hint_label = QLabel(hint)
-        hint_color = WARNING if hint_warn else TEXT_2
-        self.hint_label.setStyleSheet(f"color: {hint_color}; font-size: 11px;")
-
-        layout.addWidget(label_widget)
+        layout.addWidget(CaptionLabel(label.upper()))
+        self.value_label = LargeTitleLabel(value)
         layout.addWidget(self.value_label)
+        self.hint_label = CaptionLabel(hint)
         layout.addWidget(self.hint_label)
+        self._set_warn(hint_warn)
+
+    def _set_warn(self, warn: bool) -> None:
+        self.hint_label.setObjectName("hintWarn" if warn else "")
+        self.hint_label.style().unpolish(self.hint_label)
+        self.hint_label.style().polish(self.hint_label)
 
     def update_value(self, value: str, hint: str = "", hint_warn: bool = False) -> None:
         self.value_label.setText(value)
         self.hint_label.setText(hint)
-        self.hint_label.setStyleSheet(
-            f"color: {WARNING if hint_warn else TEXT_2}; font-size: 11px;"
-        )
+        self._set_warn(hint_warn)
 
 
 class OverviewView(QWidget):
@@ -79,22 +53,14 @@ class OverviewView(QWidget):
         super().__init__()
         self.setObjectName("overviewView")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("QWidget#overviewView { background-color: #ffffff; }")
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(32, 28, 32, 24)
-        root_layout.setSpacing(16)
+        root_layout.setSpacing(T.GAP_XL)
 
         # 标题
-        self.title_label = QLabel("概览")
-        title_font = QFont()
-        title_font.setPointSize(20)
-        title_font.setWeight(QFont.Weight.DemiBold)
-        self.title_label.setFont(title_font)
-        self.title_label.setStyleSheet(f"color: {TEXT};")
-
-        self.subtitle_label = QLabel("尚未打开数据集")
-        self.subtitle_label.setStyleSheet(f"color: {TEXT_2}; font-size: 12px;")
+        self.title_label = SubtitleLabel("概览")
+        self.subtitle_label = CaptionLabel("尚未加载数据")
 
         header = QVBoxLayout()
         header.setSpacing(2)
@@ -104,11 +70,11 @@ class OverviewView(QWidget):
 
         # 4 张统计卡
         cards_grid = QGridLayout()
-        cards_grid.setSpacing(12)
-        self.card_total = StatCard("总图片数", "—")
-        self.card_anno = StatCard("总标注数", "—")
-        self.card_cats = StatCard("类别数", "—")
-        self.card_unlabeled = StatCard("未标注", "—")
+        cards_grid.setSpacing(T.GAP_LG)
+        self.card_total = StatCard("总图片数", "")
+        self.card_anno = StatCard("总标注数", "")
+        self.card_cats = StatCard("类别数", "")
+        self.card_unlabeled = StatCard("未标注", "")
         cards_grid.addWidget(self.card_total, 0, 0)
         cards_grid.addWidget(self.card_anno, 0, 1)
         cards_grid.addWidget(self.card_cats, 0, 2)
@@ -118,30 +84,27 @@ class OverviewView(QWidget):
         # 类别分布图
         chart_frame = QFrame()
         chart_frame.setObjectName("chartFrame")
-        chart_frame.setStyleSheet(
-            f"QFrame#chartFrame {{ background-color: {CARD_BG}; "
-            f"border: 1px solid {BORDER}; border-radius: 8px; }}"
-        )
         chart_layout = QVBoxLayout(chart_frame)
-        chart_layout.setContentsMargins(20, 16, 20, 16)
-        chart_layout.setSpacing(10)
+        chart_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
+        chart_layout.setSpacing(T.GAP)
 
-        chart_title = QLabel("类别分布")
-        chart_title.setStyleSheet(
-            f"color: {TEXT_2}; font-size: 11px; letter-spacing: 0.6px; font-weight: 600;"
-        )
-        chart_layout.addWidget(chart_title)
+        chart_layout.addWidget(CaptionLabel("类别分布"))
 
-        pg.setConfigOption("background", CARD_BG)
-        pg.setConfigOption("foreground", TEXT)
+        pg.setConfigOption("background", T.CONTENT)
+        pg.setConfigOption("foreground", T.TEXT)
         self.plot = pg.PlotWidget()
-        self.plot.setMinimumHeight(260)
-        self.plot.getPlotItem().hideAxis("top")
-        self.plot.getPlotItem().hideAxis("right")
-        self.plot.getPlotItem().getAxis("left").setPen(BORDER)
-        self.plot.getPlotItem().getAxis("bottom").setPen(BORDER)
-        self.plot.getPlotItem().getAxis("left").setTextPen(TEXT_2)
-        self.plot.getPlotItem().getAxis("bottom").setTextPen(TEXT_2)
+        self.plot.setMinimumHeight(300)
+        plot_item = self.plot.getPlotItem()
+        plot_item.hideAxis("top")
+        plot_item.hideAxis("right")
+        plot_item.getAxis("left").setPen(T.BORDER)
+        plot_item.getAxis("bottom").setPen(T.BORDER)
+        plot_item.getAxis("left").setTextPen(T.TEXT_2)
+        plot_item.getAxis("bottom").setTextPen(T.TEXT_2)
+        # 给左/下轴留够空间，避免类别名 / 数值被裁剪或与标题重叠
+        plot_item.getAxis("left").setWidth(56)
+        plot_item.getAxis("bottom").setHeight(40)
+        plot_item.layout.setContentsMargins(8, 12, 16, 8)
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.setMenuEnabled(False)
         chart_layout.addWidget(self.plot)
@@ -196,7 +159,7 @@ class OverviewView(QWidget):
         x = list(range(len(names)))
 
         bar = pg.BarGraphItem(
-            x=x, height=counts, width=0.6, brush=QColor(ACCENT), pen=QColor(ACCENT)
+            x=x, height=counts, width=0.6, brush=QColor(T.ACCENT), pen=QColor(T.ACCENT)
         )
         self.plot.addItem(bar)
 
