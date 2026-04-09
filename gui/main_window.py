@@ -559,9 +559,10 @@ class MainWindow(FluentWindow):
             self.standards_view,
         ):
             v.set_dataset(dataset)
-        # 任务类型驱动导出格式过滤
+        # 任务类型驱动各视图
         if self._project:
             self.export_view.set_task_type(self._project.task_type)
+            self.pipeline_view.set_task_type(self._project.task_type)
 
         # 恢复项目状态
         if self._project:

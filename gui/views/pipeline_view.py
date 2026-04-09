@@ -290,6 +290,9 @@ class PipelineView(QWidget):
         else:
             self._summary.setText("")
 
+    def set_task_type(self, task_type) -> None:
+        self._task_type = task_type
+
     def _on_add_step(self) -> None:
         idx = self._add_combo.currentIndex()
         node_name = list(NODES.keys())[idx]
@@ -334,12 +337,70 @@ class PipelineView(QWidget):
     def _on_run_all(self) -> None:
         if not self._dataset or not self._steps or self._worker:
             return
-        # For now, show info about what would execute
-        step_names = [s.node.display_name for s in self._steps]
-        InfoBar.success(
-            "流程",
-            f"将执行 {len(step_names)} 个步骤: {' → '.join(step_names)}",
-            parent=self.window(),
-            duration=3000,
-            position=InfoBarPosition.TOP,
-        )
+
+        from core.pipeline import PipelineContext, PipelineEngine
+        from core.task_types import TaskType
+        from gui.dialogs.op_dialogs import ProgressDialog
+
+        task_type = getattr(self, "_task_type", TaskType.DETECTION)
+        ctx = PipelineContext.from_dataset(self._dataset, task_type)
+
+        engine = PipelineEngine()
+        for card in self._steps:
+            engine.add_step(card.node.name, card.collect_options())
+
+        self._progress = ProgressDialog("执行处理流程", parent=self.window())
+        self._progress.show()
+        self._run_btn.setEnabled(False)
+
+        def task(progress_cb):
+            return engine.execute(ctx, progress_cb=progress_cb)
+
+        self._worker = BatchWorker(task)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished_ok.connect(self._on_pipeline_done)
+        self._worker.failed.connect(self._on_pipeline_failed)
+        self._worker.start()
+
+    def _on_progress(self, done: int, total: int, name: str) -> None:
+        if hasattr(self, "_progress") and self._progress:
+            self._progress.set_progress(done, total, name)
+
+    def _on_pipeline_done(self, result) -> None:
+        self._worker = None
+        if hasattr(self, "_progress") and self._progress:
+            self._progress.close()
+            self._progress = None
+        self._run_btn.setEnabled(True)
+
+        # Update step cards with results
+        for record in result.step_results:
+            for card in self._steps:
+                if card.node.name == record.node_name:
+                    card.set_status(record.message)
+
+        if result.success:
+            InfoBar.success(
+                "完成",
+                f"全部 {result.steps_run} 个步骤执行完成",
+                parent=self.window(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+        else:
+            InfoBar.error(
+                "中断",
+                result.error,
+                parent=self.window(),
+                duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+
+    def _on_pipeline_failed(self, msg: str) -> None:
+        self._worker = None
+        if hasattr(self, "_progress") and self._progress:
+            self._progress.close()
+            self._progress = None
+        self._run_btn.setEnabled(True)
+        InfoBar.error("执行失败", msg, parent=self.window(),
+                      duration=5000, position=InfoBarPosition.TOP)
