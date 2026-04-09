@@ -289,3 +289,17 @@ QFrame#previewSlot {{
 QLabel#placeholderStatus {{
     color: {TEXT_2};
 }}
+
+/* ============================================================
+ * 11. 就绪检查条
+ * ============================================================ */
+
+QLabel#readinessOk {{
+    color: {SUCCESS};
+    padding: 2px 8px;
+}}
+QLabel#readinessGap {{
+    color: {WARNING};
+    padding: 2px 8px;
+    font-weight: bold;
+}}

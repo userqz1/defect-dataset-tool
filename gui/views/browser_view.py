@@ -53,6 +53,7 @@ class BrowserView(QWidget):
     thumb_request = pyqtSignal(object)          # Path
     clear_thumb_queue = pyqtSignal()            # clear pending thumbnail requests
     add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
+    navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
 
     def __init__(self) -> None:
@@ -98,6 +99,12 @@ class BrowserView(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.GAP_LG)
         right_layout.setSpacing(T.PAD)
+
+        # 就绪检查条（替代独立概览页 — 核心设计：输出是已知格子，缺什么补什么）
+        self._readiness_bar = QHBoxLayout()
+        self._readiness_bar.setSpacing(T.GAP_LG)
+        self._readiness_items: list[QWidget] = []
+        right_layout.addLayout(self._readiness_bar)
 
         # 筛选栏
         filter_bar = QHBoxLayout()
@@ -242,7 +249,29 @@ class BrowserView(QWidget):
         self._current_category = ""
         self._page = 0
         self.tree.load_dataset(dataset)
+        self._update_readiness(dataset)
         self._apply_filter_and_show()
+
+    def _update_readiness(self, dataset: Dataset) -> None:
+        """Show compact dataset status — objective facts, user decides what to do."""
+        for w in self._readiness_items:
+            self._readiness_bar.removeWidget(w)
+            w.deleteLater()
+        self._readiness_items.clear()
+
+        n_img = sum(c.image_count for c in dataset.categories)
+        n_lbl = sum(c.label_count for c in dataset.categories)
+        n_unlabeled = n_img - n_lbl
+        n_cat = len(dataset.categories)
+
+        parts = [f"{n_img:,} 张图片", f"{n_cat} 个分类", f"{n_lbl:,} 条标注"]
+        if n_unlabeled > 0:
+            parts.append(f"{n_unlabeled} 张未标注")
+
+        lbl = CaptionLabel("  ·  ".join(parts))
+        self._readiness_bar.addWidget(lbl)
+        self._readiness_items.append(lbl)
+        self._readiness_bar.addStretch(1)
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)

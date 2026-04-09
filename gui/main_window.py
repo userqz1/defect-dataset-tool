@@ -177,6 +177,7 @@ class MainWindow(FluentWindow):
         self._thumb_worker.thumb_ready.connect(self.browser.on_thumb_ready)
         self.browser.image_activated.connect(self._on_image_activated)
         self.browser.dataset_changed.connect(self._on_dataset_changed)
+        self.browser.navigate_to.connect(self._on_navigate_to)
         self.detail.back_requested.connect(self._on_detail_back)
 
         self.browser_stack = QStackedWidget()
@@ -221,9 +222,6 @@ class MainWindow(FluentWindow):
             selectable=False,
             tooltip="打开其他数据集",
             parentRouteKey="datasetGroup",
-        )
-        self.addSubInterface(
-            self.overview, FIF.HOME, "概览", parent="datasetGroup"
         )
         self.addSubInterface(
             self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
@@ -446,6 +444,19 @@ class MainWindow(FluentWindow):
 
     def _on_detail_back(self) -> None:
         self.browser_stack.setCurrentWidget(self.browser)
+
+    def _on_navigate_to(self, route: str) -> None:
+        """Readiness bar click → jump to the named view."""
+        view_map = {
+            "predictView": self.predict_view,
+            "splitView": self.split_view,
+            "cleaningView": self.cleaning_view,
+            "augmentView": self.augment_view,
+            "exportView": self.export_view,
+        }
+        target = view_map.get(route)
+        if target:
+            self.switchTo(target)
 
     # ---------- 打开数据集 ----------
 
