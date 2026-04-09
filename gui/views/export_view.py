@@ -72,6 +72,21 @@ class ExportView(QWidget):
 
         root.addLayout(grid)
 
+        # 输出结构预览
+        from PyQt6.QtWidgets import QFrame
+        preview_frame = QFrame()
+        preview_frame.setObjectName("chartFrame")  # 复用卡片样式
+        preview_layout = QVBoxLayout(preview_frame)
+        preview_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
+        preview_layout.setSpacing(T.GAP)
+        preview_layout.addWidget(CaptionLabel("输出结构预览"))
+        self._structure_label = BodyLabel("")
+        self._structure_label.setWordWrap(True)
+        preview_layout.addWidget(self._structure_label)
+        root.addWidget(preview_frame)
+        self.fmt_combo.currentTextChanged.connect(self._update_structure_preview)
+        self._update_structure_preview(self.fmt_combo.currentText())
+
         ctrl = QHBoxLayout()
         ctrl.addStretch(1)
         self.start_btn = PrimaryPushButton("选择目录并导出")
@@ -110,6 +125,55 @@ class ExportView(QWidget):
         else:
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
+
+    def _update_structure_preview(self, fmt: str) -> None:
+        """根据选中格式显示输出目录结构和命名示例。"""
+        structures = {
+            "YOLO": (
+                "<output>/\n"
+                "  ├── images/\n"
+                "  │   ├── train/\n"
+                "  │   │   ├── crack_001.jpg\n"
+                "  │   │   └── scratch_042.jpg\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  ├── labels/\n"
+                "  │   ├── train/\n"
+                "  │   │   ├── crack_001.txt        ← 类别ID cx cy w h (归一化)\n"
+                "  │   │   └── scratch_042.txt\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  ├── classes.txt                   ← 每行一个类别名\n"
+                "  └── data.yaml                     ← path/train/val/nc/names"
+            ),
+            "COCO": (
+                "<output>/\n"
+                "  ├── images/\n"
+                "  │   ├── train/\n"
+                "  │   │   └── crack_001.jpg\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  └── annotations/\n"
+                "      ├── instances_train.json      ← COCO 标准格式\n"
+                "      ├── instances_val.json        ← {images, annotations, categories}\n"
+                "      └── instances_test.json"
+            ),
+            "Pascal VOC": (
+                "<output>/\n"
+                "  ├── JPEGImages/\n"
+                "  │   ├── crack_001.jpg\n"
+                "  │   └── scratch_042.jpg\n"
+                "  ├── Annotations/\n"
+                "  │   ├── crack_001.xml             ← Pascal VOC XML 格式\n"
+                "  │   └── scratch_042.xml\n"
+                "  └── ImageSets/\n"
+                "      └── Main/\n"
+                "          ├── train.txt             ← 每行一个文件名（无扩展名）\n"
+                "          ├── val.txt\n"
+                "          └── test.txt"
+            ),
+        }
+        self._structure_label.setText(structures.get(fmt, ""))
 
     def _on_start(self) -> None:
         if self._dataset is None or self._worker is not None:
