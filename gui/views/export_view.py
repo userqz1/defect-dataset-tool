@@ -151,11 +151,11 @@ class ExportView(QWidget):
             ),
             "COCO": (
                 "<output>/\n"
-                "  ├── images/\n"
-                "  │   ├── train/\n"
-                "  │   │   └── crack_001.jpg\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
+                "  ├── train/\n"
+                "  │   ├── crack_001.jpg\n"
+                "  │   └── scratch_042.jpg\n"
+                "  ├── val/\n"
+                "  ├── test/\n"
                 "  └── annotations/\n"
                 "      ├── instances_train.json      ← COCO 标准格式\n"
                 "      ├── instances_val.json        ← {images, annotations, categories}\n"
@@ -338,7 +338,7 @@ class ExportView(QWidget):
                 "from detectron2.data.datasets import register_coco_instances\n\n"
                 f'register_coco_instances("train", {{}},\n'
                 f'    r"{path}/annotations/instances_train.json",\n'
-                f'    r"{path}/images/train")\n\n'
+                f'    r"{path}/train")\n\n'
                 "# mmdetection\n"
                 f'data_root = r"{path}"\n'
                 "# 在 config 中设置 data_root 和 ann_file 路径即可"
