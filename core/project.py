@@ -165,11 +165,13 @@ def save_project(project: Project) -> None:
     )
 
 
-def create_project(root: Path, name: str | None = None) -> Project:
+def create_project(root: Path, name: str | None = None,
+                    task_type: TaskType = TaskType.DETECTION) -> Project:
     """Create a new project for a dataset directory."""
     project = Project(
         root_path=root,
         name=name or root.name,
+        task_type=task_type,
         created_at=_now_iso(),
         updated_at=_now_iso(),
     )

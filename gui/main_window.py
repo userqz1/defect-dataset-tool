@@ -74,8 +74,10 @@ class _DatasetChip(QWidget):
         self.name_label.setObjectName("datasetChipName")
         layout.addWidget(self.name_label)
 
-    def set_project(self, name: str, path: Path) -> None:
+    def set_project(self, name: str, path: Path, task_label: str = "") -> None:
         display = name if len(name) <= self.MAX_NAME_LEN else name[:self.MAX_NAME_LEN - 1] + "…"
+        if task_label:
+            display = f"{display}  ·  {task_label}"
         self.name_label.setText(display)
         self.setToolTip(str(path))
         self.show()
@@ -323,7 +325,12 @@ class MainWindow(FluentWindow):
 
         project = load_project(root)
         if project is None:
-            project = create_project(root)
+            from gui.dialogs.op_dialogs import NewProjectDialog
+            dlg = NewProjectDialog(root.name, parent=self)
+            if not dlg.exec():
+                return
+            name, task_type = dlg.options()
+            project = create_project(root, name=name, task_type=task_type)
         self._project = project
 
         # 立刻显示进度弹窗，用户第一时间看到反馈
@@ -531,6 +538,9 @@ class MainWindow(FluentWindow):
             self.standards_view,
         ):
             v.set_dataset(dataset)
+        # 任务类型驱动导出格式过滤
+        if self._project:
+            self.export_view.set_task_type(self._project.task_type)
 
         # 恢复项目状态
         if self._project:
@@ -547,7 +557,12 @@ class MainWindow(FluentWindow):
         self._close_scan_progress()
 
         proj_name = self._project.name if self._project else dataset.name
-        self.dataset_chip.set_project(proj_name, dataset.root_path)
+        task_label = ""
+        if self._project:
+            from core.task_types import TASK_REGISTRY
+            info = TASK_REGISTRY.get(self._project.task_type)
+            task_label = info.display_name if info else ""
+        self.dataset_chip.set_project(proj_name, dataset.root_path, task_label)
         self.close_project_btn.show()
         # 用户打开项目是为了操作图片 → 默认落在浏览页
         self.switchTo(self.browser_stack)

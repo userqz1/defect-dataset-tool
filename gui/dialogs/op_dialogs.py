@@ -225,3 +225,32 @@ class ShortcutsDialog(_OpDialogBase):
         self.cancelButton.hide()
         self.yesButton.setText("知道了")
         self.widget.setMinimumWidth(320)
+
+
+class NewProjectDialog(_OpDialogBase):
+    """Dialog shown when opening a directory that has no project.json yet."""
+
+    def __init__(self, default_name: str, parent=None) -> None:
+        super().__init__("新建项目", parent)
+        from core.task_types import TASK_REGISTRY
+
+        self.name_edit = LineEdit(self)
+        self.name_edit.setText(default_name)
+        self._add_row("项目名称", self.name_edit)
+
+        self.task_combo = ComboBox(self)
+        self._task_types = list(TASK_REGISTRY.values())
+        self.task_combo.addItems([t.display_name for t in self._task_types])
+        # Default to 目标检测
+        for i, t in enumerate(self._task_types):
+            if t.task_type.value == "object_detection":
+                self.task_combo.setCurrentIndex(i)
+                break
+        self._add_row("任务类型", self.task_combo)
+
+        self.widget.setMinimumWidth(400)
+
+    def options(self):
+        idx = self.task_combo.currentIndex()
+        task_type = self._task_types[idx].task_type
+        return self.name_edit.text().strip() or "未命名", task_type

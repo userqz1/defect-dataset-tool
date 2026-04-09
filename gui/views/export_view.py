@@ -300,6 +300,23 @@ class ExportView(QWidget):
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
 
+    def set_task_type(self, task_type) -> None:
+        """Show/hide format cards based on the project's task type."""
+        from core.task_types import TASK_REGISTRY
+        info = TASK_REGISTRY.get(task_type)
+        if info is None:
+            return
+        allowed = set(info.export_formats)
+        for key, card in self._format_cards.items():
+            card.setVisible(key in allowed)
+        # If currently selected format is hidden, reset selection
+        if self._selected_fmt not in allowed:
+            # Select first visible format
+            for key, card in self._format_cards.items():
+                if key in allowed:
+                    self._select_format(key)
+                    break
+
     # ---------- 结构预览 ----------
 
     def _update_structure_preview(self) -> None:
