@@ -1,13 +1,18 @@
-"""导出 / 导出向导：当前支持 YOLO。"""
+"""导出向导 — 卡片式格式选择 + 分步引导。"""
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -15,10 +20,14 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CheckBox,
-    ComboBox,
     DoubleSpinBox,
+    FluentIcon as FIF,
+    InfoBar,
+    InfoBarPosition,
     PrimaryPushButton,
+    PushButton,
     SubtitleLabel,
+    TogglePushButton,
 )
 
 from core.exporter.coco import CocoExportOptions, export_coco
@@ -33,6 +42,106 @@ from gui.theme import T
 from gui.workers.batch_worker import BatchWorker
 
 
+# ---------- 格式定义 ----------
+
+_FORMATS = [
+    {
+        "key": "YOLO",
+        "name": "YOLO",
+        "desc": "YOLOv5 / v8 目标检测",
+        "detail": "适用于 Ultralytics YOLO 系列模型训练",
+    },
+    {
+        "key": "COCO",
+        "name": "COCO JSON",
+        "desc": "通用目标检测标准",
+        "detail": "适用于 Detectron2、mmdetection 等框架",
+    },
+    {
+        "key": "Pascal VOC",
+        "name": "Pascal VOC",
+        "desc": "经典 XML 标注格式",
+        "detail": "适用于 SSD、Faster R-CNN 等传统框架",
+    },
+    {
+        "key": "JSON Lines",
+        "name": "JSON Lines",
+        "desc": "通用数据管线格式",
+        "detail": "每行一条 JSON，适合自定义训练脚本和数据分析",
+    },
+    {
+        "key": "LLaVA",
+        "name": "LLaVA 对话",
+        "desc": "多模态大模型微调",
+        "detail": "对话格式 JSONL，自动生成缺陷描述，适用于 LLaVA/Qwen-VL",
+    },
+    {
+        "key": "CSV",
+        "name": "CSV 表格",
+        "desc": "数据分析友好",
+        "detail": "扁平表格，可直接用 Pandas/Excel 打开分析",
+    },
+]
+
+
+# ---------- 格式选择卡片 ----------
+
+class _FormatCard(QFrame):
+    """单个格式选择卡片。"""
+
+    def __init__(self, fmt: dict, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("formatCard")
+        self.fmt_key = fmt["key"]
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(72)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._selected = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(T.PAD_LG, T.PAD, T.PAD_LG, T.PAD)
+        layout.setSpacing(2)
+
+        name_row = QHBoxLayout()
+        name_row.setSpacing(T.GAP)
+        self.name_label = BodyLabel(fmt["name"])
+        self.name_label.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        name_row.addWidget(self.name_label)
+        name_row.addStretch(1)
+        self.tag_label = CaptionLabel(fmt["desc"])
+        name_row.addWidget(self.tag_label)
+        layout.addLayout(name_row)
+
+        self.detail_label = CaptionLabel(fmt["detail"])
+        layout.addWidget(self.detail_label)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        if selected:
+            self.setStyleSheet(
+                f"QFrame#formatCard {{ background: {T.ACCENT_SOFT}; "
+                f"border: 2px solid {T.ACCENT}; border-radius: {T.RADIUS_LG}px; }}"
+            )
+            self.name_label.setStyleSheet(f"font-weight: bold; color: {T.ACCENT};")
+        else:
+            self.setStyleSheet(
+                f"QFrame#formatCard {{ background: {T.CONTENT}; "
+                f"border: 1px solid {T.BORDER}; border-radius: {T.RADIUS_LG}px; }}"
+            )
+            self.name_label.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+
+    def mousePressEvent(self, e):
+        super().mousePressEvent(e)
+        # 让父级 ExportView 处理选中逻辑
+        p = self.parent()
+        while p and not isinstance(p, ExportView):
+            p = p.parent()
+        if p:
+            p._select_format(self.fmt_key)
+
+
+# ---------- 主视图 ----------
+
 class ExportView(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -42,81 +151,134 @@ class ExportView(QWidget):
         self._dataset: Dataset | None = None
         self._worker: BatchWorker | None = None
         self._progress = None
+        self._selected_fmt = "YOLO"
 
-        root = QVBoxLayout(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        container = QWidget()
+        root = QVBoxLayout(container)
         root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
-        root.setSpacing(T.GAP_LG)
+        root.setSpacing(T.GAP_XL)
+        scroll.setWidget(container)
 
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        # ---- Step 1: 选择格式 ----
         root.addWidget(SubtitleLabel("导出向导"))
-        root.addWidget(CaptionLabel("选择格式，一键导出为可直接训练的数据集"))
+        root.addWidget(CaptionLabel("选择导出格式，配置参数，一键生成可训练数据集"))
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(T.GAP_LG)
-        grid.setVerticalSpacing(T.GAP)
+        step1 = BodyLabel("① 选择导出格式")
+        step1.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        root.addWidget(step1)
 
-        grid.addWidget(BodyLabel("目标格式"), 0, 0)
-        self.fmt_combo = ComboBox()
-        self.fmt_combo.addItems(["YOLO", "COCO", "Pascal VOC", "JSON Lines", "LLaVA", "CSV"])
-        grid.addWidget(self.fmt_combo, 0, 1)
+        # 格式卡片网格（2列）
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(T.GAP)
+        self._format_cards: dict[str, _FormatCard] = {}
+        for i, fmt in enumerate(_FORMATS):
+            card = _FormatCard(fmt)
+            self._format_cards[fmt["key"]] = card
+            cards_grid.addWidget(card, i // 2, i % 2)
+        root.addLayout(cards_grid)
+        self._select_format("YOLO")
 
-        grid.addWidget(BodyLabel("Train / Val / Test"), 1, 0)
+        # ---- Step 2: 配置参数 ----
+        step2 = BodyLabel("② 配置参数")
+        step2.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        root.addWidget(step2)
+
+        param_frame = QFrame()
+        param_frame.setObjectName("chartFrame")
+        param_layout = QVBoxLayout(param_frame)
+        param_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
+        param_layout.setSpacing(T.GAP)
+
         ratio_row = QHBoxLayout()
-        self.train_spin = DoubleSpinBox(); self.train_spin.setRange(0, 1); self.train_spin.setValue(0.8); self.train_spin.setSingleStep(0.05)
-        self.val_spin = DoubleSpinBox(); self.val_spin.setRange(0, 1); self.val_spin.setValue(0.1); self.val_spin.setSingleStep(0.05)
-        self.test_spin = DoubleSpinBox(); self.test_spin.setRange(0, 1); self.test_spin.setValue(0.1); self.test_spin.setSingleStep(0.05)
-        for w in (self.train_spin, self.val_spin, self.test_spin):
-            ratio_row.addWidget(w)
+        ratio_row.setSpacing(T.GAP_LG)
+        ratio_row.addWidget(BodyLabel("训练集"))
+        self.train_spin = DoubleSpinBox()
+        self.train_spin.setRange(0, 1); self.train_spin.setValue(0.8); self.train_spin.setSingleStep(0.05)
+        ratio_row.addWidget(self.train_spin)
+        ratio_row.addWidget(BodyLabel("验证集"))
+        self.val_spin = DoubleSpinBox()
+        self.val_spin.setRange(0, 1); self.val_spin.setValue(0.1); self.val_spin.setSingleStep(0.05)
+        ratio_row.addWidget(self.val_spin)
+        ratio_row.addWidget(BodyLabel("测试集"))
+        self.test_spin = DoubleSpinBox()
+        self.test_spin.setRange(0, 1); self.test_spin.setValue(0.1); self.test_spin.setSingleStep(0.05)
+        ratio_row.addWidget(self.test_spin)
         ratio_row.addStretch(1)
-        grid.addLayout(ratio_row, 1, 1)
+        param_layout.addLayout(ratio_row)
 
-        self.copy_chk = CheckBox("复制图片到导出目录（取消则只生成 labels）")
+        self.copy_chk = CheckBox("复制图片到导出目录")
         self.copy_chk.setChecked(True)
-        grid.addWidget(self.copy_chk, 2, 0, 1, 2)
+        param_layout.addWidget(self.copy_chk)
 
-        root.addLayout(grid)
+        root.addWidget(param_frame)
 
-        # 输出结构预览
-        from PyQt6.QtWidgets import QFrame
-        preview_frame = QFrame()
-        preview_frame.setObjectName("chartFrame")  # 复用卡片样式
-        preview_layout = QVBoxLayout(preview_frame)
+        # ---- Step 3: 结构预览（可折叠） ----
+        self._preview_btn = PushButton("查看输出结构")
+        self._preview_btn.setFixedWidth(160)
+        self._preview_btn.clicked.connect(self._toggle_preview)
+        root.addWidget(self._preview_btn)
+
+        self._preview_frame = QFrame()
+        self._preview_frame.setObjectName("chartFrame")
+        preview_layout = QVBoxLayout(self._preview_frame)
         preview_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
-        preview_layout.setSpacing(T.GAP)
-        preview_layout.addWidget(CaptionLabel("输出结构预览"))
-        self._structure_label = BodyLabel("")
+        self._structure_label = CaptionLabel("")
         self._structure_label.setWordWrap(True)
         preview_layout.addWidget(self._structure_label)
-        root.addWidget(preview_frame)
-        self.fmt_combo.currentTextChanged.connect(self._update_structure_preview)
-        self._update_structure_preview(self.fmt_combo.currentText())
+        self._preview_frame.hide()
+        root.addWidget(self._preview_frame)
 
-        ctrl = QHBoxLayout()
-        ctrl.addStretch(1)
+        # ---- 导出按钮 ----
+        btn_row = QHBoxLayout()
+        self.summary_label = BodyLabel("")
+        btn_row.addWidget(self.summary_label, 1)
         self.start_btn = PrimaryPushButton("选择目录并导出")
+        self.start_btn.setFixedHeight(40)
         self.start_btn.clicked.connect(self._on_start)
         self.start_btn.setEnabled(False)
-        ctrl.addWidget(self.start_btn)
-        root.addLayout(ctrl)
+        btn_row.addWidget(self.start_btn)
+        root.addLayout(btn_row)
 
-        self.summary_label = BodyLabel("")
-        root.addWidget(self.summary_label)
+        # 结果区域
         self.detail_label = CaptionLabel("")
         root.addWidget(self.detail_label)
+
         root.addStretch(1)
+
+    # ---------- 格式选择 ----------
+
+    def _select_format(self, key: str) -> None:
+        self._selected_fmt = key
+        for k, card in self._format_cards.items():
+            card.set_selected(k == key)
+        self._update_structure_preview()
+
+    def _toggle_preview(self) -> None:
+        visible = not self._preview_frame.isVisible()
+        self._preview_frame.setVisible(visible)
+        self._preview_btn.setText("收起输出结构" if visible else "查看输出结构")
+
+    # ---------- 状态持久化 ----------
 
     def save_state(self):
         from core.project import ExportConfig
         return ExportConfig(
-            format=self.fmt_combo.currentText(),
+            format=self._selected_fmt,
             copy_images=self.copy_chk.isChecked(),
         )
 
     def restore_state(self, state) -> None:
         if state is None:
             return
-        idx = self.fmt_combo.findText(state.format)
-        if idx >= 0:
-            self.fmt_combo.setCurrentIndex(idx)
+        if state.format in self._format_cards:
+            self._select_format(state.format)
         self.copy_chk.setChecked(state.copy_images)
 
     def set_dataset(self, dataset: Dataset | None) -> None:
@@ -124,99 +286,57 @@ class ExportView(QWidget):
         on = dataset is not None and sum(c.image_count for c in dataset.categories) > 0
         self.start_btn.setEnabled(on)
         if dataset is None:
-            self.summary_label.setText("请先加载数据集。")
+            self.summary_label.setText("请先打开项目")
         else:
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
 
-    def _update_structure_preview(self, fmt: str) -> None:
-        """根据选中格式显示输出目录结构和命名示例。"""
+    # ---------- 结构预览 ----------
+
+    def _update_structure_preview(self) -> None:
+        fmt = self._selected_fmt
         structures = {
             "YOLO": (
                 "<output>/\n"
-                "  ├── images/\n"
-                "  │   ├── train/\n"
-                "  │   │   ├── crack_001.jpg\n"
-                "  │   │   └── scratch_042.jpg\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
-                "  ├── labels/\n"
-                "  │   ├── train/\n"
-                "  │   │   ├── crack_001.txt        ← 类别ID cx cy w h (归一化)\n"
-                "  │   │   └── scratch_042.txt\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
-                "  ├── classes.txt                   ← 每行一个类别名\n"
-                "  └── data.yaml                     ← path/train/val/nc/names"
+                "  ├── images/{train,val,test}/   图片按 split 分目录\n"
+                "  ├── labels/{train,val,test}/   每张图对应一个 .txt\n"
+                "  ├── classes.txt                类别名列表\n"
+                "  └── data.yaml                  训练配置文件"
             ),
             "COCO": (
                 "<output>/\n"
-                "  ├── train/\n"
-                "  │   ├── crack_001.jpg\n"
-                "  │   └── scratch_042.jpg\n"
-                "  ├── val/\n"
-                "  ├── test/\n"
+                "  ├── {train,val,test}/           图片按 split 分目录\n"
                 "  └── annotations/\n"
-                "      ├── instances_train.json      ← COCO 标准格式\n"
-                "      ├── instances_val.json        ← {images, annotations, categories}\n"
-                "      └── instances_test.json"
+                "      └── instances_{split}.json  COCO 标准标注"
             ),
             "Pascal VOC": (
                 "<output>/\n"
-                "  ├── JPEGImages/\n"
-                "  │   ├── crack_001.jpg\n"
-                "  │   └── scratch_042.jpg\n"
-                "  ├── Annotations/\n"
-                "  │   ├── crack_001.xml             ← Pascal VOC XML 格式\n"
-                "  │   └── scratch_042.xml\n"
-                "  └── ImageSets/\n"
-                "      └── Main/\n"
-                "          ├── train.txt             ← 每行一个文件名（无扩展名）\n"
-                "          ├── val.txt\n"
-                "          └── test.txt"
+                "  ├── JPEGImages/                 所有图片\n"
+                "  ├── Annotations/                每张图一个 .xml\n"
+                "  └── ImageSets/Main/             train.txt / val.txt / test.txt"
             ),
             "JSON Lines": (
                 "<output>/\n"
-                "  ├── images/\n"
-                "  │   ├── train/\n"
-                "  │   │   └── crack_001.jpg\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
-                "  ├── train.jsonl                    ← 每行一条 JSON 记录\n"
-                "  ├── val.jsonl                      ← {image, width, height, annotations}\n"
-                "  └── test.jsonl\n\n"
-                "每行格式：\n"
-                '  {"image": "images/train/crack_001.jpg", "width": 1920, "height": 1080,\n'
-                '   "category": "crack", "annotations": [{"label": "crack", "bbox": [x1,y1,x2,y2]}]}'
+                "  ├── images/{train,val,test}/    图片（可选）\n"
+                "  └── {train,val,test}.jsonl      每行一条 JSON 记录\n\n"
+                "  字段：image, width, height, category, annotations[]"
             ),
             "LLaVA": (
                 "<output>/\n"
-                "  ├── images/\n"
-                "  │   ├── train/\n"
-                "  │   │   └── crack_001.jpg\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
-                "  ├── llava_train.jsonl              ← 对话格式，可直接微调 LLaVA/Qwen-VL\n"
-                "  ├── llava_val.jsonl\n"
-                "  └── llava_test.jsonl\n\n"
-                "每行格式：\n"
-                '  {"id": "train_000001", "image": "images/train/crack_001.jpg",\n'
-                '   "conversations": [{"from": "human", "value": "<image>\\n有什么缺陷？"},\n'
-                '                     {"from": "gpt", "value": "存在1处裂纹缺陷..."}]}'
+                "  ├── images/{train,val,test}/    图片（可选）\n"
+                "  └── llava_{split}.jsonl         对话格式\n\n"
+                "  自动根据标注生成缺陷描述文本"
             ),
             "CSV": (
                 "<output>/\n"
-                "  ├── images/\n"
-                "  │   ├── train/\n"
-                "  │   │   └── crack_001.jpg\n"
-                "  │   ├── val/\n"
-                "  │   └── test/\n"
-                "  └── annotations.csv                ← 扁平表格，每行一个标注框\n\n"
-                "CSV 列：\n"
-                "  image_path, category, label, x1, y1, x2, y2, shape_type, split"
+                "  ├── images/{train,val,test}/    图片（可选）\n"
+                "  └── annotations.csv             扁平表格\n\n"
+                "  列：image_path, category, label, x1, y1, x2, y2, split"
             ),
         }
         self._structure_label.setText(structures.get(fmt, ""))
+
+    # ---------- 导出 ----------
 
     def _on_start(self) -> None:
         if self._dataset is None or self._worker is not None:
@@ -225,7 +345,7 @@ class ExportView(QWidget):
         if not out:
             return
         self._last_export_dir = out
-        self._last_export_fmt = self.fmt_combo.currentText()
+        self._last_export_fmt = self._selected_fmt
 
         split = split_dataset(
             self._dataset,
@@ -237,13 +357,12 @@ class ExportView(QWidget):
             ),
         )
 
-        # Pre-export validation
         from gui.dialogs.export_validation_dialog import ExportValidationDialog
         dlg = ExportValidationDialog(split, self._dataset, parent=self.window())
         if not dlg.exec():
             return
 
-        fmt = self.fmt_combo.currentText()
+        fmt = self._selected_fmt
         copy = self.copy_chk.isChecked()
         out_path = Path(out)
         format_map = {
@@ -286,17 +405,14 @@ class ExportView(QWidget):
         fmt = getattr(self, "_last_export_fmt", "")
 
         self.summary_label.setText(
-            f"导出完成：图片 {report.written_images:,}  ·  标签 {labels:,}"
+            f"导出完成：{report.written_images:,} 张图片 · {labels:,} 个标签"
         )
         if report.skipped:
             self.detail_label.setText(f"跳过 {len(report.skipped)} 个文件")
         else:
             self.detail_label.setText("")
 
-        # 显示输出路径 + 打开文件夹 + 训练代码片段
         if out_dir:
-            import subprocess, sys
-            from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
             bar = InfoBar.success(
                 title="导出成功",
                 content=f"输出目录：{out_dir}",
@@ -312,83 +428,57 @@ class ExportView(QWidget):
             )
             bar.addWidget(open_btn)
 
-        # 更新结构预览区域为训练代码片段
+        # 显示训练代码片段
         snippet = self._training_snippet(fmt, out_dir)
         if snippet:
             self._structure_label.setText(snippet)
+            self._preview_frame.show()
+            self._preview_btn.setText("收起训练代码")
 
     @staticmethod
     def _training_snippet(fmt: str, out_dir: str) -> str:
-        """生成导出后可直接粘贴的训练代码片段。"""
         path = out_dir.replace("\\", "/")
-        if fmt == "YOLO":
-            return (
-                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
-                "# YOLOv8 训练\n"
+        snippets = {
+            "YOLO": (
+                "复制以下代码开始训练：\n\n"
                 "from ultralytics import YOLO\n\n"
                 f'model = YOLO("yolov8n.pt")\n'
-                f'model.train(data=r"{path}/data.yaml", epochs=100, imgsz=640)\n\n'
-                "# YOLOv5 训练\n"
-                f'python train.py --data "{path}/data.yaml" --weights yolov5s.pt --epochs 100'
-            )
-        elif fmt == "COCO":
-            return (
-                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
-                "# Detectron2\n"
+                f'model.train(data=r"{path}/data.yaml", epochs=100, imgsz=640)'
+            ),
+            "COCO": (
+                "复制以下代码加载数据：\n\n"
                 "from detectron2.data.datasets import register_coco_instances\n\n"
                 f'register_coco_instances("train", {{}},\n'
                 f'    r"{path}/annotations/instances_train.json",\n'
-                f'    r"{path}/train")\n\n'
-                "# mmdetection\n"
-                f'data_root = r"{path}"\n'
-                "# 在 config 中设置 data_root 和 ann_file 路径即可"
-            )
-        elif fmt == "Pascal VOC":
-            return (
-                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
-                "# torchvision VOC 加载\n"
+                f'    r"{path}/train")'
+            ),
+            "Pascal VOC": (
+                "复制以下代码加载数据：\n\n"
                 "from torchvision.datasets import VOCDetection\n\n"
                 f'dataset = VOCDetection(root=r"{path}",\n'
-                f'    image_set="train", download=False)\n\n'
-                f"# 图片目录：{path}/JPEGImages/\n"
-                f"# 标注目录：{path}/Annotations/\n"
-                f"# 划分列表：{path}/ImageSets/Main/"
-            )
-        elif fmt == "JSON Lines":
-            return (
-                "导出完成。可用 Python 直接加载：\n\n"
+                f'    image_set="train", download=False)'
+            ),
+            "JSON Lines": (
+                "复制以下代码加载数据：\n\n"
                 "import json\n\n"
                 f'with open(r"{path}/train.jsonl") as f:\n'
                 "    for line in f:\n"
-                "        sample = json.loads(line)\n"
-                '        img_path = sample["image"]\n'
-                '        annots = sample["annotations"]\n\n'
-                "# 或用 pandas:\n"
-                "import pandas as pd\n"
-                f'df = pd.read_json(r"{path}/train.jsonl", lines=True)'
-            )
-        elif fmt == "LLaVA":
-            return (
-                "导出完成。可用于 LLaVA / Qwen-VL / InternVL 微调：\n\n"
-                "# LLaVA 微调命令\n"
+                "        sample = json.loads(line)"
+            ),
+            "LLaVA": (
+                "用于 LLaVA / Qwen-VL 微调：\n\n"
                 "python llava/train/train_mem.py \\\n"
                 f'    --data_path r"{path}/llava_train.jsonl" \\\n'
-                f'    --image_folder r"{path}" \\\n'
-                "    --model_name_or_path liuhaotian/llava-v1.5-7b \\\n"
-                "    --output_dir ./checkpoints/my_model\n\n"
-                "# Qwen-VL 微调\n"
-                f'# 将 {path}/llava_train.jsonl 转为 Qwen 格式后使用'
-            )
-        elif fmt == "CSV":
-            return (
-                "导出完成。可直接用 Pandas 加载分析：\n\n"
+                f'    --image_folder r"{path}"'
+            ),
+            "CSV": (
+                "复制以下代码加载分析：\n\n"
                 "import pandas as pd\n\n"
                 f'df = pd.read_csv(r"{path}/annotations.csv")\n'
-                "train_df = df[df['split'] == 'train']\n"
-                "print(f'训练集: {{len(train_df)}} 条标注')\n"
                 "print(df['label'].value_counts())"
-            )
-        return ""
+            ),
+        }
+        return snippets.get(fmt, "")
 
     def _on_failed(self, msg: str) -> None:
         self._close_progress()
