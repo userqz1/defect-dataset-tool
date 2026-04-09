@@ -117,6 +117,7 @@ class ExportView(QWidget):
         out = QFileDialog.getExistingDirectory(self, "选择导出目录")
         if not out:
             return
+        self._last_export_dir = out
 
         split = split_dataset(
             self._dataset,
@@ -174,6 +175,7 @@ class ExportView(QWidget):
             or getattr(report, "written_xml", None)
             or getattr(report, "written_annotations", 0)
         )
+        out_dir = getattr(self, "_last_export_dir", "")
         self.summary_label.setText(
             f"导出完成：图片 {report.written_images:,}  ·  标签 {labels:,}"
         )
@@ -181,6 +183,25 @@ class ExportView(QWidget):
             self.detail_label.setText(f"跳过 {len(report.skipped)} 个文件")
         else:
             self.detail_label.setText("")
+
+        # 显示输出路径 + 打开文件夹按钮
+        if out_dir:
+            import subprocess, sys
+            from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
+            bar = InfoBar.success(
+                title="导出成功",
+                content=f"输出目录：{out_dir}",
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=-1,  # 不自动关闭
+                parent=self.window(),
+            )
+            open_btn = PushButton("打开文件夹")
+            open_btn.clicked.connect(
+                lambda: subprocess.Popen(["explorer", out_dir])
+                if sys.platform == "win32" else None
+            )
+            bar.addWidget(open_btn)
 
     def _on_failed(self, msg: str) -> None:
         self._close_progress()

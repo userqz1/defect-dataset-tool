@@ -204,22 +204,22 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.TOP,
         )
 
-        # 1) 📂 数据集
+        # 1) 📂 工作区
         self.navigationInterface.addItem(
             routeKey="datasetGroup",
             icon=FIF.FOLDER,
-            text="数据集",
+            text="工作区",
             onClick=lambda: None,
             selectable=False,
-            tooltip="数据集",
+            tooltip="工作区",
         )
         self.navigationInterface.addItem(
             routeKey="openDatasetItem",
             icon=FIF.FOLDER_ADD,
-            text="打开…",
+            text="切换项目…",
             onClick=self._on_open_clicked,
             selectable=False,
-            tooltip="打开数据集",
+            tooltip="打开其他数据集",
             parentRouteKey="datasetGroup",
         )
         self.addSubInterface(
@@ -536,7 +536,8 @@ class MainWindow(FluentWindow):
         proj_name = self._project.name if self._project else dataset.name
         self.dataset_chip.set_project(proj_name, dataset.root_path)
         self.close_project_btn.show()
-        self.switchTo(self.overview)
+        # 用户打开项目是为了操作图片 → 默认落在浏览页
+        self.switchTo(self.browser_stack)
 
         InfoBar.success(
             title="项目已就绪",

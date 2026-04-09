@@ -154,18 +154,41 @@ class BrowserView(QWidget):
         right_layout.addWidget(self.grid, 1)
 
         # 分页栏
+        from qfluentwidgets import SpinBox
         pager = QHBoxLayout()
         pager.setSpacing(8)
         self.prev_btn = ToolButton(FIF.LEFT_ARROW)
         self.prev_btn.clicked.connect(self._prev_page)
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
         self.next_btn.clicked.connect(self._next_page)
-        self.page_label = BodyLabel("—")
+        self.page_spin = SpinBox()
+        self.page_spin.setFixedWidth(80)
+        self.page_spin.setRange(1, 1)
+        self.page_spin.editingFinished.connect(self._on_page_jump)
+        self.page_total_label = CaptionLabel("/ 1")
+        self.count_label = CaptionLabel("")
         pager.addStretch(1)
+        pager.addWidget(self.count_label)
+        pager.addSpacing(12)
         pager.addWidget(self.prev_btn)
-        pager.addWidget(self.page_label)
+        pager.addWidget(CaptionLabel("第"))
+        pager.addWidget(self.page_spin)
+        pager.addWidget(self.page_total_label)
+        pager.addWidget(CaptionLabel("页"))
         pager.addWidget(self.next_btn)
         right_layout.addLayout(pager)
+
+        # 空状态提示（覆盖在网格上）
+        self._empty_hint = CaptionLabel(
+            "未发现匹配的图片\n\n"
+            "请确认数据集目录结构：\n"
+            "  <根目录>/<类别>/images/*.jpg\n"
+            "  <根目录>/<类别>/labels/*.json\n\n"
+            "或尝试调整筛选条件"
+        )
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint.hide()
+        right_layout.addWidget(self._empty_hint)
 
         # 缩略图加载进度条
         self._thumb_bar = IndeterminateProgressBar(self, start=False)
@@ -270,14 +293,22 @@ class BrowserView(QWidget):
             self._thumb_bar.show()
             self._thumb_bar.start()
         self.grid.set_images(page_imgs)
+
+        # 空状态切换
         if total == 0:
-            self.page_label.setText(self.tr("没有匹配的图片"))
+            self._empty_hint.show()
+            self.grid.hide()
         else:
-            self.page_label.setText(
-                self.tr("第 {cur} / {total_pages} 页  ·  共 {n} 张").format(
-                    cur=self._page + 1, total_pages=page_count, n=f"{total:,}"
-                )
-            )
+            self._empty_hint.hide()
+            self.grid.show()
+
+        # 更新分页控件
+        self.page_spin.blockSignals(True)
+        self.page_spin.setRange(1, page_count)
+        self.page_spin.setValue(self._page + 1)
+        self.page_spin.blockSignals(False)
+        self.page_total_label.setText(f"/ {page_count}")
+        self.count_label.setText(f"共 {total:,} 张" if total > 0 else "没有匹配的图片")
         self.prev_btn.setEnabled(self._page > 0)
         self.next_btn.setEnabled(self._page < page_count - 1)
 
@@ -311,6 +342,10 @@ class BrowserView(QWidget):
 
     def _next_page(self) -> None:
         self._page += 1
+        self._show_page()
+
+    def _on_page_jump(self) -> None:
+        self._page = self.page_spin.value() - 1
         self._show_page()
 
     # ---------- 右键菜单 / 批量操作 ----------
