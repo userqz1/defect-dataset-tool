@@ -48,7 +48,7 @@ class ExportView(QWidget):
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("导出向导"))
-        root.addWidget(CaptionLabel("将当前数据集导出为训练框架可直接消费的格式"))
+        root.addWidget(CaptionLabel("选择格式，一键导出为可直接训练的数据集"))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(T.GAP_LG)
