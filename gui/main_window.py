@@ -133,7 +133,7 @@ class MainWindow(FluentWindow):
         setThemeColor(QColor(T.ACCENT))
         self.setStyleSheet(load_qss())
 
-        self.setWindowTitle("数据坊")
+        self.setWindowTitle("数据工坊")
         self.resize(1280, 800)
 
         self._scan_worker: ScanWorker | None = None

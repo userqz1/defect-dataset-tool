@@ -258,6 +258,7 @@ class AugmentView(QWidget):
         opts = self._build_opts()
         path = paths[0]
 
+        from io import BytesIO
         from gui.workers.batch_worker import BatchWorker
         from PIL import Image
 
@@ -265,7 +266,12 @@ class AugmentView(QWidget):
             with Image.open(path) as src:
                 im = src.copy()
             after = augment_in_memory(im, opts)
-            return (im, after)
+            # 在 worker 线程转为 PNG bytes，避免 PIL Image 跨线程 GC 问题
+            buf_before = BytesIO()
+            im.convert("RGB").save(buf_before, format="PNG")
+            buf_after = BytesIO()
+            after.convert("RGB").save(buf_after, format="PNG")
+            return (buf_before.getvalue(), buf_after.getvalue())
 
         self._preview_worker = BatchWorker(_task)
         self._preview_worker.finished_ok.connect(self._on_preview_done)
@@ -275,8 +281,22 @@ class AugmentView(QWidget):
     def _on_preview_done(self, result) -> None:
         self.preview_btn.setEnabled(True)
         self.preview_btn.setText("预览效果")
-        im, after = result
-        self.preview.set_before_after(im, after)
+        from PyQt6.QtGui import QPixmap
+        before_bytes, after_bytes = result
+        pix_before = QPixmap()
+        pix_before.loadFromData(before_bytes, "PNG")
+        pix_after = QPixmap()
+        pix_after.loadFromData(after_bytes, "PNG")
+        self.preview.before.image_label.setPixmap(
+            pix_before.scaled(self.preview.before.image_label.size(),
+                              Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        )
+        self.preview.after.image_label.setPixmap(
+            pix_after.scaled(self.preview.after.image_label.size(),
+                             Qt.AspectRatioMode.KeepAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+        )
 
     def _on_preview_failed(self, msg: str) -> None:
         self.preview_btn.setEnabled(True)

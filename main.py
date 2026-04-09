@@ -11,7 +11,7 @@ from gui.main_window import MainWindow
 
 _ICON = Path(__file__).parent / "assets" / "icon.ico"
 
-APP_NAME = "数据坊"  # DataForge
+APP_NAME = "数据工坊"  # DataForge
 
 
 def main() -> int:

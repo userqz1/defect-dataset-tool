@@ -145,7 +145,7 @@ class WelcomeView(QWidget):
         # Header
         header = QVBoxLayout()
         header.setSpacing(T.GAP)
-        title = LargeTitleLabel("数据坊")
+        title = LargeTitleLabel("数据工坊")
         title.setObjectName("welcomeTitle")
         header.addWidget(title)
         subtitle = CaptionLabel("图像数据集管理工具 — 选择一个项目开始")
