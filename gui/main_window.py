@@ -544,6 +544,9 @@ class MainWindow(FluentWindow):
         self.overview.set_dataset(dataset)
         if ext_stats:
             self.overview._on_extended_stats(ext_stats)
+        # 传任务类型给浏览页，驱动合规检查
+        if self._project:
+            self.browser.set_task_type(self._project.task_type)
         self.browser.load_dataset(dataset)
         self.settings_view.refresh()
         for v in (

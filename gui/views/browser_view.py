@@ -252,25 +252,35 @@ class BrowserView(QWidget):
         self._update_readiness(dataset)
         self._apply_filter_and_show()
 
+    def set_task_type(self, task_type) -> None:
+        """Store task type for compliance checking."""
+        self._task_type = task_type
+
     def _update_readiness(self, dataset: Dataset) -> None:
-        """Show compact dataset status — objective facts, user decides what to do."""
+        """Show compliance status — objective facts from compliance checker."""
         for w in self._readiness_items:
             self._readiness_bar.removeWidget(w)
             w.deleteLater()
         self._readiness_items.clear()
 
-        n_img = sum(c.image_count for c in dataset.categories)
-        n_lbl = sum(c.label_count for c in dataset.categories)
-        n_unlabeled = n_img - n_lbl
-        n_cat = len(dataset.categories)
+        # Run compliance check
+        from core.compliance import check_compliance
+        task_type = getattr(self, "_task_type", None)
+        if task_type is None:
+            from core.task_types import TaskType
+            task_type = TaskType.DETECTION
 
-        parts = [f"{n_img:,} 张图片", f"{n_cat} 个分类", f"{n_lbl:,} 条标注"]
-        if n_unlabeled > 0:
-            parts.append(f"{n_unlabeled} 张未标注")
+        report = check_compliance(dataset, task_type)
 
-        lbl = CaptionLabel("  ·  ".join(parts))
-        self._readiness_bar.addWidget(lbl)
-        self._readiness_items.append(lbl)
+        for check in report.checks:
+            text = f"{check.icon} {check.item}: {check.current}"
+            lbl = CaptionLabel(text)
+            lbl.setObjectName("readinessOk" if check.passed else "readinessGap")
+            if not check.passed and check.action:
+                lbl.setToolTip(check.action)
+            self._readiness_bar.addWidget(lbl)
+            self._readiness_items.append(lbl)
+
         self._readiness_bar.addStretch(1)
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
