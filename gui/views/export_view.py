@@ -182,6 +182,7 @@ class ExportView(QWidget):
         if not out:
             return
         self._last_export_dir = out
+        self._last_export_fmt = self.fmt_combo.currentText()
 
         split = split_dataset(
             self._dataset,
@@ -240,6 +241,8 @@ class ExportView(QWidget):
             or getattr(report, "written_annotations", 0)
         )
         out_dir = getattr(self, "_last_export_dir", "")
+        fmt = getattr(self, "_last_export_fmt", "")
+
         self.summary_label.setText(
             f"导出完成：图片 {report.written_images:,}  ·  标签 {labels:,}"
         )
@@ -248,7 +251,7 @@ class ExportView(QWidget):
         else:
             self.detail_label.setText("")
 
-        # 显示输出路径 + 打开文件夹按钮
+        # 显示输出路径 + 打开文件夹 + 训练代码片段
         if out_dir:
             import subprocess, sys
             from qfluentwidgets import InfoBar, InfoBarPosition, PushButton
@@ -257,7 +260,7 @@ class ExportView(QWidget):
                 content=f"输出目录：{out_dir}",
                 isClosable=True,
                 position=InfoBarPosition.TOP,
-                duration=-1,  # 不自动关闭
+                duration=-1,
                 parent=self.window(),
             )
             open_btn = PushButton("打开文件夹")
@@ -266,6 +269,50 @@ class ExportView(QWidget):
                 if sys.platform == "win32" else None
             )
             bar.addWidget(open_btn)
+
+        # 更新结构预览区域为训练代码片段
+        snippet = self._training_snippet(fmt, out_dir)
+        if snippet:
+            self._structure_label.setText(snippet)
+
+    @staticmethod
+    def _training_snippet(fmt: str, out_dir: str) -> str:
+        """生成导出后可直接粘贴的训练代码片段。"""
+        path = out_dir.replace("\\", "/")
+        if fmt == "YOLO":
+            return (
+                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
+                "# YOLOv8 训练\n"
+                "from ultralytics import YOLO\n\n"
+                f'model = YOLO("yolov8n.pt")\n'
+                f'model.train(data=r"{path}/data.yaml", epochs=100, imgsz=640)\n\n'
+                "# YOLOv5 训练\n"
+                f'python train.py --data "{path}/data.yaml" --weights yolov5s.pt --epochs 100'
+            )
+        elif fmt == "COCO":
+            return (
+                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
+                "# Detectron2\n"
+                "from detectron2.data.datasets import register_coco_instances\n\n"
+                f'register_coco_instances("train", {{}},\n'
+                f'    r"{path}/annotations/instances_train.json",\n'
+                f'    r"{path}/images/train")\n\n'
+                "# mmdetection\n"
+                f'data_root = r"{path}"\n'
+                "# 在 config 中设置 data_root 和 ann_file 路径即可"
+            )
+        elif fmt == "Pascal VOC":
+            return (
+                "导出完成，可直接用于训练。复制以下代码开始：\n\n"
+                "# torchvision VOC 加载\n"
+                "from torchvision.datasets import VOCDetection\n\n"
+                f'dataset = VOCDetection(root=r"{path}",\n'
+                f'    image_set="train", download=False)\n\n'
+                f"# 图片目录：{path}/JPEGImages/\n"
+                f"# 标注目录：{path}/Annotations/\n"
+                f"# 划分列表：{path}/ImageSets/Main/"
+            )
+        return ""
 
     def _on_failed(self, msg: str) -> None:
         self._close_progress()
