@@ -196,6 +196,100 @@ def batch_rename(
     return result
 
 
+# ---------- 类别管理 ----------
+
+
+def rename_category(
+    dataset_root: Path,
+    old_name: str,
+    new_name: str,
+    progress_cb=None,
+) -> OpResult:
+    """Rename a category folder. Returns OpResult with the new folder path."""
+    result = OpResult()
+    old_dir = dataset_root / old_name
+    new_dir = dataset_root / new_name
+    if not old_dir.is_dir():
+        result.failed.append((old_dir, "源类别不存在"))
+        return result
+    if new_dir.exists():
+        result.failed.append((new_dir, "目标类别已存在"))
+        return result
+    try:
+        old_dir.rename(new_dir)
+        result.succeeded.append(new_dir)
+    except Exception as e:  # noqa: BLE001
+        result.failed.append((old_dir, str(e)))
+    return result
+
+
+def merge_categories(
+    dataset_root: Path,
+    sources: list[str],
+    target: str,
+    progress_cb=None,
+) -> OpResult:
+    """Merge source categories into a target category by moving all image+label pairs."""
+    result = OpResult()
+    target_images_dir = dataset_root / target / "images"
+    target_images_dir.mkdir(parents=True, exist_ok=True)
+
+    total = 0
+    for src_name in sources:
+        src_dir = dataset_root / src_name
+        if src_dir.is_dir():
+            imgs_dir = src_dir / "images"
+            if imgs_dir.is_dir():
+                total += sum(1 for _ in imgs_dir.iterdir())
+
+    done = 0
+    for src_name in sources:
+        if src_name == target:
+            continue
+        src_dir = dataset_root / src_name
+        if not src_dir.is_dir():
+            result.failed.append((src_dir, "不存在"))
+            continue
+        imgs_dir = src_dir / "images"
+        lbls_dir = src_dir / "labels"
+        if imgs_dir.is_dir():
+            for f in list(imgs_dir.iterdir()):
+                done += 1
+                if progress_cb:
+                    progress_cb(done, total, f.name)
+                try:
+                    new_img = _ensure_unique(target_images_dir / f.name)
+                    shutil.move(str(f), str(new_img))
+                    # Move corresponding label
+                    lbl = lbls_dir / (f.stem + ".json") if lbls_dir.is_dir() else None
+                    if lbl and lbl.is_file():
+                        target_labels_dir = dataset_root / target / "labels"
+                        target_labels_dir.mkdir(parents=True, exist_ok=True)
+                        new_lbl = _ensure_unique(target_labels_dir / (new_img.stem + ".json"))
+                        shutil.move(str(lbl), str(new_lbl))
+                        _update_image_path_in_json(new_lbl, new_img.name)
+                    result.succeeded.append(new_img)
+                except Exception as e:  # noqa: BLE001
+                    result.failed.append((f, str(e)))
+        # Remove empty source directory
+        try:
+            shutil.rmtree(str(src_dir))
+        except OSError:
+            pass
+    return result
+
+
+def split_category(
+    dataset_root: Path,
+    source: str,
+    new_name: str,
+    images: list[ImageInfo],
+    progress_cb=None,
+) -> OpResult:
+    """Move selected images from source category into a new category."""
+    return move_to_category(images, dataset_root, new_name)
+
+
 # ---------- 助手 ----------
 
 def _ensure_unique(path: Path) -> Path:

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QAction, QColor, QPainter
 from PyQt6.QtWidgets import (
     QFrame,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QStyledItemDelegate,
     QStyleOptionViewItem,
 )
@@ -51,6 +52,9 @@ class _CategoryDelegate(QStyledItemDelegate):
 
 class CategoryTree(QListWidget):
     category_selected = pyqtSignal(str)  # "" = all
+    rename_requested = pyqtSignal(str)   # category name
+    merge_requested = pyqtSignal(str)    # category name (as initial selection)
+    split_requested = pyqtSignal(str)    # category name
 
     def __init__(self) -> None:
         super().__init__()
@@ -58,6 +62,8 @@ class CategoryTree(QListWidget):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setItemDelegate(_CategoryDelegate(self))
         self.itemClicked.connect(self._on_item_clicked)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
 
     def load_dataset(self, dataset: Dataset) -> None:
         self.clear()
@@ -75,3 +81,35 @@ class CategoryTree(QListWidget):
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         key = item.data(Qt.ItemDataRole.UserRole)
         self.category_selected.emit("" if key == ALL_KEY else key)
+
+    def _on_context_menu(self, pos) -> None:
+        item = self.itemAt(pos)
+        if not item:
+            return
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if key == ALL_KEY:
+            return  # no context menu on "全部"
+
+        menu = QMenu(self)
+        rename_act = QAction("重命名类别…", self)
+        rename_act.triggered.connect(lambda: self.rename_requested.emit(key))
+        menu.addAction(rename_act)
+
+        merge_act = QAction("合并类别…", self)
+        merge_act.triggered.connect(lambda: self.merge_requested.emit(key))
+        menu.addAction(merge_act)
+
+        split_act = QAction("拆分类别…", self)
+        split_act.triggered.connect(lambda: self.split_requested.emit(key))
+        menu.addAction(split_act)
+
+        menu.exec(self.mapToGlobal(pos))
+
+    def get_category_names(self) -> list[str]:
+        """Return all category names (excluding '全部')."""
+        names = []
+        for i in range(self.count()):
+            key = self.item(i).data(Qt.ItemDataRole.UserRole)
+            if key != ALL_KEY:
+                names.append(key)
+        return names

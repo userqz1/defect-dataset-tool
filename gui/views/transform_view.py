@@ -194,17 +194,38 @@ class TransformView(QWidget):
                 duration=2500, parent=self.window(),
             )
             return
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.setText("生成预览中…")
+
+        idx = self.op_combo.currentIndex()
+        kind = ["rotate", "flip", "resize"][idx]
+        _, opts = self._build_op()
+        path = paths[0]
+
+        from gui.workers.batch_worker import BatchWorker
         from PIL import Image
-        try:
-            with Image.open(paths[0]) as src:
+
+        def _task(cb):
+            with Image.open(path) as src:
                 im = src.copy()
-            idx = self.op_combo.currentIndex()
-            kind = ["rotate", "flip", "resize"][idx]
-            _, opts = self._build_op()
             after = apply_in_memory(im, kind, opts)
-            self.preview.set_before_after(im, after)
-        except Exception as e:  # noqa: BLE001
-            self.result_label.setText(f"预览失败: {e}")
+            return (im, after)
+
+        self._preview_worker = BatchWorker(_task)
+        self._preview_worker.finished_ok.connect(self._on_preview_done)
+        self._preview_worker.failed.connect(self._on_preview_failed)
+        self._preview_worker.start()
+
+    def _on_preview_done(self, result) -> None:
+        self.preview_btn.setEnabled(True)
+        self.preview_btn.setText("预览效果")
+        im, after = result
+        self.preview.set_before_after(im, after)
+
+    def _on_preview_failed(self, msg: str) -> None:
+        self.preview_btn.setEnabled(True)
+        self.preview_btn.setText("预览效果")
+        self.result_label.setText(f"预览失败: {msg}")
 
     def _on_start(self) -> None:
         if self._dataset is None or self._worker is not None:

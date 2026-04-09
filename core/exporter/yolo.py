@@ -122,7 +122,7 @@ def export_yolo(
     # classes.txt + data.yaml
     (out / "classes.txt").write_text("\n".join(class_list) + "\n", encoding="utf-8")
     yaml_lines = [
-        f"path: {out.as_posix()}",
+        "path: .",
         f"train: images/train",
         f"val: images/val",
     ]
