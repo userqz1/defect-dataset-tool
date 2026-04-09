@@ -1,11 +1,11 @@
 app:
-  name: 故障数据集管理工具
+  name: 数据工坊
   version: 0.1.0
 
 cache:
   # 索引和缩略图缓存目录（相对用户目录）
-  index_db: ~/.defect_dataset_tool/index.sqlite
-  thumbnail_dir: ~/.defect_dataset_tool/thumbnails
+  index_db: ~/.dataforge/index.sqlite
+  thumbnail_dir: ~/.dataforge/thumbnails
 
 ui:
   theme: light            # light / dark / auto

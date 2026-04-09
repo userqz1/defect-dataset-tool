@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">数据坊 / DataForge</h1>
   <p align="center">
-    <strong>工业缺陷数据集管理与预处理工具(Python 3.11 + PyQt6 + Fluent)</strong>
+    <strong>通用图像数据集管理与预处理工具(Python 3.11 + PyQt6 + Fluent)</strong>
   </p>
 </p>
 
@@ -21,7 +21,7 @@
 
 ## 项目定位
 
-面向工业缺陷检测场景的**数据集全生命周期工具**:从扫描、浏览、清洗、标注、增强,到划分与多格式导出,一站打通。核心逻辑 (`core/`) 与 GUI (`gui/`) 完全解耦,为未来 Web / CLI 前端复用预留接口。
+通用图像数据集管理平台：支持分类、检测、分割等多种 CV 任务类型，覆盖扫描、浏览、清洗、标注、增强、划分与多格式导出全流程。核心逻辑 (`core/`) 与 GUI (`gui/`) 完全解耦，为未来 Web / CLI 前端复用预留接口。
 
 ---
 

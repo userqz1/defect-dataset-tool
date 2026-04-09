@@ -4,8 +4,8 @@ Output: <out>/llava_train.jsonl (+ val/test) + copied images.
 Each line follows the LLaVA format:
   {"id": "unique_id", "image": "relative/path.jpg",
    "conversations": [
-     {"from": "human", "value": "<image>\\n这张图片中有什么缺陷？"},
-     {"from": "gpt", "value": "图片中存在2处缺陷：1处裂纹（位于图像左侧）..."}
+     {"from": "human", "value": "<image>\\n请描述这张图片中的内容。"},
+     {"from": "gpt", "value": "图片中存在2个目标：1个cat（位于图像左侧）..."}
    ]}
 """
 from __future__ import annotations
