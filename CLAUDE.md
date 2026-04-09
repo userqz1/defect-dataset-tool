@@ -2,40 +2,77 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Status
-
-This repository currently contains only the design document (`解决方案.md`). No code, dependencies, or build system exists yet — the project is pre-implementation. When starting work, scaffold according to the structure in `解决方案.md` rather than inventing a different layout.
-
 ## Project
 
-A Windows desktop tool (Python 3.11 + PyQt6) for managing defect-annotation datasets: scan a dataset directory, browse images by category, view LabelMe annotations overlaid on images, compute statistics, and (later) convert to YOLO/COCO/LLaVA/MVTec formats.
+**数据坊 (DataForge)** — A Windows desktop tool (Python 3.11 + PyQt6 + qfluentwidgets) for managing defect-annotation datasets. Users scan a dataset directory, browse images by category, view/edit LabelMe annotations, compute statistics, run quality checks, deduplicate, augment, split, and export to YOLO/COCO/VOC formats.
 
-Primary input format is **LabelMe JSON**. Expected on-disk layout is `<root>/<category>/images/` + `<root>/<category>/labels/`. The tool must NOT hardcode any dataset path — the user picks it at runtime.
-
-## Architecture (must follow)
-
-The single most important architectural rule: **`core/` is pure Python and must not import PyQt or any GUI module.** This is the key invariant that makes the codebase reusable for future Web/CLI frontends. Violating it defeats the main design goal.
-
-Layering:
-- `core/` — domain logic: `models.py` (dataclasses: `Dataset`, `Category`, `ImageInfo`, `Annotation`, `Shape`), `dataset.py` (filesystem scan + SQLite index cache), `annotation.py` (LabelMe parser, must be tolerant of malformed JSON and record failures), `stats.py`, and later `quality.py`, `dedup.py`, `splitter.py`, `exporter/{yolo,coco,llava,mvtec}.py`. Each exporter is a separate file behind a common interface so adding a format doesn't touch the others.
-- `gui/` — PyQt6 only. `main_window.py`, `views/{overview,browser,detail}_view.py`, `widgets/{thumbnail_grid,image_viewer,category_tree,stats_chart}.py`, `workers/` for QThread-wrapped background tasks. All long-running work (scan, thumbnail generation) goes through a worker — never block the UI thread.
-- `config/default_config.yaml` — externalized config (cache locations, etc.). Don't hardcode paths.
-- `main.py` — entry point.
-
-Performance-critical flows to keep in mind when implementing:
-- **Dataset scan** caches its index to local SQLite so reopens are instant. First-scan goes through `scan_worker`.
-- **Thumbnails** are lazy-loaded with on-disk cache (diskcache is the intended library).
-- **Detail view** loads originals on demand; never read all images into memory.
-
-Watch out for: Chinese paths/filenames (use `pathlib`, not byte strings); mismatched image/label pairs (flag, don't crash); LabelMe schema drift (tolerant parsing).
+Primary input: **LabelMe JSON**. Expected disk layout: `<root>/<category>/images/` + `<root>/<category>/labels/` (auto-detected; also handles flat, single-category, and recursive layouts).
 
 ## Commands
 
-No build system exists yet. When set up per the design doc:
-- Env: `python -m venv venv && venv\Scripts\activate && pip install -r requirements.txt`
-- Run: `python main.py`
-- Tests live under `tests/` (framework not yet chosen — pytest is the natural fit given the dataclass-based core).
+The project uses a conda env named `defect-tool`. Conda is not on PATH; use the env's python directly:
+
+```bash
+# Run the app
+C:/Users/zq/miniconda3/envs/defect-tool/python.exe main.py
+
+# Install deps (unset proxy first to avoid SSL errors)
+unset HTTP_PROXY HTTPS_PROXY
+C:/Users/zq/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+No test suite exists yet. When added, use pytest.
+
+## Architecture (must follow)
+
+### Core invariant
+
+**`core/` is pure Python — no PyQt, no GUI imports.** This enables reuse for CLI/Web frontends. The `core-guardian` agent audits this.
+
+### Layers
+
+- **`core/`** — Domain logic. `models.py` (dataclasses: `Dataset`, `Category`, `ImageInfo`, `Annotation`, `Shape`), `dataset.py` (scan + layout detection), `annotation.py` (LabelMe parser), `annotation_writer.py` (write-back), `stats.py`, `quality.py`, `dedup.py`, `splitter.py`, `augment.py`, `transform.py`, `convert.py`, `predictor.py`, `exporter/{yolo,coco,voc,subset,report}.py`. Each exporter is a separate file behind a common interface.
+- **`gui/`** — PyQt6 + qfluentwidgets. `main_window.py` (FluentWindow with grouped sidebar navigation + back/forward history), `views/` (one per feature), `widgets/` (reusable components), `workers/` (QThread wrappers), `dialogs/` (parameter-collection dialogs), `theme.py` + `styles/app.qss`.
+- **`config/default_config.yaml`** — Externalized config (cache paths, image extensions, theme).
+- **`main.py`** — Entry point.
+
+### Key patterns
+
+**Signal-driven wiring**: `MainWindow._build_views()` instantiates views; `_connect_signals()` wires them together (view signals → workers → view slots). Views never call workers directly.
+
+**Background workers**: All long-running ops go through `gui/workers/`. Pattern: `QThread` subclass with `progress(int, int, str)`, `finished_ok(result)`, `failed(str)` signals. `BatchWorker` is a generic wrapper accepting any `fn(progress_cb)` callable.
+
+**Dialogs don't execute ops**: `gui/dialogs/op_dialogs.py` dialogs inherit `MessageBoxBase`, expose `.options()` returning a dataclass. The caller wraps the actual operation in a `BatchWorker`.
+
+**Three-layer styling** (enforced by `style-cop` agent):
+1. `gui/theme.py` — `Tokens` dataclass (colors, spacing, sizes) with LIGHT/DARK instances. Module-level proxy `T` always reflects current theme.
+2. qfluentwidgets semantic widgets + project custom widgets.
+3. `gui/styles/app.qss` — single QSS file with `{TOKEN}` placeholders, substituted at runtime via `load_qss()`.
+
+**Rule**: Never write `setStyleSheet(f"color:#xxx")` in views. All colors come from theme tokens.
+
+**All dialogs/message boxes must use qfluentwidgets** — never native QDialog/QMessageBox.
+
+**Dataset scan**: Two phases — (1) `scan_dataset()` enumerates files via `os.scandir` without parsing JSON, (2) `count_annotations()` optionally parses LabelMe annotations. Results cached to SQLite via `index_cache.py`.
+
+**Thumbnails**: Lazy-loaded via `ThumbnailWorker` with on-disk cache (`diskcache`).
+
+### Adding a new view
+
+1. Create `core/<feature>.py` (pure Python).
+2. Create `gui/views/<feature>_view.py` inheriting from a qfluentwidgets base.
+3. Register in `MainWindow._build_views()` with `addSubInterface()`.
+4. Wire signals in `_connect_signals()`.
+5. Use the `/wire` skill to automate this.
+
+## Gotchas
+
+- **Chinese paths**: Always use `pathlib.Path`, never byte strings.
+- **Mismatched image/label pairs**: Flag them, don't crash.
+- **LabelMe schema drift**: Parser must be tolerant of malformed JSON and record failures.
+- **SSL/proxy on this machine**: Unset `HTTP_PROXY`/`HTTPS_PROXY` before pip/conda installs; use Tsinghua mirrors.
+- **Config is read-once**: `core/config.load()` is `@lru_cache(maxsize=1)`. Changes need app restart.
 
 ## Reference
 
-Full design rationale, data models, UI sketch, and phased feature list (v1 P0 / v2 P1 / v3 P2) are in `解决方案.md`. Read it before making non-trivial changes — especially sections 三 (directory layout), 六 (data models), and 九 (extensibility constraints).
+Full design rationale, data models, and phased feature list in `解决方案.md`. Read sections 三 (directory layout), 六 (data models), and 九 (extensibility) before non-trivial changes.

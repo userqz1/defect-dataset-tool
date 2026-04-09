@@ -129,8 +129,12 @@ class ThumbnailGrid(QListWidget):
         self._cards: dict[str, ThumbnailCard] = {}
 
     def set_images(self, images: list[ImageInfo]) -> None:
-        self.clear()
+        # Explicit cleanup of old card widgets to prevent memory leak
+        for card in self._cards.values():
+            card.deleteLater()
         self._cards.clear()
+        self.clear()
+
         for img in images:
             item = QListWidgetItem()
             item.setSizeHint(QSize(T.CARD_WIDTH, T.CARD_HEIGHT))

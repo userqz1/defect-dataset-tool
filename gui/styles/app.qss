@@ -67,6 +67,16 @@ QLabel#hintWarn {{
     color: {WARNING};
 }}
 
+QFrame#warningsFrame {{
+    background-color: {CONTENT};
+    border: 1px solid {WARNING};
+    border-radius: {RADIUS_LG}px;
+}}
+QLabel#warningsTitle {{
+    color: {TEXT_2};
+    font-weight: bold;
+}}
+
 /* ============================================================
  * 3. 按钮族
  * ============================================================ */
@@ -214,4 +224,29 @@ QLabel#thumbBadge[state="labeled"] {{
 }}
 QLabel#thumbBadge[state="unlabeled"] {{
     color: {WARNING};
+}}
+
+/* ============================================================
+ * 7. 欢迎页
+ * ============================================================ */
+
+QWidget#welcomeView {{
+    background-color: {CONTENT};
+}}
+
+QLabel#welcomeTitle {{
+    color: {ACCENT};
+}}
+
+QListWidget#projectList {{
+    background-color: {CONTENT};
+    border: none;
+    padding: 8px;
+    outline: 0;
+}}
+QListWidget#projectList::item {{
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 2px 0;
 }}

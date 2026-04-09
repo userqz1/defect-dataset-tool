@@ -86,6 +86,21 @@ class ExportView(QWidget):
         root.addWidget(self.detail_label)
         root.addStretch(1)
 
+    def save_state(self):
+        from core.project import ExportConfig
+        return ExportConfig(
+            format=self.fmt_combo.currentText(),
+            copy_images=self.copy_chk.isChecked(),
+        )
+
+    def restore_state(self, state) -> None:
+        if state is None:
+            return
+        idx = self.fmt_combo.findText(state.format)
+        if idx >= 0:
+            self.fmt_combo.setCurrentIndex(idx)
+        self.copy_chk.setChecked(state.copy_images)
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         on = dataset is not None and sum(c.image_count for c in dataset.categories) > 0
@@ -112,6 +127,13 @@ class ExportView(QWidget):
                 stratified=True,
             ),
         )
+
+        # Pre-export validation
+        from gui.dialogs.export_validation_dialog import ExportValidationDialog
+        dlg = ExportValidationDialog(split, self._dataset, parent=self.window())
+        if not dlg.exec():
+            return
+
         fmt = self.fmt_combo.currentText()
         copy = self.copy_chk.isChecked()
         if fmt == "YOLO":

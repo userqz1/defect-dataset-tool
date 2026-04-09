@@ -17,6 +17,7 @@ from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     FluentIcon as FIF,
+    IndeterminateProgressBar,
     LineEdit,
     MessageBox,
     ToolButton,
@@ -50,7 +51,9 @@ PAGE_SIZE = 60
 class BrowserView(QWidget):
     image_activated = pyqtSignal(object, list)  # (current ImageInfo, full list)
     thumb_request = pyqtSignal(object)          # Path
+    clear_thumb_queue = pyqtSignal()            # clear pending thumbnail requests
     add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
+    dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
 
     def __init__(self) -> None:
         super().__init__()
@@ -83,6 +86,9 @@ class BrowserView(QWidget):
 
         self.tree = CategoryTree()
         self.tree.category_selected.connect(self._on_category_selected)
+        self.tree.rename_requested.connect(self._do_rename_category)
+        self.tree.merge_requested.connect(self._do_merge_categories)
+        self.tree.split_requested.connect(self._do_split_category)
         left_layout.addWidget(self.tree)
 
         root.addWidget(left)
@@ -155,7 +161,50 @@ class BrowserView(QWidget):
         pager.addWidget(self.next_btn)
         right_layout.addLayout(pager)
 
+        # 缩略图加载进度条
+        self._thumb_bar = IndeterminateProgressBar(self, start=False)
+        self._thumb_bar.setFixedHeight(3)
+        self._thumb_bar.hide()
+        self._thumb_pending = 0
+        right_layout.addWidget(self._thumb_bar)
+
         root.addWidget(right, 1)
+
+    # ---------- 状态持久化 ----------
+
+    def save_state(self):
+        from core.project import BrowseState
+        return BrowseState(
+            category=self._current_category,
+            filter=self._filter_mode,
+            search=self._search_text,
+            page=self._page,
+        )
+
+    def restore_state(self, state) -> None:
+        if state is None:
+            return
+        self._current_category = state.category or ""
+        self._filter_mode = state.filter or "all"
+        self._search_text = state.search or ""
+        self._page = state.page or 0
+        # Update UI widgets
+        self.search.setText(self._search_text)
+        for btn in self.chip_group.buttons():
+            if btn.property("filterKey") == self._filter_mode:
+                btn.setChecked(True)
+                break
+        # Select category in tree
+        if self._current_category:
+            for i in range(self.tree.count()):
+                item = self.tree.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == self._current_category:
+                    self.tree.setCurrentRow(i)
+                    break
+        self._apply_filter_and_show()
+        # Restore page after filter
+        self._page = state.page or 0
+        self._show_page()
 
     # ---------- 外部接口 ----------
 
@@ -168,6 +217,10 @@ class BrowserView(QWidget):
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)
+        self._thumb_pending = max(0, self._thumb_pending - 1)
+        if self._thumb_pending == 0:
+            self._thumb_bar.stop()
+            self._thumb_bar.hide()
 
     # ---------- 内部 ----------
 
@@ -205,6 +258,11 @@ class BrowserView(QWidget):
         start = self._page * PAGE_SIZE
         end = min(start + PAGE_SIZE, total)
         page_imgs = self._filtered[start:end]
+        self.clear_thumb_queue.emit()  # cancel stale thumbnail requests
+        self._thumb_pending = len(page_imgs)
+        if self._thumb_pending > 0:
+            self._thumb_bar.show()
+            self._thumb_bar.start()
         self.grid.set_images(page_imgs)
         if total == 0:
             self.page_label.setText(self.tr("没有匹配的图片"))
@@ -383,9 +441,70 @@ class BrowserView(QWidget):
 
         self._run(_run, self.tr("正在计算 pHash…"))
 
+    # ---- 类别管理 ----
+
+    def _do_rename_category(self, name: str) -> None:
+        if not self._dataset:
+            return
+        from gui.dialogs.category_dialogs import RenameCategoryDialog
+        cats = self.tree.get_category_names()
+        dlg = RenameCategoryDialog(name, cats, parent=self.window())
+        if not dlg.exec():
+            return
+        new_name = dlg.new_name()
+        root = self._dataset.root_path
+        self._run(
+            lambda cb: fileops.rename_category(root, name, new_name, progress_cb=cb),
+            self.tr("正在重命名类别…"),
+            rescan=True,
+        )
+
+    def _do_merge_categories(self, name: str) -> None:
+        if not self._dataset:
+            return
+        from gui.dialogs.category_dialogs import MergeCategoriesDialog
+        cats = self.tree.get_category_names()
+        dlg = MergeCategoriesDialog(cats, current=name, parent=self.window())
+        if not dlg.exec():
+            return
+        sources = dlg.sources()
+        target = dlg.target()
+        root = self._dataset.root_path
+        self._run(
+            lambda cb: fileops.merge_categories(root, sources, target, progress_cb=cb),
+            self.tr("正在合并类别…"),
+            rescan=True,
+        )
+
+    def _do_split_category(self, name: str) -> None:
+        if not self._dataset:
+            return
+        sel = self.get_selected_images()
+        if not sel:
+            box = MessageBox(
+                self.tr("拆分类别"),
+                self.tr("请先在网格中勾选要拆出的图片"),
+                self.window(),
+            )
+            box.cancelButton.hide()
+            box.exec()
+            return
+        from gui.dialogs.category_dialogs import SplitCategoryDialog
+        cats = self.tree.get_category_names()
+        dlg = SplitCategoryDialog(name, len(sel), cats, parent=self.window())
+        if not dlg.exec():
+            return
+        new_name = dlg.new_name()
+        root = self._dataset.root_path
+        self._run(
+            lambda cb: fileops.split_category(root, name, new_name, sel, progress_cb=cb),
+            self.tr("正在拆分类别…"),
+            rescan=True,
+        )
+
     # ---- 通用 worker 驱动 ----
 
-    def _run(self, fn, title: str) -> None:
+    def _run(self, fn, title: str, rescan: bool = False) -> None:
         if self._worker is not None:
             box = MessageBox(
                 self.tr("请稍候"), self.tr("已有操作正在执行"), self.window()
@@ -393,6 +512,7 @@ class BrowserView(QWidget):
             box.cancelButton.hide()
             box.exec()
             return
+        self._pending_rescan = rescan
         self._progress = ProgressDialog(title, self.window())
         self._progress.show()
 
@@ -429,7 +549,11 @@ class BrowserView(QWidget):
             box.cancelButton.hide()
             box.exec()
         # 刷新当前视图
-        self._apply_filter_and_show()
+        if getattr(self, "_pending_rescan", False):
+            self._pending_rescan = False
+            self.dataset_changed.emit()
+        else:
+            self._apply_filter_and_show()
 
     def _on_op_failed(self, msg: str) -> None:
         self._cleanup_worker()

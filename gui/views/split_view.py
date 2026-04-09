@@ -193,6 +193,37 @@ class SplitView(QWidget):
 
     # ---------- 接口 ----------
 
+    def save_state(self):
+        from core.project import SplitState
+        mode_map = {0: "ratio", 1: "count", 2: "manual"}
+        # Collect manual bucket paths
+        manual_train = [self.manual_train_list.item(i).data(Qt.ItemDataRole.UserRole)
+                        for i in range(self.manual_train_list.count())]
+        manual_val = [self.manual_val_list.item(i).data(Qt.ItemDataRole.UserRole)
+                      for i in range(self.manual_val_list.count())]
+        manual_test = [self.manual_test_list.item(i).data(Qt.ItemDataRole.UserRole)
+                       for i in range(self.manual_test_list.count())]
+        return SplitState(
+            mode=mode_map.get(self.mode_combo.currentIndex(), "ratio"),
+            train=self.train_spin.value(),
+            val=self.val_spin.value(),
+            test=self.test_spin.value(),
+            stratified=self.stratified_chk.isChecked(),
+            manual_train=manual_train,
+            manual_val=manual_val,
+            manual_test=manual_test,
+        )
+
+    def restore_state(self, state) -> None:
+        if state is None:
+            return
+        mode_map = {"ratio": 0, "count": 1, "manual": 2}
+        self.mode_combo.setCurrentIndex(mode_map.get(state.mode, 0))
+        self.train_spin.setValue(state.train)
+        self.val_spin.setValue(state.val)
+        self.test_spin.setValue(state.test)
+        self.stratified_chk.setChecked(state.stratified)
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         on = dataset is not None and sum(c.image_count for c in dataset.categories) > 0
