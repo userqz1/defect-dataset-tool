@@ -41,16 +41,14 @@ from core.recent import add_recent
 from gui.theme import T, load_qss, set_theme as set_app_theme
 from gui.views.augment_view import AugmentView
 from gui.views.browser_view import BrowserView
+from gui.views.cleaning_view import CleaningView
 from gui.views.detail_view import DetailView
 from gui.views.overview_view import OverviewView
-from gui.views.dedup_view import DedupView
 from gui.views.export_view import ExportView
 from gui.views.placeholder_view import PlaceholderView
 from gui.views.predict_view import PredictView
-from gui.views.quality_view import QualityView
 from gui.views.settings_view import SettingsView
 from gui.views.split_view import SplitView
-from gui.views.transform_view import TransformView
 from gui.views.standards_view import StandardsView
 from gui.views.welcome_view import WelcomeView
 from gui.workers.scan_worker import ScanWorker
@@ -184,14 +182,11 @@ class MainWindow(FluentWindow):
         self.browser_stack.addWidget(self.browser)
         self.browser_stack.addWidget(self.detail)
 
-        self.quality_view = QualityView()
-        self.dedup_view = DedupView()
-        self.transform_view = TransformView()
+        self.cleaning_view = CleaningView()
         self.augment_view = AugmentView()
         self.predict_view = PredictView()
         self.split_view = SplitView()
         self.browser.add_to_split.connect(self._on_add_to_split)
-        self.transform_view.set_selection_provider(self.browser.get_selected_images)
         self.augment_view.set_selection_provider(self.browser.get_selected_images)
         self.export_view = ExportView()
         self.standards_view = StandardsView()
@@ -241,19 +236,13 @@ class MainWindow(FluentWindow):
             tooltip="数据处理",
         )
         self.addSubInterface(
-            self.quality_view, FIF.CERTIFICATE, "质量检查", parent="processGroup"
+            self.cleaning_view, FIF.CERTIFICATE, "数据清洗", parent="processGroup"
         )
         self.addSubInterface(
-            self.dedup_view, FIF.COPY, "重复检测", parent="processGroup"
+            self.augment_view, FIF.ALBUM, "增强与变换", parent="processGroup"
         )
         self.addSubInterface(
             self.predict_view, FIF.ROBOT, "AI 预标注", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.transform_view, FIF.BRUSH, "批量变换", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.augment_view, FIF.ALBUM, "数据增强", parent="processGroup"
         )
         self.addSubInterface(
             self.split_view, FIF.TILES, "数据集划分", parent="processGroup"
@@ -521,9 +510,7 @@ class MainWindow(FluentWindow):
         self.browser.load_dataset(dataset)
         self.settings_view.refresh()
         for v in (
-            self.quality_view,
-            self.dedup_view,
-            self.transform_view,
+            self.cleaning_view,
             self.augment_view,
             self.predict_view,
             self.split_view,

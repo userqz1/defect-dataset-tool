@@ -47,8 +47,18 @@ class AugmentView(QWidget):
         root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
-        root.addWidget(SubtitleLabel("数据增强"))
-        root.addWidget(CaptionLabel("生成新样本到指定目录,标注同步更新,原图不变"))
+        root.addWidget(SubtitleLabel("数据增强与变换"))
+        root.addWidget(CaptionLabel("增强模式：生成新样本到指定目录  /  变换模式：原地修改图片（旋转/翻转/缩放）"))
+
+        # 模式选择
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(BodyLabel("模式"))
+        self.mode_combo = ComboBox()
+        self.mode_combo.addItems(["增强（生成新样本）", "变换（原地修改）"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self.mode_combo)
+        mode_row.addStretch(1)
+        root.addLayout(mode_row)
 
         # 几何变换
         root.addWidget(BodyLabel("几何变换"))
@@ -112,14 +122,38 @@ class AugmentView(QWidget):
         src_row.addStretch(1)
         root.addLayout(src_row)
 
-        # 输出
-        out_row = QHBoxLayout()
+        # 变换模式专用：缩放选项
+        from qfluentwidgets import SpinBox as _SpinBox
+        self.resize_frame = QWidget()
+        rz_layout = QHBoxLayout(self.resize_frame)
+        rz_layout.setContentsMargins(0, 0, 0, 0)
+        rz_layout.addWidget(BodyLabel("统一缩放到"))
+        self.w_spin = _SpinBox()
+        self.w_spin.setRange(0, 8192); self.w_spin.setValue(640)
+        rz_layout.addWidget(self.w_spin)
+        rz_layout.addWidget(BodyLabel("×"))
+        self.h_spin = _SpinBox()
+        self.h_spin.setRange(0, 8192); self.h_spin.setValue(640)
+        rz_layout.addWidget(self.h_spin)
+        self.keep_ratio_chk = CheckBox("保持宽高比")
+        self.keep_ratio_chk.setChecked(True)
+        rz_layout.addWidget(self.keep_ratio_chk)
+        self.inplace_chk = CheckBox("原地覆盖（否则生成新文件）")
+        rz_layout.addWidget(self.inplace_chk)
+        rz_layout.addStretch(1)
+        self.resize_frame.hide()  # 增强模式下隐藏
+        root.addWidget(self.resize_frame)
+
+        # 输出（增强模式专用）
+        self.out_row_widget = QWidget()
+        out_row = QHBoxLayout(self.out_row_widget)
+        out_row.setContentsMargins(0, 0, 0, 0)
         self.out_label = BodyLabel("输出目录:未选择")
         out_row.addWidget(self.out_label, 1)
         self.choose_btn = PushButton("选择…")
         self.choose_btn.clicked.connect(self._choose_dir)
         out_row.addWidget(self.choose_btn)
-        root.addLayout(out_row)
+        root.addWidget(self.out_row_widget)
 
         # 预览
         self.preview = PreviewPane()
@@ -140,6 +174,16 @@ class AugmentView(QWidget):
 
         self.result_label = CaptionLabel("")
         root.addWidget(self.result_label)
+
+    def _on_mode_changed(self, idx: int) -> None:
+        is_augment = idx == 0
+        # 增强模式：显示数量/种子/输出目录，隐藏缩放
+        self.n_spin.parent().setVisible(is_augment) if self.n_spin.parent() else None
+        self.out_row_widget.setVisible(is_augment)
+        self.resize_frame.setVisible(not is_augment)
+        # 更新按钮文字
+        self.start_btn.setText("开始增强" if is_augment else "开始变换")
+        self._refresh_start()
 
     # ---------- 接口 ----------
 
@@ -163,8 +207,15 @@ class AugmentView(QWidget):
             self._refresh_start()
 
     def _refresh_start(self) -> None:
-        ok = self._dataset is not None and self._out_dir is not None
-        self.start_btn.setEnabled(bool(ok))
+        if self._dataset is None:
+            self.start_btn.setEnabled(False)
+            return
+        if self.mode_combo.currentIndex() == 0:
+            # 增强模式需要输出目录
+            self.start_btn.setEnabled(self._out_dir is not None)
+        else:
+            # 变换模式不需要输出目录
+            self.start_btn.setEnabled(True)
 
     def _build_opts(self) -> AugmentOptions:
         return AugmentOptions(
@@ -233,7 +284,7 @@ class AugmentView(QWidget):
         self.result_label.setText(f"预览失败: {msg}")
 
     def _on_start(self) -> None:
-        if self._dataset is None or self._out_dir is None or self._worker is not None:
+        if self._dataset is None or self._worker is not None:
             return
         paths = self._collect_paths()
         if not paths:
@@ -243,14 +294,31 @@ class AugmentView(QWidget):
                 duration=2500, parent=self.window(),
             )
             return
-        opts = self._build_opts()
-        out_dir = self._out_dir
 
         from gui.dialogs.op_dialogs import ProgressDialog
-        self._progress = ProgressDialog("数据增强", parent=self.window())
 
-        def task(progress_cb):
-            return augment_batch(paths, out_dir, opts, progress_cb=progress_cb)
+        if self.mode_combo.currentIndex() == 1:
+            # 变换模式：原地修改
+            from core.transform import ResizeOptions, batch_apply, resize_one
+            opts = ResizeOptions(
+                width=self.w_spin.value(),
+                height=self.h_spin.value(),
+                keep_ratio=self.keep_ratio_chk.isChecked(),
+            )
+            self._progress = ProgressDialog("批量变换", parent=self.window())
+
+            def task(progress_cb):
+                return batch_apply(paths, resize_one, opts, progress_cb=progress_cb)
+        else:
+            # 增强模式
+            if self._out_dir is None:
+                return
+            opts = self._build_opts()
+            out_dir = self._out_dir
+            self._progress = ProgressDialog("数据增强", parent=self.window())
+
+            def task(progress_cb):
+                return augment_batch(paths, out_dir, opts, progress_cb=progress_cb)
 
         self._worker = BatchWorker(task)
         self._worker.progress.connect(
