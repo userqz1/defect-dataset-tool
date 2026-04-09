@@ -1,8 +1,10 @@
 """Single-image detail view: large viewer + meta sidebar + A/D navigation."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QKeyEvent
+from pathlib import Path
+
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtGui import QImage, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -28,6 +30,32 @@ from core.annotation_writer import write_annotation
 from core.models import Annotation, ImageInfo, Shape
 from gui.theme import T
 from gui.widgets.image_viewer import ImageViewer, color_for_label
+
+
+class _ImageLoader(QThread):
+    """Load image + parse annotation off the main thread."""
+    done = pyqtSignal(object, object, object)  # (QPixmap, Annotation|None, ImageInfo)
+
+    def __init__(self, img: ImageInfo, parent=None):
+        super().__init__(parent)
+        self._img = img
+
+    def run(self):
+        # Load image
+        image = QImage(str(self._img.path))
+        pix = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
+
+        # Parse annotation
+        annotation = None
+        if self._img.has_label and self._img.label_path:
+            classes = None
+            if self._img.label_path.suffix.lower() == ".txt":
+                classes = load_yolo_classes(self._img.label_path.parent) or None
+            result = parse_annotation(self._img.label_path, self._img.path, yolo_class_names=classes)
+            if result.ok:
+                annotation = result.annotation
+
+        self.done.emit(pix, annotation, self._img)
 
 
 class DetailView(QWidget):
@@ -241,26 +269,28 @@ class DetailView(QWidget):
         if not (0 <= self._index < len(self._images)):
             return
         img = self._images[self._index]
-        self.viewer.load_image(img.path)
 
-        # 解析标注
-        self._annotation = None
-        if img.has_label and img.label_path:
-            classes = None
-            if img.label_path.suffix.lower() == ".txt":
-                classes = load_yolo_classes(img.label_path.parent) or None
-            result = parse_annotation(img.label_path, img.path, yolo_class_names=classes)
-            if result.ok:
-                self._annotation = result.annotation
-        self.viewer.set_annotation(self._annotation)
-
-        # 元信息
+        # 立即更新面包屑（轻量，不阻塞）
         self.crumb_label.setText(
             f"{img.category}  /  {img.path.name}   "
             f"{self._index + 1} / {len(self._images)}"
         )
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
+
+        # 图片 + 标注异步加载
+        if hasattr(self, "_loader") and self._loader and self._loader.isRunning():
+            self._loader.terminate()
+        self._loader = _ImageLoader(img, parent=self)
+        self._loader.done.connect(self._on_image_loaded)
+        self._loader.start()
+
+    def _on_image_loaded(self, pix: QPixmap, annotation, img: ImageInfo) -> None:
+        """Worker 完成后在主线程设置 viewer（轻量操作）。"""
+        if not pix.isNull():
+            self.viewer.load_pixmap(pix)
+        self._annotation = annotation
+        self.viewer.set_annotation(self._annotation)
         try:
             size_kb = img.path.stat().st_size / 1024
             self.info_size.setText(

@@ -200,9 +200,6 @@ class OverviewView(QWidget):
 
         self._draw_distribution(stats)
 
-        # Kick off extended stats in background
-        self._start_extended_stats(dataset)
-
     def _start_extended_stats(self, dataset: Dataset) -> None:
         from core.stats import compute_extended_stats
         from gui.workers.batch_worker import BatchWorker

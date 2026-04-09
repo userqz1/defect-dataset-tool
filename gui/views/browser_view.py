@@ -103,11 +103,17 @@ class BrowserView(QWidget):
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(8)
 
+        from PyQt6.QtCore import QTimer
         self.search = LineEdit()
         self.search.setPlaceholderText(self.tr("搜索文件名…"))
         self.search.setFixedWidth(280)
         self.search.setFixedHeight(32)
-        self.search.textChanged.connect(self._on_search_changed)
+        # 300ms debounce — 不在每次按键时都重新过滤
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(lambda: self._on_search_changed(self.search.text()))
+        self.search.textChanged.connect(lambda _: self._search_timer.start())
         filter_bar.addWidget(self.search)
 
         self.chip_group = QButtonGroup(self)

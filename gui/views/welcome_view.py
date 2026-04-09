@@ -5,8 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -37,13 +37,19 @@ from gui.theme import T
 class _ProjectCardDelegate(QStyledItemDelegate):
     """Paints a project card: name (bold), path, and updated time."""
 
-    CARD_HEIGHT = 80
+    CARD_HEIGHT = 92
+    MARGIN = 6        # gap between card edge and option.rect
+    PAD_H = 20        # horizontal padding inside card
+    PAD_V = 14        # vertical padding inside card
+    NAME_H = 22       # name line height
+    PATH_H = 20       # path line height
+    LINE_GAP = 6      # gap between name and path
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        rect = option.rect.adjusted(4, 4, -4, -4)
+        card = option.rect.adjusted(self.MARGIN, self.MARGIN, -self.MARGIN, -self.MARGIN)
         is_hovered = bool(option.state & option.state.__class__.State_MouseOver)
         is_selected = bool(option.state & option.state.__class__.State_Selected)
 
@@ -57,44 +63,63 @@ class _ProjectCardDelegate(QStyledItemDelegate):
         else:
             painter.setBrush(QColor(T.CONTENT))
             painter.setPen(QColor(T.BORDER))
-        painter.drawRoundedRect(rect, T.RADIUS_LG, T.RADIUS_LG)
+        painter.drawRoundedRect(card, T.RADIUS_LG, T.RADIUS_LG)
 
-        inner = rect.adjusted(T.PAD_XL + 4, T.PAD_LG + 2, -T.PAD_XL - 4, -T.PAD_LG - 2)
         summary: ProjectSummary | None = index.data(Qt.ItemDataRole.UserRole)
         if not summary:
             painter.restore()
             return
 
-        # Name
+        # Content area well inside the card
+        cx = card.x() + self.PAD_H
+        cy = card.y() + self.PAD_V
+        cw = card.width() - 2 * self.PAD_H
+
+        # Row 1: Name (left) + Date (right)
+        name_font = QFont(painter.font())
+        name_font.setBold(True)
+        name_font.setPointSize(name_font.pointSize() + 1)
+        painter.setFont(name_font)
+        fm = QFontMetrics(name_font)
+
         name_color = QColor(T.ACCENT) if is_selected else QColor(T.TEXT)
         painter.setPen(name_color)
-        font = painter.font()
-        font.setBold(True)
-        font.setPointSize(font.pointSize() + 1)
-        painter.setFont(font)
-        painter.drawText(inner, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, summary.name)
 
-        # Path
-        font.setBold(False)
-        font.setPointSize(font.pointSize() - 1)
-        painter.setFont(font)
-        painter.setPen(QColor(T.TEXT_3))
-        path_str = str(summary.root_path)
-        if len(path_str) > 70:
-            path_str = path_str[:30] + "…" + path_str[-36:]
-        path_rect = inner.adjusted(0, 28, 0, 0)
-        painter.drawText(path_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, path_str)
+        # Reserve space for date on the right
+        date_text = summary.updated_at[:10] if summary.updated_at else ""
+        date_w = fm.horizontalAdvance(date_text) + 16 if date_text else 0
+        name_w = cw - date_w
+        elided_name = fm.elidedText(summary.name, Qt.TextElideMode.ElideRight, name_w)
+        name_rect = QRect(cx, cy, name_w, self.NAME_H)
+        painter.drawText(name_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_name)
 
-        # Updated time (right side)
-        if summary.updated_at:
-            ts = summary.updated_at[:10]  # just the date
-            painter.drawText(inner, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, ts)
+        if date_text:
+            date_font = QFont(painter.font())
+            date_font.setBold(False)
+            date_font.setPointSize(date_font.pointSize() - 1)
+            painter.setFont(date_font)
+            painter.setPen(QColor(T.TEXT_3))
+            date_rect = QRect(cx + name_w, cy, date_w, self.NAME_H)
+            painter.drawText(date_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, date_text)
 
-        # Exists indicator
+        # Row 2: Path (or "目录不存在" warning)
+        path_y = cy + self.NAME_H + self.LINE_GAP
+        path_font = QFont(painter.font())
+        path_font.setBold(False)
+        path_font.setPointSize(path_font.pointSize())
+        painter.setFont(path_font)
+        pfm = QFontMetrics(path_font)
+        path_rect = QRect(cx, path_y, cw, self.PATH_H)
+
         if not summary.exists:
             painter.setPen(QColor(T.WARNING))
-            warn_rect = inner.adjusted(0, 28, 0, 0)
-            painter.drawText(warn_rect, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight, "目录不存在")
+            painter.drawText(path_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"{summary.root_path}  (目录不存在)")
+        else:
+            painter.setPen(QColor(T.TEXT_3))
+            path_str = str(summary.root_path)
+            elided_path = pfm.elidedText(path_str, Qt.TextElideMode.ElideMiddle, cw)
+            painter.drawText(path_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_path)
 
         painter.restore()
 
@@ -174,7 +199,7 @@ class WelcomeView(QWidget):
         for s in summaries:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, s)
-            item.setSizeHint(QSize(0, _ProjectCardDelegate.CARD_HEIGHT))
+            item.setSizeHint(QSize(0, _ProjectCardDelegate.CARD_HEIGHT + 2 * _ProjectCardDelegate.MARGIN))
             self.project_list.addItem(item)
 
     def _on_open_folder(self) -> None:

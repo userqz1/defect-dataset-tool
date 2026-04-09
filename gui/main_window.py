@@ -321,6 +321,8 @@ class MainWindow(FluentWindow):
 
     def _open_project(self, root: Path) -> None:
         """Open or create a project, then scan."""
+        if self._scan_worker and self._scan_worker.isRunning():
+            return
         # Save current project first
         self._save_current_project()
 
@@ -328,6 +330,13 @@ class MainWindow(FluentWindow):
         if project is None:
             project = create_project(root)
         self._project = project
+
+        # 立刻显示进度弹窗，用户第一时间看到反馈
+        from gui.dialogs.op_dialogs import ProgressDialog
+        self._scan_progress = ProgressDialog("打开项目", parent=self)
+        self._scan_progress.label.setText(str(root))
+        self._scan_progress.show()
+
         self._start_scan(root)
 
     def _close_project(self) -> None:
@@ -435,9 +444,13 @@ class MainWindow(FluentWindow):
     def _start_scan(self, root: Path) -> None:
         if self._scan_worker and self._scan_worker.isRunning():
             return
-        from gui.dialogs.op_dialogs import ProgressDialog
-        self._scan_progress = ProgressDialog("扫描数据集", parent=self)
-        self._scan_progress.label.setText(str(root))
+        # 进度弹窗已在 _open_project 中创建并显示
+        # 这里只需要确保存在（dataset_changed 重扫描时也需要）
+        if self._scan_progress is None:
+            from gui.dialogs.op_dialogs import ProgressDialog
+            self._scan_progress = ProgressDialog("扫描数据集", parent=self)
+            self._scan_progress.label.setText(str(root))
+            self._scan_progress.show()
 
         self._scan_worker = ScanWorker(root, parent=self)
         self._scan_worker.progress.connect(self._on_scan_progress)
@@ -445,15 +458,16 @@ class MainWindow(FluentWindow):
         self._scan_worker.finished_ok.connect(self._on_scan_done)
         self._scan_worker.failed.connect(self._on_scan_failed)
         self._scan_worker.start()
-        self._scan_progress.show()
 
     def _on_scan_phase(self, phase: str) -> None:
         if self._scan_progress is None:
             return
-        if phase == "scan":
-            self._scan_progress.titleLabel.setText("扫描数据集 · 索引文件")
-        elif phase == "annotate":
-            self._scan_progress.titleLabel.setText("扫描数据集 · 解析标注")
+        labels = {
+            "scan": "扫描数据集 · 索引文件",
+            "annotate": "扫描数据集 · 解析标注",
+            "analyze": "扫描数据集 · 分析统计",
+        }
+        self._scan_progress.titleLabel.setText(labels.get(phase, phase))
 
     def _on_scan_progress(self, done: int, total: int, name: str) -> None:
         if self._scan_progress is None:
@@ -480,17 +494,23 @@ class MainWindow(FluentWindow):
         self.split_view.add_to_manual_bucket(bucket, images)
         self.switchTo(self.split_view)
 
-    def _on_scan_done(self, dataset) -> None:
-        # 扫描弹窗还在显示 → 在弹窗背后把所有视图初始化完毕
-        # 这样关闭弹窗后用户立刻看到就绪的工作区
-        if self._scan_progress:
-            self._scan_progress.titleLabel.setText("正在准备工作区…")
+    def _on_scan_done(self, result) -> None:
+        # result 是 ScanResult — 所有耗时操作已在 Worker 线程完成
+        from gui.workers.scan_worker import ScanResult
+        if isinstance(result, ScanResult):
+            dataset = result.dataset
+            ext_stats = result.ext_stats
+        else:
+            dataset = result
+            ext_stats = None
 
         self._dataset_root = dataset.root_path
         add_recent(dataset.root_path)
 
-        # 初始化所有视图（弹窗挡住，用户看不到中间状态）
+        # 设置视图（轻量赋值，不阻塞主线程）
         self.overview.set_dataset(dataset)
+        if ext_stats:
+            self.overview._on_extended_stats(ext_stats)
         self.browser.load_dataset(dataset)
         self.settings_view.refresh()
         for v in (

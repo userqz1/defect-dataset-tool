@@ -79,16 +79,20 @@ class ImageViewer(QGraphicsView):
         self._temp_poly_item: QGraphicsPolygonItem | None = None
 
     def load_image(self, path: Path) -> None:
-        """Load an image, replacing scene contents."""
+        """Load an image from file, replacing scene contents."""
+        image = QImage(str(path))
+        if image.isNull():
+            return
+        self.load_pixmap(QPixmap.fromImage(image))
+
+    def load_pixmap(self, pix: QPixmap) -> None:
+        """Set a pre-loaded pixmap, replacing scene contents."""
         self._scene.clear()
         self._shape_items.clear()
         self._pix_item = None
 
-        # 用 QImage 然后转 QPixmap，能更好兼容中文路径
-        image = QImage(str(path))
-        if image.isNull():
+        if pix.isNull():
             return
-        pix = QPixmap.fromImage(image)
         self._pix_item = self._scene.addPixmap(pix)
         self._scene.setSceneRect(QRectF(pix.rect()))
         self.fit_to_window()
