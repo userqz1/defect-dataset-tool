@@ -26,6 +26,7 @@ from qfluentwidgets import (
     InfoBarPosition,
     PrimaryPushButton,
     PushButton,
+    StrongBodyLabel,
     SubtitleLabel,
     TogglePushButton,
 )
@@ -118,8 +119,8 @@ class _FormatCard(QFrame):
 
         name_row = QHBoxLayout()
         name_row.setSpacing(T.GAP)
-        self.name_label = BodyLabel(fmt["name"])
-        self.name_label.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        self.name_label = StrongBodyLabel(fmt["name"])
+        self.name_label.setObjectName("formatCardName")
         name_row.addWidget(self.name_label)
         name_row.addStretch(1)
         self.tag_label = CaptionLabel(fmt["desc"])
@@ -131,18 +132,13 @@ class _FormatCard(QFrame):
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
-        if selected:
-            self.setStyleSheet(
-                f"QFrame#formatCard {{ background: {T.ACCENT_SOFT}; "
-                f"border: 2px solid {T.ACCENT}; border-radius: {T.RADIUS_LG}px; }}"
-            )
-            self.name_label.setStyleSheet(f"font-weight: bold; color: {T.ACCENT};")
-        else:
-            self.setStyleSheet(
-                f"QFrame#formatCard {{ background: {T.CONTENT}; "
-                f"border: 1px solid {T.BORDER}; border-radius: {T.RADIUS_LG}px; }}"
-            )
-            self.name_label.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        self.setProperty("selected", selected)
+        self.name_label.setProperty("selected", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.name_label.style().unpolish(self.name_label)
+        self.name_label.style().polish(self.name_label)
+        self.update()
 
     def mousePressEvent(self, e):
         super().mousePressEvent(e)
@@ -172,7 +168,7 @@ class ExportView(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         container = QWidget()
         root = QVBoxLayout(container)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_XL)
         scroll.setWidget(container)
 
@@ -182,10 +178,8 @@ class ExportView(QWidget):
 
         # ---- Step 1: 选择格式 ----
         root.addWidget(SubtitleLabel("导出向导"))
-        root.addWidget(CaptionLabel("选择导出格式，配置参数，一键生成可训练数据集"))
 
-        step1 = BodyLabel("① 选择导出格式")
-        step1.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        step1 = StrongBodyLabel("① 选择导出格式")
         root.addWidget(step1)
 
         # 格式卡片网格（2列）
@@ -199,8 +193,7 @@ class ExportView(QWidget):
         root.addLayout(cards_grid)
 
         # ---- Step 2: 配置参数 ----
-        step2 = BodyLabel("② 配置参数")
-        step2.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        step2 = StrongBodyLabel("② 配置参数")
         root.addWidget(step2)
 
         param_frame = QFrame()

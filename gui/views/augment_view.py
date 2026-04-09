@@ -21,6 +21,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     SpinBox,
+    StrongBodyLabel,
     SubtitleLabel,
 )
 
@@ -44,11 +45,10 @@ class AugmentView(QWidget):
         self._selection_provider = None  # () -> list[ImageInfo]
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("数据增强与变换"))
-        root.addWidget(CaptionLabel("增强模式：生成新样本到指定目录  /  变换模式：原地修改图片（旋转/翻转/缩放）"))
 
         # 模式选择
         mode_row = QHBoxLayout()
@@ -61,7 +61,7 @@ class AugmentView(QWidget):
         root.addLayout(mode_row)
 
         # 几何变换
-        root.addWidget(BodyLabel("几何变换"))
+        root.addWidget(StrongBodyLabel("几何变换"))
         geo_grid = QGridLayout()
         geo_grid.setHorizontalSpacing(T.GAP_LG)
         self.flip_h_chk = CheckBox("随机水平翻转")
@@ -79,7 +79,7 @@ class AugmentView(QWidget):
         root.addLayout(geo_grid)
 
         # 光度变换
-        root.addWidget(BodyLabel("光度变换"))
+        root.addWidget(StrongBodyLabel("光度变换"))
         photo_grid = QGridLayout()
         photo_grid.setHorizontalSpacing(T.GAP_LG)
         self.bright_chk = CheckBox("亮度抖动")

@@ -5,7 +5,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
-    CaptionLabel,
     DoubleSpinBox,
     InfoBar,
     InfoBarPosition,
@@ -41,11 +40,10 @@ class QualityView(QWidget):
         self._progress = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("质量检查"))
-        root.addWidget(CaptionLabel("检测模糊 / 空白 / 过曝 / 欠曝 / 损坏图像"))
 
         ctrl = QHBoxLayout()
         ctrl.setSpacing(T.GAP_LG)
@@ -54,8 +52,8 @@ class QualityView(QWidget):
         self.blur_spin.setRange(1, 5000)
         self.blur_spin.setValue(100)
         self.blur_spin.setFixedWidth(120)
+        self.blur_spin.setToolTip("Laplacian 方差，越小越模糊")
         ctrl.addWidget(self.blur_spin)
-        ctrl.addWidget(CaptionLabel("Laplacian 方差，越小越模糊"))
         ctrl.addStretch(1)
         self.start_btn = PrimaryPushButton("开始检查")
         self.start_btn.clicked.connect(self._on_start)

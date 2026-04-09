@@ -50,11 +50,10 @@ class TransformView(QWidget):
         self._selection_provider = None  # () -> list[ImageInfo]
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("批量变换"))
-        root.addWidget(CaptionLabel("旋转 / 翻转 / 缩放，并同步更新 LabelMe 标注坐标"))
 
         # 操作类型
         form = QFrame()

@@ -9,6 +9,8 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 from qfluentwidgets import CaptionLabel
 
+from gui.theme import T
+
 
 class _ImageSlot(QFrame):
     def __init__(self, title: str) -> None:
@@ -16,8 +18,8 @@ class _ImageSlot(QFrame):
         self.setObjectName("previewSlot")
         self.setMinimumSize(260, 220)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(T.GAP, T.GAP, T.GAP, T.GAP)
+        layout.setSpacing(T.GAP_XS)
         self.title = CaptionLabel(title)
         layout.addWidget(self.title)
         self.image_label = QLabel("(无)")
@@ -54,7 +56,7 @@ class PreviewPane(QFrame):
         self.setObjectName("previewPane")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(T.GAP_LG)
         self.before = _ImageSlot("原图")
         self.after = _ImageSlot("效果")
         layout.addWidget(self.before, 1)

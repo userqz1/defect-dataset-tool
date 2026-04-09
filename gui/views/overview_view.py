@@ -68,7 +68,7 @@ class OverviewView(QWidget):
         self._ext_worker = None
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(32, 28, 32, 24)
+        root_layout.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root_layout.setSpacing(T.GAP_XL)
 
         # 标题 + 导出按钮

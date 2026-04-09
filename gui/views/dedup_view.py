@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     BodyLabel,
-    CaptionLabel,
     PrimaryPushButton,
     SpinBox,
     StrongBodyLabel,
@@ -41,12 +40,11 @@ class DedupView(QWidget):
         self._progress = None  # ProgressDialog
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         # 标题
         root.addWidget(SubtitleLabel("重复检测"))
-        root.addWidget(CaptionLabel("基于感知哈希 (pHash) 发现重复或近似的图片"))
 
         # 控制条
         controls = QFrame()
@@ -60,10 +58,8 @@ class DedupView(QWidget):
         self.threshold_spin.setRange(0, 20)
         self.threshold_spin.setValue(5)
         self.threshold_spin.setFixedWidth(120)
+        self.threshold_spin.setToolTip("0=完全相同  5=视觉近似  越大越宽松")
         ctrl_layout.addWidget(self.threshold_spin)
-        ctrl_layout.addWidget(
-            CaptionLabel("0 = 完全相同  ·  5 = 视觉近似  ·  越大越宽松")
-        )
         ctrl_layout.addStretch(1)
 
         self.start_btn = PrimaryPushButton("开始检测")

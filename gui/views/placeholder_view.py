@@ -23,7 +23,7 @@ class PlaceholderView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        layout.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         layout.setSpacing(T.GAP)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 

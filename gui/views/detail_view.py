@@ -79,8 +79,8 @@ class DetailView(QWidget):
         topbar.setObjectName("detailTopBar")
         topbar.setFixedHeight(48)
         top_layout = QHBoxLayout(topbar)
-        top_layout.setContentsMargins(12, 0, 16, 0)
-        top_layout.setSpacing(8)
+        top_layout.setContentsMargins(T.GAP_LG, 0, T.PAD_LG, 0)
+        top_layout.setSpacing(T.GAP)
 
         self.back_btn = ToolButton(FIF.LEFT_ARROW)
         self.back_btn.setToolTip("返回浏览 (Esc)")
@@ -194,8 +194,8 @@ class DetailView(QWidget):
         sidebar.setObjectName("detailSidebar")
         sidebar.setFixedWidth(T.DETAIL_SIDEBAR_WIDTH)
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(20, 20, 20, 20)
-        side_layout.setSpacing(14)
+        side_layout.setContentsMargins(T.PAD_XL, T.PAD_XL, T.PAD_XL, T.PAD_XL)
+        side_layout.setSpacing(T.GAP_LG)
 
         side_layout.addWidget(self._section_label("文件信息"))
         self.info_name = self._meta_value("—")
@@ -209,7 +209,7 @@ class DetailView(QWidget):
         side_layout.addLayout(self._meta_row("尺寸", self.info_dim))
         side_layout.addLayout(self._meta_row("类别", self.info_cat))
 
-        side_layout.addSpacing(8)
+        side_layout.addSpacing(T.GAP)
         side_layout.addWidget(self._section_label("标注列表"))
         self.shape_list = QListWidget()
         self.shape_list.setObjectName("shapeList")

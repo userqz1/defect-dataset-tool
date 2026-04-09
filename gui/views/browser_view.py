@@ -96,12 +96,12 @@ class BrowserView(QWidget):
         # 右侧主区
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(20, 16, 20, 12)
-        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.GAP_LG)
+        right_layout.setSpacing(T.PAD)
 
         # 筛选栏
         filter_bar = QHBoxLayout()
-        filter_bar.setSpacing(8)
+        filter_bar.setSpacing(T.GAP)
 
         from PyQt6.QtCore import QTimer
         self.search = LineEdit()
@@ -156,7 +156,7 @@ class BrowserView(QWidget):
         # 分页栏
         from qfluentwidgets import SpinBox
         pager = QHBoxLayout()
-        pager.setSpacing(8)
+        pager.setSpacing(T.GAP)
         self.prev_btn = ToolButton(FIF.LEFT_ARROW)
         self.prev_btn.clicked.connect(self._prev_page)
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
@@ -169,7 +169,7 @@ class BrowserView(QWidget):
         self.count_label = CaptionLabel("")
         pager.addStretch(1)
         pager.addWidget(self.count_label)
-        pager.addSpacing(12)
+        pager.addSpacing(T.GAP_LG)
         pager.addWidget(self.prev_btn)
         pager.addWidget(CaptionLabel("第"))
         pager.addWidget(self.page_spin)

@@ -67,7 +67,7 @@ class _DatasetChip(QWidget):
         self.setMaximumWidth(300)
         from PyQt6.QtWidgets import QHBoxLayout
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
+        layout.setContentsMargins(T.GAP_LG, T.GAP_XS, T.GAP_LG, T.GAP_XS)
         layout.setSpacing(0)
         self.hide()
         self.name_label = BodyLabel("")
