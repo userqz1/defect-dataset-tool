@@ -39,7 +39,7 @@ QLabel#datasetChipPath {{ color: {TEXT_3}; }}
 }}
 
 QWidget#overviewView, QWidget#browserView, QWidget#detailView,
-QWidget#qualityView, QWidget#exportView,
+QWidget#qualityView, QWidget#exportView, QWidget#pipelineView,
 QStackedWidget#browserStack {{
     background-color: {CONTENT};
 }}

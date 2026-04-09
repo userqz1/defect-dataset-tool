@@ -185,6 +185,9 @@ class MainWindow(FluentWindow):
         self.browser_stack.addWidget(self.browser)
         self.browser_stack.addWidget(self.detail)
 
+        from gui.views.pipeline_view import PipelineView
+        self.pipeline_view = PipelineView()
+
         self.cleaning_view = CleaningView()
         self.augment_view = AugmentView()
         self.predict_view = PredictView()
@@ -235,6 +238,9 @@ class MainWindow(FluentWindow):
             onClick=lambda: None,
             selectable=False,
             tooltip="数据处理",
+        )
+        self.addSubInterface(
+            self.pipeline_view, FIF.PLAY, "处理流程", parent="processGroup"
         )
         self.addSubInterface(
             self.cleaning_view, FIF.CERTIFICATE, "数据清洗", parent="processGroup"
@@ -541,6 +547,7 @@ class MainWindow(FluentWindow):
         self.browser.load_dataset(dataset)
         self.settings_view.refresh()
         for v in (
+            self.pipeline_view,
             self.cleaning_view,
             self.augment_view,
             self.predict_view,
