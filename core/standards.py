@@ -109,7 +109,7 @@ def generate_standard_doc(
     if standard.require_labels:
         lines.append("## 四、标注规则\n")
         lines.append("- 使用 [LabelMe](https://github.com/wkentaro/labelme) 工具标注")
-        lines.append("- 标注框应紧贴缺陷边缘，不要留过大空白")
+        lines.append("- 标注框应紧贴目标边缘，不要留过大空白")
         lines.append("- 类别名称必须与上方表格一致（区分大小写）")
         lines.append("- 每张图片标注完成后保存为同名 `.json` 文件")
         lines.append("")

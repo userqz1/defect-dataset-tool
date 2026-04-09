@@ -148,7 +148,7 @@ class WelcomeView(QWidget):
         title = LargeTitleLabel("数据坊")
         title.setObjectName("welcomeTitle")
         header.addWidget(title)
-        subtitle = CaptionLabel("缺陷数据集管理工具 — 选择一个项目开始")
+        subtitle = CaptionLabel("图像数据集管理工具 — 选择一个项目开始")
         header.addWidget(subtitle)
         root.addLayout(header)
 

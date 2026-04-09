@@ -1,12 +1,8 @@
-"""Export to LLaVA conversation JSONL format for multimodal LLM fine-tuning.
+"""Export to ms-swift format — the standard for Qwen-VL / InternVL fine-tuning via ModelScope.
 
-Output: <out>/llava_train.jsonl (+ val/test) + copied images.
-Each line follows the LLaVA format:
-  {"id": "unique_id", "image": "relative/path.jpg",
-   "conversations": [
-     {"from": "human", "value": "<image>\\n这张图片中有什么缺陷？"},
-     {"from": "gpt", "value": "图片中存在2处缺陷：1处裂纹（位于图像左侧）..."}
-   ]}
+Output: <out>/swift_{split}.jsonl + images/
+Format per line:
+  {"query": "<image>问题", "response": "回答", "images": ["images/train/xxx.jpg"]}
 """
 from __future__ import annotations
 
@@ -23,10 +19,10 @@ from ..splitter import SplitResult
 
 
 @dataclass
-class LlavaExportOptions:
+class SwiftExportOptions:
     out_dir: Path
     copy_images: bool = True
-    question: str = "请描述这张图片中的内容，包括目标的类型、位置和数量。"
+    question: str = "请描述这张图片中的内容。"
 
 
 @dataclass
@@ -36,45 +32,21 @@ class ExportReport:
     skipped: list[tuple[Path, str]] = field(default_factory=list)
 
 
-def _position_desc(points, iw: int, ih: int) -> str:
-    """Generate a rough position description from bbox center."""
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    cx = (min(xs) + max(xs)) / 2 / iw
-    cy = (min(ys) + max(ys)) / 2 / ih
-    h = "左侧" if cx < 0.33 else ("右侧" if cx > 0.67 else "中部")
-    v = "上方" if cy < 0.33 else ("下方" if cy > 0.67 else "中部")
-    if h == "中部" and v == "中部":
-        return "图像中央"
-    return f"图像{v}{h}"
-
-
-def _generate_answer(shapes, iw: int, ih: int) -> str:
-    """Auto-generate a natural language answer from annotation shapes."""
+def _generate_answer(shapes) -> str:
     if not shapes:
-        return "这张图片中未发现标注目标，画面正常。"
-
+        return "这张图片中未发现标注目标。"
     from collections import Counter
     label_counts = Counter(s.label for s in shapes)
     total = len(shapes)
-
     if total == 1:
-        s = shapes[0]
-        pos = _position_desc(s.points, iw, ih)
-        return f"图片中存在1个 {s.label}，位于{pos}。"
-
-    parts = []
-    for label, count in label_counts.most_common():
-        first = next(s for s in shapes if s.label == label)
-        pos = _position_desc(first.points, iw, ih)
-        parts.append(f"{count}个 {label}（{pos}附近）")
-
+        return f"图片中存在1个 {shapes[0].label}。"
+    parts = [f"{count}个 {label}" for label, count in label_counts.most_common()]
     return f"图片中存在{total}个目标：{'、'.join(parts)}。"
 
 
-def export_llava(
+def export_swift(
     split: SplitResult,
-    opts: LlavaExportOptions,
+    opts: SwiftExportOptions,
     progress_cb=None,
 ) -> ExportReport:
     out = Path(opts.out_dir)
@@ -86,21 +58,16 @@ def export_llava(
     for name, imgs in splits.items():
         if not imgs:
             continue
-        jsonl_path = out / f"llava_{name}.jsonl"
-        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         img_dir = out / "images" / name if opts.copy_images else None
         if img_dir:
             img_dir.mkdir(parents=True, exist_ok=True)
 
         lines: list[str] = []
-        for i, img in enumerate(imgs):
+        for img in imgs:
             done += 1
             if progress_cb:
                 progress_cb(done, total, img.path.name)
             try:
-                with Image.open(img.path) as pim:
-                    iw, ih = pim.size
-
                 if img_dir:
                     shutil.copy2(img.path, img_dir / img.path.name)
                     report.written_images += 1
@@ -108,7 +75,6 @@ def export_llava(
                 else:
                     rel_path = str(img.path)
 
-                # Parse annotations
                 shapes = []
                 if img.has_label and img.label_path:
                     classes = (
@@ -119,20 +85,17 @@ def export_llava(
                     if r.ok and r.annotation:
                         shapes = r.annotation.shapes
 
-                answer = _generate_answer(shapes, iw, ih)
                 record = {
-                    "id": f"{name}_{i:06d}",
-                    "image": rel_path,
-                    "conversations": [
-                        {"from": "human", "value": f"<image>\n{opts.question}"},
-                        {"from": "gpt", "value": answer},
-                    ],
+                    "query": f"<image>{opts.question}",
+                    "response": _generate_answer(shapes),
+                    "images": [rel_path],
                 }
                 lines.append(json.dumps(record, ensure_ascii=False))
                 report.written_labels += 1
             except Exception as e:  # noqa: BLE001
                 report.skipped.append((img.path, str(e)))
 
+        jsonl_path = out / f"swift_{name}.jsonl"
         jsonl_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     if progress_cb:

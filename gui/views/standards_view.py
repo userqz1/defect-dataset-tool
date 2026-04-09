@@ -71,9 +71,9 @@ class StandardsView(QWidget):
             "配置数据标准 → 生成规范文档发给采集方 → 收到数据后一键校验是否合规"
         ))
 
-        # ============ 区域 1：缺陷类别定义 ============
-        self._add_section(root, "① 定义缺陷类别",
-                          "每个类别代表一种缺陷类型。添加类别名称和说明，采集方会按此分类拍照。")
+        # ============ 区域 1：类别定义 ============
+        self._add_section(root, "① 定义数据类别",
+                          "每个类别代表一种目标类型。添加类别名称和说明，采集方会按此分类拍照。")
 
         cat_frame = QFrame()
         cat_frame.setObjectName("chartFrame")
@@ -103,7 +103,7 @@ class StandardsView(QWidget):
         # 选中类别的描述
         cat_layout.addWidget(CaptionLabel("类别说明（给采集方看的描述）："))
         self.cat_desc_edit = LineEdit()
-        self.cat_desc_edit.setPlaceholderText("例如：钢板表面的裂纹状缺陷，通常呈线性延伸")
+        self.cat_desc_edit.setPlaceholderText("例如：表面裂纹，通常呈线性延伸；或：猫，四肢动物")
         self.cat_desc_edit.textChanged.connect(self._on_desc_changed)
         cat_layout.addWidget(self.cat_desc_edit)
 

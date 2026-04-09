@@ -34,6 +34,8 @@ from core.exporter.coco import CocoExportOptions, export_coco
 from core.exporter.csv_export import CsvExportOptions, export_csv_dataset
 from core.exporter.jsonl import JsonlExportOptions, export_jsonl
 from core.exporter.llava import LlavaExportOptions, export_llava
+from core.exporter.sharegpt import ShareGptExportOptions, export_sharegpt
+from core.exporter.swift import SwiftExportOptions, export_swift
 from core.exporter.voc import VocExportOptions, export_voc
 from core.exporter.yolo import YoloExportOptions, export_yolo
 from core.models import Dataset
@@ -70,10 +72,22 @@ _FORMATS = [
         "detail": "每行一条 JSON，适合自定义训练脚本和数据分析",
     },
     {
+        "key": "ShareGPT",
+        "name": "ShareGPT (LLaMA-Factory)",
+        "desc": "视觉大模型通用微调",
+        "detail": "LLaMA-Factory 标准格式，覆盖 LLaVA/Qwen-VL/InternVL/GLM-4V 等，附带 dataset_info.json",
+    },
+    {
+        "key": "ms-swift",
+        "name": "ms-swift (ModelScope)",
+        "desc": "Qwen-VL / InternVL 微调",
+        "detail": "ModelScope SWIFT 框架格式，直接用于 Qwen2.5-VL / InternVL 训练",
+    },
+    {
         "key": "LLaVA",
-        "name": "LLaVA 对话",
-        "desc": "多模态大模型微调",
-        "detail": "对话格式 JSONL，自动生成缺陷描述，适用于 LLaVA/Qwen-VL",
+        "name": "LLaVA 原生",
+        "desc": "LLaVA 原生对话格式",
+        "detail": "对话 JSONL，适用于原版 LLaVA / LLaVA-NeXT 微调",
     },
     {
         "key": "CSV",
@@ -183,7 +197,6 @@ class ExportView(QWidget):
             self._format_cards[fmt["key"]] = card
             cards_grid.addWidget(card, i // 2, i % 2)
         root.addLayout(cards_grid)
-        self._select_format("YOLO")
 
         # ---- Step 2: 配置参数 ----
         step2 = BodyLabel("② 配置参数")
@@ -251,6 +264,9 @@ class ExportView(QWidget):
         root.addWidget(self.detail_label)
 
         root.addStretch(1)
+
+        # 初始选中（所有控件已创建）
+        self._select_format("YOLO")
 
     # ---------- 格式选择 ----------
 
@@ -321,11 +337,23 @@ class ExportView(QWidget):
                 "  └── {train,val,test}.jsonl      每行一条 JSON 记录\n\n"
                 "  字段：image, width, height, category, annotations[]"
             ),
+            "ShareGPT": (
+                "<output>/\n"
+                "  ├── images/{train,val,test}/    图片\n"
+                "  ├── sharegpt_{split}.json       ShareGPT 对话格式\n"
+                "  └── dataset_info.json           LLaMA-Factory 注册文件\n\n"
+                "  LLaMA-Factory 可直接识别，覆盖主流视觉大模型"
+            ),
+            "ms-swift": (
+                "<output>/\n"
+                "  ├── images/{train,val,test}/    图片\n"
+                "  └── swift_{split}.jsonl         ms-swift 对话格式\n\n"
+                "  适用于 swift sft 命令直接训练 Qwen2.5-VL / InternVL"
+            ),
             "LLaVA": (
                 "<output>/\n"
                 "  ├── images/{train,val,test}/    图片（可选）\n"
-                "  └── llava_{split}.jsonl         对话格式\n\n"
-                "  自动根据标注生成缺陷描述文本"
+                "  └── llava_{split}.jsonl         LLaVA 原生对话格式"
             ),
             "CSV": (
                 "<output>/\n"
@@ -370,6 +398,8 @@ class ExportView(QWidget):
             "COCO": (CocoExportOptions(out_dir=out_path, copy_images=copy), export_coco),
             "Pascal VOC": (VocExportOptions(out_dir=out_path, copy_images=copy), export_voc),
             "JSON Lines": (JsonlExportOptions(out_dir=out_path, copy_images=copy), export_jsonl),
+            "ShareGPT": (ShareGptExportOptions(out_dir=out_path, copy_images=copy), export_sharegpt),
+            "ms-swift": (SwiftExportOptions(out_dir=out_path, copy_images=copy), export_swift),
             "LLaVA": (LlavaExportOptions(out_dir=out_path, copy_images=copy), export_llava),
             "CSV": (CsvExportOptions(out_dir=out_path, copy_images=copy), export_csv_dataset),
         }
@@ -465,8 +495,25 @@ class ExportView(QWidget):
                 "    for line in f:\n"
                 "        sample = json.loads(line)"
             ),
+            "ShareGPT": (
+                "LLaMA-Factory 一行命令开始训练：\n\n"
+                "llamafactory-cli train \\\n"
+                f'    --dataset_dir r"{path}" \\\n'
+                "    --dataset my_dataset_train \\\n"
+                "    --template qwen2_vl \\\n"
+                "    --model_name_or_path Qwen/Qwen2.5-VL-7B-Instruct \\\n"
+                "    --finetuning_type lora\n\n"
+                f"dataset_info.json 已生成，LLaMA-Factory 可直接识别"
+            ),
+            "ms-swift": (
+                "ms-swift 一行命令开始训练：\n\n"
+                "swift sft \\\n"
+                "    --model Qwen/Qwen2.5-VL-7B-Instruct \\\n"
+                f'    --dataset r"{path}/swift_train.jsonl" \\\n'
+                "    --train_type lora"
+            ),
             "LLaVA": (
-                "用于 LLaVA / Qwen-VL 微调：\n\n"
+                "用于 LLaVA 原生微调：\n\n"
                 "python llava/train/train_mem.py \\\n"
                 f'    --data_path r"{path}/llava_train.jsonl" \\\n'
                 f'    --image_folder r"{path}"'
