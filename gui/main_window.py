@@ -51,6 +51,7 @@ from gui.views.quality_view import QualityView
 from gui.views.settings_view import SettingsView
 from gui.views.split_view import SplitView
 from gui.views.transform_view import TransformView
+from gui.views.standards_view import StandardsView
 from gui.views.welcome_view import WelcomeView
 from gui.workers.scan_worker import ScanWorker
 from gui.workers.thumbnail_worker import ThumbnailWorker
@@ -193,6 +194,7 @@ class MainWindow(FluentWindow):
         self.transform_view.set_selection_provider(self.browser.get_selected_images)
         self.augment_view.set_selection_provider(self.browser.get_selected_images)
         self.export_view = ExportView()
+        self.standards_view = StandardsView()
         self.settings_view = SettingsView()
         self.settings_view.open_recent.connect(lambda p: self._open_project(Path(p)))
         self.settings_view.theme_changed.connect(self._on_theme_changed)
@@ -257,14 +259,17 @@ class MainWindow(FluentWindow):
             self.split_view, FIF.TILES, "数据集划分", parent="processGroup"
         )
 
-        # 3) 📤 导出
+        # 3) 📋 规范与导出
         self.navigationInterface.addItem(
             routeKey="exportGroup",
             icon=FIF.SHARE,
-            text="导出",
+            text="规范与导出",
             onClick=lambda: None,
             selectable=False,
-            tooltip="导出",
+            tooltip="数据规范与导出",
+        )
+        self.addSubInterface(
+            self.standards_view, FIF.DOCUMENT, "数据规范", parent="exportGroup"
         )
         self.addSubInterface(
             self.export_view, FIF.SEND, "导出向导", parent="exportGroup"
@@ -359,6 +364,8 @@ class MainWindow(FluentWindow):
         self._project.export_config = self.export_view.save_state()
         # Collect split state
         self._project.split_state = self.split_view.save_state()
+        # Collect data standard
+        self._project.data_standard = self.standards_view.get_standard().to_dict()
         save_project(self._project)
 
     # ---------- 导航历史 ----------
@@ -521,6 +528,7 @@ class MainWindow(FluentWindow):
             self.predict_view,
             self.split_view,
             self.export_view,
+            self.standards_view,
         ):
             v.set_dataset(dataset)
 
@@ -529,6 +537,11 @@ class MainWindow(FluentWindow):
             self.browser.restore_state(self._project.browse_state)
             self.export_view.restore_state(self._project.export_config)
             self.split_view.restore_state(self._project.split_state)
+            if self._project.data_standard:
+                from core.standards import DataStandard
+                self.standards_view.set_standard(
+                    DataStandard.from_dict(self._project.data_standard)
+                )
 
         # 一切就绪，关闭弹窗 → 用户直接看到完整的工作区
         self._close_scan_progress()

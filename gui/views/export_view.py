@@ -22,6 +22,9 @@ from qfluentwidgets import (
 )
 
 from core.exporter.coco import CocoExportOptions, export_coco
+from core.exporter.csv_export import CsvExportOptions, export_csv_dataset
+from core.exporter.jsonl import JsonlExportOptions, export_jsonl
+from core.exporter.llava import LlavaExportOptions, export_llava
 from core.exporter.voc import VocExportOptions, export_voc
 from core.exporter.yolo import YoloExportOptions, export_yolo
 from core.models import Dataset
@@ -53,7 +56,7 @@ class ExportView(QWidget):
 
         grid.addWidget(BodyLabel("目标格式"), 0, 0)
         self.fmt_combo = ComboBox()
-        self.fmt_combo.addItems(["YOLO", "COCO", "Pascal VOC"])
+        self.fmt_combo.addItems(["YOLO", "COCO", "Pascal VOC", "JSON Lines", "LLaVA", "CSV"])
         grid.addWidget(self.fmt_combo, 0, 1)
 
         grid.addWidget(BodyLabel("Train / Val / Test"), 1, 0)
@@ -172,6 +175,46 @@ class ExportView(QWidget):
                 "          ├── val.txt\n"
                 "          └── test.txt"
             ),
+            "JSON Lines": (
+                "<output>/\n"
+                "  ├── images/\n"
+                "  │   ├── train/\n"
+                "  │   │   └── crack_001.jpg\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  ├── train.jsonl                    ← 每行一条 JSON 记录\n"
+                "  ├── val.jsonl                      ← {image, width, height, annotations}\n"
+                "  └── test.jsonl\n\n"
+                "每行格式：\n"
+                '  {"image": "images/train/crack_001.jpg", "width": 1920, "height": 1080,\n'
+                '   "category": "crack", "annotations": [{"label": "crack", "bbox": [x1,y1,x2,y2]}]}'
+            ),
+            "LLaVA": (
+                "<output>/\n"
+                "  ├── images/\n"
+                "  │   ├── train/\n"
+                "  │   │   └── crack_001.jpg\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  ├── llava_train.jsonl              ← 对话格式，可直接微调 LLaVA/Qwen-VL\n"
+                "  ├── llava_val.jsonl\n"
+                "  └── llava_test.jsonl\n\n"
+                "每行格式：\n"
+                '  {"id": "train_000001", "image": "images/train/crack_001.jpg",\n'
+                '   "conversations": [{"from": "human", "value": "<image>\\n有什么缺陷？"},\n'
+                '                     {"from": "gpt", "value": "存在1处裂纹缺陷..."}]}'
+            ),
+            "CSV": (
+                "<output>/\n"
+                "  ├── images/\n"
+                "  │   ├── train/\n"
+                "  │   │   └── crack_001.jpg\n"
+                "  │   ├── val/\n"
+                "  │   └── test/\n"
+                "  └── annotations.csv                ← 扁平表格，每行一个标注框\n\n"
+                "CSV 列：\n"
+                "  image_path, category, label, x1, y1, x2, y2, shape_type, split"
+            ),
         }
         self._structure_label.setText(structures.get(fmt, ""))
 
@@ -202,18 +245,17 @@ class ExportView(QWidget):
 
         fmt = self.fmt_combo.currentText()
         copy = self.copy_chk.isChecked()
-        if fmt == "YOLO":
-            opts = YoloExportOptions(out_dir=Path(out), copy_images=copy)
-            export_fn = export_yolo
-            title = "导出 YOLO"
-        elif fmt == "COCO":
-            opts = CocoExportOptions(out_dir=Path(out), copy_images=copy)
-            export_fn = export_coco
-            title = "导出 COCO"
-        else:
-            opts = VocExportOptions(out_dir=Path(out), copy_images=copy)
-            export_fn = export_voc
-            title = "导出 Pascal VOC"
+        out_path = Path(out)
+        format_map = {
+            "YOLO": (YoloExportOptions(out_dir=out_path, copy_images=copy), export_yolo),
+            "COCO": (CocoExportOptions(out_dir=out_path, copy_images=copy), export_coco),
+            "Pascal VOC": (VocExportOptions(out_dir=out_path, copy_images=copy), export_voc),
+            "JSON Lines": (JsonlExportOptions(out_dir=out_path, copy_images=copy), export_jsonl),
+            "LLaVA": (LlavaExportOptions(out_dir=out_path, copy_images=copy), export_llava),
+            "CSV": (CsvExportOptions(out_dir=out_path, copy_images=copy), export_csv_dataset),
+        }
+        opts, export_fn = format_map[fmt]
+        title = f"导出 {fmt}"
 
         from gui.dialogs.op_dialogs import ProgressDialog
         self._progress = ProgressDialog(title, parent=self.window())
@@ -311,6 +353,40 @@ class ExportView(QWidget):
                 f"# 图片目录：{path}/JPEGImages/\n"
                 f"# 标注目录：{path}/Annotations/\n"
                 f"# 划分列表：{path}/ImageSets/Main/"
+            )
+        elif fmt == "JSON Lines":
+            return (
+                "导出完成。可用 Python 直接加载：\n\n"
+                "import json\n\n"
+                f'with open(r"{path}/train.jsonl") as f:\n'
+                "    for line in f:\n"
+                "        sample = json.loads(line)\n"
+                '        img_path = sample["image"]\n'
+                '        annots = sample["annotations"]\n\n'
+                "# 或用 pandas:\n"
+                "import pandas as pd\n"
+                f'df = pd.read_json(r"{path}/train.jsonl", lines=True)'
+            )
+        elif fmt == "LLaVA":
+            return (
+                "导出完成。可用于 LLaVA / Qwen-VL / InternVL 微调：\n\n"
+                "# LLaVA 微调命令\n"
+                "python llava/train/train_mem.py \\\n"
+                f'    --data_path r"{path}/llava_train.jsonl" \\\n'
+                f'    --image_folder r"{path}" \\\n'
+                "    --model_name_or_path liuhaotian/llava-v1.5-7b \\\n"
+                "    --output_dir ./checkpoints/my_model\n\n"
+                "# Qwen-VL 微调\n"
+                f'# 将 {path}/llava_train.jsonl 转为 Qwen 格式后使用'
+            )
+        elif fmt == "CSV":
+            return (
+                "导出完成。可直接用 Pandas 加载分析：\n\n"
+                "import pandas as pd\n\n"
+                f'df = pd.read_csv(r"{path}/annotations.csv")\n'
+                "train_df = df[df['split'] == 'train']\n"
+                "print(f'训练集: {{len(train_df)}} 条标注')\n"
+                "print(df['label'].value_counts())"
             )
         return ""
 

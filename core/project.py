@@ -62,6 +62,7 @@ class Project:
     split_state: SplitState = field(default_factory=SplitState)
     export_config: ExportConfig = field(default_factory=ExportConfig)
     review_progress: ReviewProgress = field(default_factory=ReviewProgress)
+    data_standard: dict | None = None  # DataStandard.to_dict() or None
 
 
 def _project_path(root: Path) -> Path:
@@ -124,6 +125,7 @@ def load_project(root: Path) -> Project | None:
             reviewed=rp.get("reviewed", []),
             flagged=rp.get("flagged", []),
         ),
+        data_standard=raw.get("data_standard"),
     )
 
 
@@ -142,6 +144,7 @@ def save_project(project: Project) -> None:
         "split_state": asdict(project.split_state),
         "export_config": asdict(project.export_config),
         "review_progress": asdict(project.review_progress),
+        "data_standard": project.data_standard,
     }
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
