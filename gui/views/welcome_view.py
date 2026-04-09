@@ -59,7 +59,7 @@ class _ProjectCardDelegate(QStyledItemDelegate):
             painter.setPen(QColor(T.BORDER))
         painter.drawRoundedRect(rect, T.RADIUS_LG, T.RADIUS_LG)
 
-        inner = rect.adjusted(T.PAD_XL, T.PAD_LG, -T.PAD_XL, -T.PAD_LG)
+        inner = rect.adjusted(T.PAD_XL + 4, T.PAD_LG + 2, -T.PAD_XL - 4, -T.PAD_LG - 2)
         summary: ProjectSummary | None = index.data(Qt.ItemDataRole.UserRole)
         if not summary:
             painter.restore()

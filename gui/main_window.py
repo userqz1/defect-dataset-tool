@@ -481,50 +481,18 @@ class MainWindow(FluentWindow):
         self.switchTo(self.split_view)
 
     def _on_scan_done(self, dataset) -> None:
-        self._close_scan_progress()
+        # 扫描弹窗还在显示 → 在弹窗背后把所有视图初始化完毕
+        # 这样关闭弹窗后用户立刻看到就绪的工作区
+        if self._scan_progress:
+            self._scan_progress.titleLabel.setText("正在准备工作区…")
+
         self._dataset_root = dataset.root_path
         add_recent(dataset.root_path)
-        self.settings_view.refresh()
+
+        # 初始化所有视图（弹窗挡住，用户看不到中间状态）
         self.overview.set_dataset(dataset)
         self.browser.load_dataset(dataset)
-        proj_name = self._project.name if self._project else dataset.name
-        self.dataset_chip.set_project(proj_name, dataset.root_path)
-        self.close_project_btn.show()
-
-        # Defer non-critical view updates so the UI stays responsive
-        from PyQt6.QtCore import QTimer
-        self._pending_dataset = dataset
-        QTimer.singleShot(100, self._deferred_set_dataset)
-
-        # Restore project state after loading dataset
-        if self._project:
-            self.browser.restore_state(self._project.browse_state)
-            self.export_view.restore_state(self._project.export_config)
-            self.split_view.restore_state(self._project.split_state)
-
-        self.switchTo(self.overview)
-        from qfluentwidgets import StateToolTip
-        self._state_tip = StateToolTip("正在加载工作区", "初始化视图…", self)
-        self._state_tip.move(self.width() - 280, 60)
-        self._state_tip.show()
-
-        def _finish_load():
-            if hasattr(self, "_state_tip") and self._state_tip:
-                self._state_tip.setContent(
-                    f"{dataset.total_images} 张图片 · {len(dataset.categories)} 类"
-                )
-                self._state_tip.setTitle("加载完成")
-                self._state_tip.setState(True)
-                self._state_tip = None
-
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(300, _finish_load)
-
-    def _deferred_set_dataset(self) -> None:
-        """Push dataset to non-critical views after a short delay."""
-        ds = getattr(self, "_pending_dataset", None)
-        if ds is None:
-            return
+        self.settings_view.refresh()
         for v in (
             self.quality_view,
             self.dedup_view,
@@ -534,8 +502,30 @@ class MainWindow(FluentWindow):
             self.split_view,
             self.export_view,
         ):
-            v.set_dataset(ds)
-        self._pending_dataset = None
+            v.set_dataset(dataset)
+
+        # 恢复项目状态
+        if self._project:
+            self.browser.restore_state(self._project.browse_state)
+            self.export_view.restore_state(self._project.export_config)
+            self.split_view.restore_state(self._project.split_state)
+
+        # 一切就绪，关闭弹窗 → 用户直接看到完整的工作区
+        self._close_scan_progress()
+
+        proj_name = self._project.name if self._project else dataset.name
+        self.dataset_chip.set_project(proj_name, dataset.root_path)
+        self.close_project_btn.show()
+        self.switchTo(self.overview)
+
+        InfoBar.success(
+            title="项目已就绪",
+            content=f"{dataset.total_images} 张图片 · {len(dataset.categories)} 类",
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+            parent=self,
+        )
 
     def _on_scan_failed(self, msg: str) -> None:
         self._close_scan_progress()

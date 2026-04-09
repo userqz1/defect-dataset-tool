@@ -45,7 +45,7 @@ from gui.widgets.chips import FilterChip, GhostButton
 from gui.widgets.thumbnail_grid import ThumbnailGrid
 from gui.workers.batch_worker import BatchWorker
 
-PAGE_SIZE = 60
+PAGE_SIZE = 40
 
 
 class BrowserView(QWidget):
