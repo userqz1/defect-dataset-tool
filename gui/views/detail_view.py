@@ -329,9 +329,12 @@ class DetailView(QWidget):
         self.shape_rect_btn.setVisible(on)
         self.shape_poly_btn.setVisible(on)
         if on:
-            # 初始化标签下拉：使用当前标注里出现过的所有 label
+            # 无标注图片 → 自动创建空 Annotation，这样绘制的新 shape 有地方存
+            if self._annotation is None and 0 <= self._index < len(self._images):
+                img = self._images[self._index]
+                self._annotation = Annotation(image_path=img.path, shapes=[])
+                self.viewer.set_annotation(self._annotation)
             self._refresh_label_combo()
-            # 同步当前 draw label
             self.viewer.set_draw_label(self.label_combo.currentText() or "object")
 
     def _set_shape_type(self, st: str) -> None:

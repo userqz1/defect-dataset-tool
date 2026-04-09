@@ -589,12 +589,8 @@ class BrowserView(QWidget):
             )
             box.cancelButton.hide()
             box.exec()
-        # 刷新当前视图
-        if getattr(self, "_pending_rescan", False):
-            self._pending_rescan = False
-            self.dataset_changed.emit()
-        else:
-            self._apply_filter_and_show()
+        # 文件系统已变更 → 统一触发重扫描，保证 UI 和磁盘一致
+        self.dataset_changed.emit()
 
     def _on_op_failed(self, msg: str) -> None:
         self._cleanup_worker()

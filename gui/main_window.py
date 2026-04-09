@@ -187,6 +187,7 @@ class MainWindow(FluentWindow):
         self.predict_view = PredictView()
         self.split_view = SplitView()
         self.browser.add_to_split.connect(self._on_add_to_split)
+        self.split_view.go_export.connect(lambda: self.switchTo(self.export_view))
         self.augment_view.set_selection_provider(self.browser.get_selected_images)
         self.export_view = ExportView()
         self.standards_view = StandardsView()
@@ -335,6 +336,18 @@ class MainWindow(FluentWindow):
 
     def _close_project(self) -> None:
         """Save state and return to welcome page."""
+        # 检查 detail view 是否有未保存修改
+        if hasattr(self, 'detail') and getattr(self.detail, '_dirty', False):
+            from qfluentwidgets import MessageBox
+            box = MessageBox(
+                "未保存的修改",
+                "当前图片有未保存的标注修改，关闭项目将丢失这些修改。确定关闭？",
+                self,
+            )
+            box.yesButton.setText("关闭项目")
+            box.cancelButton.setText("返回编辑")
+            if not box.exec():
+                return
         self._save_current_project()
         self._project = None
         self._dataset_root = None
@@ -560,6 +573,19 @@ class MainWindow(FluentWindow):
         )
 
     def closeEvent(self, e):  # type: ignore[override]
+        # 检查未保存修改
+        if hasattr(self, 'detail') and getattr(self.detail, '_dirty', False):
+            from qfluentwidgets import MessageBox
+            box = MessageBox(
+                "未保存的修改",
+                "当前图片有未保存的标注修改，退出将丢失。确定退出？",
+                self,
+            )
+            box.yesButton.setText("退出")
+            box.cancelButton.setText("取消")
+            if not box.exec():
+                e.ignore()
+                return
         self._save_current_project()
         try:
             self._thumb_worker.stop()

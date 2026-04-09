@@ -101,7 +101,18 @@ class PredictView(QWidget):
             1 for c in dataset.categories for img in c.images if not img.has_label
         )
         n = sum(c.image_count for c in dataset.categories)
-        self.summary_label.setText(f"未标注 {n_un:,} / 总计 {n:,}")
+        # 环境状态
+        env_hint = ""
+        try:
+            import ultralytics  # noqa: F401
+            try:
+                import torch
+                env_hint = "  ·  GPU" if torch.cuda.is_available() else "  ·  CPU"
+            except ImportError:
+                env_hint = "  ·  缺少 PyTorch"
+        except ImportError:
+            env_hint = "  ·  需安装 ultralytics"
+        self.summary_label.setText(f"未标注 {n_un:,} / 总计 {n:,}{env_hint}")
         self.start_btn.setEnabled(n > 0)
 
     # ---------- 内部 ----------
@@ -114,11 +125,32 @@ class PredictView(QWidget):
             conf=self.conf_spin.value(),
         )
         if not predictor.is_available():
+            # 具体诊断缺什么
+            try:
+                import ultralytics  # noqa: F401
+                has_ul = True
+            except ImportError:
+                has_ul = False
+            try:
+                import torch
+                has_torch = True
+                gpu = torch.cuda.is_available()
+            except ImportError:
+                has_torch = False
+                gpu = False
+
+            if not has_ul:
+                msg = "未安装 ultralytics\n请运行: pip install ultralytics"
+            elif not has_torch:
+                msg = "ultralytics 已安装但缺少 PyTorch\n请运行: pip install torch torchvision"
+            else:
+                msg = f"环境就绪（GPU: {'可用' if gpu else '不可用，将使用 CPU'}）\n但模型加载失败，请检查模型路径"
+
             InfoBar.error(
                 title="后端不可用",
-                content="未安装 ultralytics。请运行: pip install ultralytics",
+                content=msg,
                 isClosable=True, position=InfoBarPosition.TOP,
-                duration=5000, parent=self.window(),
+                duration=8000, parent=self.window(),
             )
             return
 

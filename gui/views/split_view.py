@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
     QGridLayout,
@@ -37,6 +37,8 @@ from gui.theme import T
 
 
 class SplitView(QWidget):
+    go_export = pyqtSignal()  # 划分完成后跳转到导出
+
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("splitView")
@@ -85,6 +87,11 @@ class SplitView(QWidget):
         self.export_btn.clicked.connect(self._on_export)
         self.export_btn.setEnabled(False)
         ctrl.addWidget(self.export_btn)
+
+        self.go_export_btn = PushButton("划分并跳转到导出 →")
+        self.go_export_btn.clicked.connect(self._on_go_export)
+        self.go_export_btn.setEnabled(False)
+        ctrl.addWidget(self.go_export_btn)
         ctrl.addStretch(1)
         root.addLayout(ctrl)
 
@@ -309,6 +316,7 @@ class SplitView(QWidget):
         )
         self.detail_label.setText("点击「写入」将路径列表保存到指定目录")
         self.export_btn.setEnabled(n_tr + n_va + n_te > 0)
+        self.go_export_btn.setEnabled(n_tr + n_va + n_te > 0)
 
     def _on_export(self) -> None:
         if self._last_result is None:
@@ -319,3 +327,10 @@ class SplitView(QWidget):
         written = write_split_lists(self._last_result, Path(out))
         names = " · ".join(p.name for p in written.values())
         self.detail_label.setText(f"已写入：{out}  ({names})")
+
+    def _on_go_export(self) -> None:
+        """预览划分 → 跳转到导出向导。"""
+        if self._last_result is None:
+            self._on_preview()
+        if self._last_result:
+            self.go_export.emit()
