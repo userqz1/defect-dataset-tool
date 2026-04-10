@@ -74,6 +74,7 @@ class PipelineView(QWidget):
     """Node canvas + stacked workspace views."""
 
     dataset_changed = pyqtSignal()
+    save_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -175,10 +176,7 @@ class PipelineView(QWidget):
         self._workspaces.clear()
 
     def _on_save_clicked(self) -> None:
-        """Forward save to MainWindow."""
-        win = self.window()
-        if hasattr(win, "_save_scheme"):
-            win._save_scheme()
+        self.save_requested.emit()
 
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset

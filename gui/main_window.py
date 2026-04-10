@@ -1,16 +1,18 @@
-"""Main application window — scheme-centric workflow.
+"""Main window — n8n-style scheme management.
 
-Scheme persists across navigation. Going to 首页 does NOT close the scheme.
-Only explicit "关闭方案" action closes it.
-Scheme name lives in the canvas top bar, not the title bar.
+- Home page = scheme manager (list/create/delete/open)
+- Editor page = canvas (persists until different scheme opened)
+- Tools work from any page: auto-create scheme if needed
+- Scheme is a persistent document, not transient state
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget
 from qfluentwidgets import (
-    BodyLabel,
     FluentIcon as FIF,
     FluentWindow,
     InfoBar,
@@ -52,6 +54,7 @@ def _install_nav_expand_patch() -> None:
 
 
 class MainWindow(FluentWindow):
+
     def __init__(self) -> None:
         _install_nav_expand_patch()
         super().__init__()
@@ -69,9 +72,9 @@ class MainWindow(FluentWindow):
         self.setWindowTitle("数据工坊")
         self.resize(1280, 800)
 
+        # Scheme state
+        self._scheme_path: Path | None = None  # None = unsaved new scheme
         self._scheme_active = False
-        self._scheme_dirty = False
-        self._current_scheme_path = None
         self._nav_collapse_threshold = 1100
 
         try:
@@ -80,7 +83,9 @@ class MainWindow(FluentWindow):
             pass
 
         self._build_views()
-        self.switchTo(self.welcome)
+
+        # Start on home
+        self.switchTo(self.home)
 
     # ---------- Build ----------
 
@@ -88,26 +93,27 @@ class MainWindow(FluentWindow):
         from gui.views.pipeline_view import PipelineView
         from gui.views.scheme_welcome import SchemeWelcome
 
-        self.welcome = SchemeWelcome()
-        self.welcome.new_scheme.connect(self._on_new_scheme)
-        self.welcome.open_scheme.connect(self._on_open_scheme)
-        self.welcome.use_template.connect(self._on_use_template)
+        self.home = SchemeWelcome()
+        self.home.new_scheme.connect(self._new_scheme)
+        self.home.open_scheme.connect(self._open_scheme)
+        self.home.use_template.connect(self._use_template)
 
-        self.pipeline_view = PipelineView()
+        self.editor = PipelineView()
+        self.editor.save_requested.connect(self._save_scheme)
 
         self.settings_view = SettingsView()
         self.settings_view.theme_changed.connect(self._on_theme_changed)
 
-        # Navigation
-        self.addSubInterface(self.welcome, FIF.HOME_FILL, "首页",
+        # Nav
+        self.addSubInterface(self.home, FIF.HOME_FILL, "首页",
                              position=NavigationItemPosition.TOP)
-        self.addSubInterface(self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
+        self.addSubInterface(self.editor, FIF.DEVELOPER_TOOLS, "工作台",
                              position=NavigationItemPosition.TOP)
 
         # Tools
         self.navigationInterface.addItem(
             routeKey="toolsGroup", icon=FIF.ALBUM, text="工具",
-            onClick=lambda: None, selectable=False, tooltip="拖拽到画布或点击添加",
+            onClick=lambda: None, selectable=False, tooltip="拖拽或点击添加到画布",
         )
         _icons = {
             "data_source": FIF.FOLDER, "quality_check": FIF.CERTIFICATE,
@@ -115,12 +121,12 @@ class MainWindow(FluentWindow):
         }
         from core.nodes import NODES
         from gui.widgets.toolbox_panel import NodeDragFilter
-        self._drag_filters: list[NodeDragFilter] = []
+        self._drag_filters: list = []
         for name, node in NODES.items():
             w = self.navigationInterface.addItem(
                 routeKey=f"tool_{name}", icon=_icons.get(name, FIF.TAG),
                 text=node.display_name,
-                onClick=lambda checked=False, n=name, dn=node.display_name: self._add_tool_node(n, dn),
+                onClick=lambda checked=False, n=name, dn=node.display_name: self._tool_click(n, dn),
                 selectable=False, tooltip=node.description, parentRouteKey="toolsGroup",
             )
             if hasattr(w, "itemWidget"):
@@ -131,88 +137,68 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.settings_view, FIF.SETTING, "设置",
                              position=NavigationItemPosition.BOTTOM)
 
-    # ---------- Scheme lifecycle ----------
+    # ---------- Scheme operations ----------
 
-    def _enter_scheme(self, name: str) -> None:
-        """Activate a scheme and go to canvas."""
-        self._scheme_active = True
-        self._scheme_dirty = False
-        self.pipeline_view.set_scheme_name(name)
-        self.switchTo(self.pipeline_view)
+    def _new_scheme(self) -> None:
+        """Create a blank scheme and enter editor."""
+        self._enter_editor("未命名方案", clear=True)
 
-    def _on_new_scheme(self) -> None:
-        if not self._confirm_discard():
-            return
-        self.pipeline_view._canvas.clear_all()
-        self._current_scheme_path = None
-        self.pipeline_view.clear_workspaces()
-        self._enter_scheme("未命名方案")
-
-    def _on_open_scheme(self, path_str: str) -> None:
-        if not self._confirm_discard():
-            return
-        from pathlib import Path
+    def _open_scheme(self, path_str: str) -> None:
+        """Open a saved scheme."""
         from core.scheme import load_scheme
         scheme = load_scheme(Path(path_str))
         if not scheme:
             return
-        self.pipeline_view._canvas.clear_all()
-        self.pipeline_view._canvas.load_scheme(scheme)
-        self.pipeline_view.clear_workspaces()
-        self._current_scheme_path = Path(path_str)
-        self._enter_scheme(scheme.name)
+        self._enter_editor(scheme.name, clear=True)
+        self.editor._canvas.load_scheme(scheme)
+        self._scheme_path = Path(path_str)
 
-    def _on_use_template(self, idx: int) -> None:
-        if not self._confirm_discard():
-            return
+    def _use_template(self, idx: int) -> None:
+        """Create scheme from template."""
         from core.scheme import TEMPLATES
         if idx >= len(TEMPLATES):
             return
         tpl = TEMPLATES[idx]
-        self.pipeline_view._canvas.clear_all()
-        self.pipeline_view._canvas.load_scheme(tpl)
-        self.pipeline_view.clear_workspaces()
-        self._current_scheme_path = None
-        self._enter_scheme(tpl.name)
+        self._enter_editor(tpl.name, clear=True)
+        self.editor._canvas.load_scheme(tpl)
+
+    def _enter_editor(self, name: str, clear: bool = False) -> None:
+        """Switch to editor with a named scheme."""
+        if clear:
+            self.editor._canvas.clear_all()
+            self.editor.clear_workspaces()
+            self._scheme_path = None
+        self._scheme_active = True
+        self.editor.set_scheme_name(name)
+        self.switchTo(self.editor)
 
     def _save_scheme(self) -> None:
+        """Save current scheme to disk."""
         if not self._scheme_active:
             return
         from core.scheme import save_scheme
-        name = self.pipeline_view.get_scheme_name() or "未命名方案"
-        scheme = self.pipeline_view._canvas.to_scheme(name)
-        path = save_scheme(scheme, self._current_scheme_path)
-        self._current_scheme_path = path
-        self._scheme_dirty = False
-        InfoBar.success("已保存", path.name, parent=self,
+        name = self.editor.get_scheme_name() or "未命名方案"
+        scheme = self.editor._canvas.to_scheme(name)
+        self._scheme_path = save_scheme(scheme, self._scheme_path)
+        InfoBar.success("已保存", self._scheme_path.name, parent=self,
                         duration=2000, position=InfoBarPosition.TOP)
-
-    def _confirm_discard(self) -> bool:
-        """Ask to save if dirty. Returns True = proceed, False = cancel."""
-        if not self._scheme_active or not self._scheme_dirty:
-            return True
-        if not self.pipeline_view._canvas.get_nodes():
-            return True
-        from qfluentwidgets import MessageBox
-        box = MessageBox("保存方案？", "当前方案有未保存的修改。", self)
-        box.yesButton.setText("保存")
-        box.cancelButton.setText("不保存")
-        if box.exec():
-            self._save_scheme()
-        return True
 
     # ---------- Tool click ----------
 
-    def _add_tool_node(self, node_name: str, display_name: str) -> None:
+    def _tool_click(self, node_name: str, display_name: str) -> None:
+        """Click tool in sidebar. Auto-create scheme if none active."""
         if not self._scheme_active:
-            InfoBar.info("", "请先创建或打开一个方案", parent=self,
-                         duration=2000, position=InfoBarPosition.TOP)
-            return
-        self.switchTo(self.pipeline_view)
-        self.pipeline_view._add_node(node_name, display_name)
-        self._scheme_dirty = True
+            self._enter_editor("未命名方案", clear=True)
+        else:
+            self.switchTo(self.editor)
+        self.editor._add_node(node_name, display_name)
 
-    # ---------- Responsive sidebar ----------
+    # ---------- Navigation ----------
+
+    def switchTo(self, interface):
+        if interface is self.home:
+            self.home.refresh()
+        super().switchTo(interface)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -232,12 +218,10 @@ class MainWindow(FluentWindow):
         from core.user_settings import save_settings, UserSettings
         save_settings(UserSettings(theme=name))
 
-    # ---------- Close ----------
-
     def closeEvent(self, e):
-        if self._scheme_active and self._scheme_dirty and self.pipeline_view._canvas.get_nodes():
+        if self._scheme_active and self.editor._canvas.get_nodes():
             from qfluentwidgets import MessageBox
-            box = MessageBox("保存方案？", "退出前是否保存？", self)
+            box = MessageBox("保存方案？", "退出前是否保存当前方案？", self)
             box.yesButton.setText("保存并退出")
             box.cancelButton.setText("直接退出")
             if box.exec():
