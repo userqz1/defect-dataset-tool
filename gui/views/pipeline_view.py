@@ -248,6 +248,32 @@ class PipelineView(QWidget):
         # Title
         self._root.addWidget(SubtitleLabel("数据处理"))
 
+        # ---- 格子：目标格式需要什么 ----
+        self._grid_frame = QFrame()
+        self._grid_frame.setObjectName("chartFrame")
+        grid_layout = QVBoxLayout(self._grid_frame)
+        grid_layout.setContentsMargins(T.PAD_LG, T.PAD, T.PAD_LG, T.PAD)
+        grid_layout.setSpacing(T.GAP)
+
+        grid_header = QHBoxLayout()
+        self._format_label = StrongBodyLabel("目标格式")
+        grid_header.addWidget(self._format_label)
+        grid_header.addStretch(1)
+        self._grid_status = CaptionLabel("")
+        grid_header.addWidget(self._grid_status)
+        grid_layout.addLayout(grid_header)
+
+        self._grid_slots_layout = QVBoxLayout()
+        self._grid_slots_layout.setSpacing(T.GAP_XS)
+        grid_layout.addLayout(self._grid_slots_layout)
+        self._grid_slot_widgets: list[QWidget] = []
+
+        self._root.addWidget(self._grid_frame)
+        self._root.addSpacing(T.GAP_XL)
+
+        # ---- 节点：往格子里塞东西 ----
+        self._root.addWidget(StrongBodyLabel("处理节点"))
+
         # Add step button
         add_row = QHBoxLayout()
         add_row.setSpacing(T.GAP)
@@ -289,9 +315,62 @@ class PipelineView(QWidget):
             self._summary.setText(f"数据集: {n:,} 张图片")
         else:
             self._summary.setText("")
+        self._refresh_grid()
 
     def set_task_type(self, task_type) -> None:
         self._task_type = task_type
+        # Determine default format for this task type
+        from core.task_types import TASK_REGISTRY
+        info = TASK_REGISTRY.get(task_type)
+        if info and info.export_formats:
+            self._target_format = info.export_formats[0]
+        else:
+            self._target_format = "YOLO"
+        self._refresh_grid()
+
+    def _refresh_grid(self) -> None:
+        """Rebuild the grid slots display based on current dataset + target format."""
+        from core.format_grid import build_grid
+
+        fmt = getattr(self, "_target_format", "YOLO")
+        grid = build_grid(fmt, self._dataset)
+
+        # Update header
+        self._format_label.setText(f"目标: {grid.format_name}")
+        if grid.ready:
+            self._grid_status.setText(f"✓ 就绪 ({grid.progress_text})")
+            self._grid_status.setObjectName("readinessOk")
+        else:
+            self._grid_status.setText(f"✗ {grid.progress_text} 项就绪")
+            self._grid_status.setObjectName("readinessGap")
+        self._grid_status.style().unpolish(self._grid_status)
+        self._grid_status.style().polish(self._grid_status)
+
+        # Rebuild slot rows
+        for w in self._grid_slot_widgets:
+            self._grid_slots_layout.removeWidget(w)
+            w.deleteLater()
+        self._grid_slot_widgets.clear()
+
+        for slot in grid.slots:
+            row = QHBoxLayout()
+            icon = CaptionLabel(slot.icon)
+            icon.setObjectName("readinessOk" if slot.filled else "readinessGap")
+            icon.setFixedWidth(20)
+            row.addWidget(icon)
+
+            name = CaptionLabel(slot.name)
+            name.setFixedWidth(160)
+            row.addWidget(name)
+
+            status = CaptionLabel(slot.status_text)
+            row.addWidget(status)
+            row.addStretch(1)
+
+            wrapper = QWidget()
+            wrapper.setLayout(row)
+            self._grid_slots_layout.addWidget(wrapper)
+            self._grid_slot_widgets.append(wrapper)
 
     def _on_add_step(self) -> None:
         idx = self._add_combo.currentIndex()
