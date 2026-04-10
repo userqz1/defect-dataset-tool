@@ -130,8 +130,9 @@ class _ProjectCardDelegate(QStyledItemDelegate):
 class WelcomeView(QWidget):
     """Startup welcome page with project list."""
 
-    open_project = pyqtSignal(Path)     # user selected a project to open
-    open_folder = pyqtSignal()          # user wants to pick a new folder
+    open_project = pyqtSignal(Path)     # user selected an existing task
+    open_folder = pyqtSignal()          # user wants to open an existing task folder
+    new_task = pyqtSignal()             # user wants a blank canvas
 
     def __init__(self) -> None:
         super().__init__()
@@ -148,22 +149,26 @@ class WelcomeView(QWidget):
         title = LargeTitleLabel("数据工坊")
         title.setObjectName("welcomeTitle")
         header.addWidget(title)
-        subtitle = CaptionLabel("图像数据集管理工具 — 选择一个项目开始")
+        subtitle = CaptionLabel("图像数据集工程平台")
         header.addWidget(subtitle)
         root.addLayout(header)
 
-        # Action buttons
+        # Action buttons — 方案 oriented
         btn_row = QHBoxLayout()
         btn_row.setSpacing(T.GAP_LG)
-        open_btn = PrimaryPushButton("打开数据集目录")
+        new_btn = PrimaryPushButton("新建方案")
+        new_btn.setFixedHeight(40)
+        new_btn.clicked.connect(self._on_new_task)
+        btn_row.addWidget(new_btn)
+        open_btn = PushButton("打开已有方案")
         open_btn.setFixedHeight(40)
         open_btn.clicked.connect(self._on_open_folder)
         btn_row.addWidget(open_btn)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        # Recent projects section
-        section_label = SubtitleLabel("最近项目")
+        # Recent section
+        section_label = SubtitleLabel("最近方案")
         root.addWidget(section_label)
 
         self.project_list = QListWidget()
@@ -177,7 +182,7 @@ class WelcomeView(QWidget):
         root.addWidget(self.project_list, 1)
 
         # Empty hint
-        self.empty_label = CaptionLabel("还没有打开过数据集，点击上方按钮开始。")
+        self.empty_label = CaptionLabel("还没有创建过方案，点击「新建方案」开始。")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.empty_label)
 
@@ -201,6 +206,9 @@ class WelcomeView(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, s)
             item.setSizeHint(QSize(0, _ProjectCardDelegate.CARD_HEIGHT + 2 * _ProjectCardDelegate.MARGIN))
             self.project_list.addItem(item)
+
+    def _on_new_task(self) -> None:
+        self.new_task.emit()
 
     def _on_open_folder(self) -> None:
         self.open_folder.emit()

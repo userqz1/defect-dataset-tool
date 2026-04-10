@@ -164,6 +164,7 @@ class MainWindow(FluentWindow):
         self.welcome_view = WelcomeView()
         self.welcome_view.open_project.connect(self._open_project)
         self.welcome_view.open_folder.connect(self._on_open_clicked)
+        self.welcome_view.new_task.connect(self._on_new_task)
 
         # 核心视图
         self.overview = OverviewView()
@@ -412,6 +413,11 @@ class MainWindow(FluentWindow):
 
     def _on_detail_back(self) -> None:
         self.browser_stack.setCurrentWidget(self.browser)
+
+    def _on_new_task(self) -> None:
+        """Create a blank canvas — new task/方案."""
+        self.pipeline_view.clear()
+        self.switchTo(self.pipeline_view)
 
     def _add_tool_node(self, node_id: str) -> None:
         """Sidebar tool clicked → switch to workspace + add node."""
