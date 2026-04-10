@@ -182,6 +182,9 @@ class MainWindow(FluentWindow):
         self.browser_stack.addWidget(self.browser)
         self.browser_stack.addWidget(self.detail)
 
+        from gui.views.pipeline_view import PipelineView
+        self.pipeline_view = PipelineView()
+
         self.cleaning_view = CleaningView()
         self.augment_view = AugmentView()
         self.predict_view = PredictView()
@@ -202,68 +205,38 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.TOP,
         )
 
-        # 1) 📂 工作区
-        self.navigationInterface.addItem(
-            routeKey="datasetGroup",
-            icon=FIF.FOLDER,
-            text="工作区",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="工作区",
-        )
-        self.navigationInterface.addItem(
-            routeKey="openDatasetItem",
-            icon=FIF.FOLDER_ADD,
-            text="切换项目…",
-            onClick=self._on_open_clicked,
-            selectable=False,
-            tooltip="打开其他数据集",
-            parentRouteKey="datasetGroup",
-        )
-        self.addSubInterface(
-            self.overview, FIF.HOME, "概览", parent="datasetGroup"
-        )
-        self.addSubInterface(
-            self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
-        )
+        # 1) 浏览
+        self.addSubInterface(self.browser_stack, FIF.PHOTO, "浏览")
 
-        # 2) 🔧 数据处理
-        self.navigationInterface.addItem(
-            routeKey="processGroup",
-            icon=FIF.DEVELOPER_TOOLS,
-            text="数据处理",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="数据处理",
-        )
-        self.addSubInterface(
-            self.cleaning_view, FIF.CERTIFICATE, "数据清洗", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.augment_view, FIF.ALBUM, "增强与变换", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.predict_view, FIF.ROBOT, "AI 预标注", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.split_view, FIF.TILES, "数据集划分", parent="processGroup"
-        )
+        # 2) 工作台（节点画布）
+        self.addSubInterface(self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台")
 
-        # 3) 📋 规范与导出
-        self.navigationInterface.addItem(
-            routeKey="exportGroup",
-            icon=FIF.SHARE,
-            text="规范与导出",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="数据规范与导出",
-        )
-        self.addSubInterface(
-            self.standards_view, FIF.DOCUMENT, "数据规范", parent="exportGroup"
-        )
-        self.addSubInterface(
-            self.export_view, FIF.SEND, "导出向导", parent="exportGroup"
-        )
+        # 3) 节点工具箱 — 点击添加到画布
+        self.navigationInterface.addSeparator()
+
+        _TOOL_ICONS = {
+            "data_source": FIF.FOLDER,
+            "quality_check": FIF.CERTIFICATE,
+            "dedup": FIF.COPY,
+            "augment": FIF.ADD,
+            "split": FIF.TILES,
+            "export_yolo": FIF.SEND,
+            "export_coco": FIF.SEND,
+            "export_imagefolder": FIF.SEND,
+        }
+        from core.nodes import NODE_REGISTRY
+        for nid, spec in NODE_REGISTRY.items():
+            icon = _TOOL_ICONS.get(nid, FIF.TAG)
+            self.navigationInterface.addItem(
+                routeKey=f"tool_{nid}",
+                icon=icon,
+                text=spec.label,
+                onClick=lambda checked=False, n=nid: self._add_tool_node(n),
+                selectable=False,
+                tooltip=spec.label,
+            )
+
+        self.navigationInterface.addSeparator()
 
         # 4) ⚙ 设置
         self.addSubInterface(
@@ -439,6 +412,11 @@ class MainWindow(FluentWindow):
 
     def _on_detail_back(self) -> None:
         self.browser_stack.setCurrentWidget(self.browser)
+
+    def _add_tool_node(self, node_id: str) -> None:
+        """Sidebar tool clicked → switch to workspace + add node."""
+        self.switchTo(self.pipeline_view)
+        self.pipeline_view.add_node(node_id)
 
     # ---------- 打开数据集 ----------
 
