@@ -186,11 +186,12 @@ class MainWindow(FluentWindow):
     # ---------- Tool click ----------
 
     def _tool_click(self, node_name: str, display_name: str) -> None:
-        """Click tool in sidebar. Auto-create scheme if none active."""
+        """Click tool in sidebar. Only works when a scheme is active."""
         if not self._scheme_active:
-            self._enter_editor("未命名方案", clear=True)
-        else:
-            self.switchTo(self.editor)
+            InfoBar.info("", "请先创建或打开方案", parent=self,
+                         duration=2000, position=InfoBarPosition.TOP)
+            return
+        self.switchTo(self.editor)
         self.editor._add_node(node_name, display_name)
 
     # ---------- Navigation ----------
