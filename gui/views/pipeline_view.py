@@ -204,12 +204,21 @@ class PipelineView(QWidget):
     # ---- Node interaction ----
 
     def _add_node(self, node_name: str, display_name: str) -> None:
+        """Add node at the center of the current viewport."""
         node = NODES.get(node_name)
         step_type = node.step_type if node else ""
+        # Place at viewport center with slight random offset to avoid stacking
+        center = self._canvas.mapToScene(
+            self._canvas.viewport().width() // 2,
+            self._canvas.viewport().height() // 2,
+        )
         n = len(self._canvas.get_nodes())
-        x = 200 + (n % 4) * 200
-        y = 60 + (n // 4) * 80
-        self._canvas.add_node(node_name, display_name, x, y, step_type)
+        offset = (n % 5) * 30  # slight stagger so nodes don't overlap exactly
+        self._canvas.add_node(
+            node_name, display_name,
+            center.x() - 80 + offset, center.y() - 24 + offset,
+            step_type,
+        )
 
     def _on_node_dblclick(self, node_item) -> None:
         """Double-click → open workspace for this node type."""
