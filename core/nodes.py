@@ -137,40 +137,17 @@ _reg(NodeSpec(
 # ---------- Output nodes ----------
 
 _reg(NodeSpec(
-    node_id="export_yolo",
-    label="YOLO 导出",
-    category="output",
-    icon="SEND",
-    inputs=(PortSpec("输入", "split"),),
-    outputs=(),
-    parameters=(
-        Parameter("out_dir", "输出目录", "path", ""),
-        Parameter("copy_images", "复制图片", "bool", True),
-    ),
-))
-
-_reg(NodeSpec(
-    node_id="export_coco",
-    label="COCO 导出",
-    category="output",
-    icon="SEND",
-    inputs=(PortSpec("输入", "split"),),
-    outputs=(),
-    parameters=(
-        Parameter("out_dir", "输出目录", "path", ""),
-        Parameter("copy_images", "复制图片", "bool", True),
-    ),
-))
-
-_reg(NodeSpec(
-    node_id="export_imagefolder",
-    label="ImageFolder 导出",
+    node_id="export",
+    label="导出",
     category="output",
     icon="SEND",
     inputs=(PortSpec("输入", "dataset"),),
     outputs=(),
     parameters=(
+        Parameter("format", "导出格式", "choice", "YOLO",
+                  choices=("YOLO", "COCO", "Pascal VOC", "ImageFolder", "MVTec", "CSV", "JSON Lines")),
         Parameter("out_dir", "输出目录", "path", ""),
+        Parameter("copy_images", "复制图片", "bool", True),
     ),
 ))
 

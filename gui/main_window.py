@@ -221,9 +221,7 @@ class MainWindow(FluentWindow):
             "dedup": FIF.COPY,
             "augment": FIF.ADD,
             "split": FIF.TILES,
-            "export_yolo": FIF.SEND,
-            "export_coco": FIF.SEND,
-            "export_imagefolder": FIF.SEND,
+            "export": FIF.SEND,
         }
         from core.nodes import NODE_REGISTRY
         for nid, spec in NODE_REGISTRY.items():

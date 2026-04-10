@@ -45,11 +45,11 @@ HEADER_H = 30
 PORT_R = 7
 GRID_SIZE = 20
 
-# Category → header gradient colors
+# All nodes use the app accent color for a unified look
 CAT_COLORS = {
-    "input":      ("#3a7bd5", "#2b5ea7"),
-    "processing": ("#c96442", "#a04e32"),
-    "output":     ("#5a9a4c", "#3d7a32"),
+    "input":      None,   # filled at paint time from T.ACCENT
+    "processing": None,
+    "output":     None,
 }
 
 
@@ -202,12 +202,12 @@ class NodeItem(QGraphicsRectItem):
         painter.setPen(QPen(border_color, 2 if self.isSelected() else 1))
         painter.drawRoundedRect(rect, radius, radius)
 
-        # Header gradient
-        colors = CAT_COLORS.get(self.category, CAT_COLORS["processing"])
+        # Header gradient — unified app accent color
         header = QRectF(rect.x(), rect.y(), rect.width(), HEADER_H)
+        accent = QColor(T.ACCENT)
         grad = QLinearGradient(header.topLeft(), header.topRight())
-        grad.setColorAt(0, QColor(colors[0]))
-        grad.setColorAt(1, QColor(colors[1]))
+        grad.setColorAt(0, accent)
+        grad.setColorAt(1, accent.darker(120))
 
         header_path = QPainterPath()
         header_path.addRoundedRect(QRectF(rect.x(), rect.y(), rect.width(), HEADER_H + radius), radius, radius)

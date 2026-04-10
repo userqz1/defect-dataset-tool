@@ -94,7 +94,7 @@ class _Inspector(QFrame):
             return
 
         self._title.setText(spec.label)
-        self._desc.setText(f"类型: {spec.category}")
+        self._desc.setText("")
 
         params = node.get_params()
 
