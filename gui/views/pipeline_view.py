@@ -258,9 +258,12 @@ class PipelineView(QWidget):
     # ---- Data source workspace ----
 
     def _make_datasource_ws(self) -> QWidget:
-        """Data source workspace — browse dataset with thumbnails."""
+        """Data source workspace — select directory, scan, browse."""
+        from PyQt6.QtWidgets import QFileDialog
+        from pathlib import Path
         from gui.views.browser_view import BrowserView
         from gui.views.detail_view import DetailView
+        from gui.workers.scan_worker import ScanWorker
         from gui.workers.thumbnail_worker import ThumbnailWorker
 
         container = QWidget()
@@ -268,12 +271,32 @@ class PipelineView(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        browser_stack = QStackedWidget()
+        # Top bar: directory picker + stats
+        topbar = QFrame()
+        topbar.setObjectName("detailTopBar")
+        topbar.setFixedHeight(44)
+        tb_lay = QHBoxLayout(topbar)
+        tb_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
+        tb_lay.setSpacing(T.GAP)
 
+        path_label = CaptionLabel("未选择目录")
+        tb_lay.addWidget(path_label, 1)
+
+        stats_label = CaptionLabel("")
+        tb_lay.addWidget(stats_label)
+
+        open_btn = PrimaryPushButton("选择目录")
+        open_btn.setIcon(FIF.FOLDER)
+        open_btn.setFixedWidth(120)
+        tb_lay.addWidget(open_btn)
+
+        lay.addWidget(topbar)
+
+        # Browser + Detail stack
+        browser_stack = QStackedWidget()
         browser = BrowserView()
         detail = DetailView()
 
-        # Thumbnail worker for this workspace
         thumb = ThumbnailWorker(size=170, parent=container)
         thumb.start()
         browser.thumb_request.connect(thumb.request)
@@ -288,14 +311,67 @@ class PipelineView(QWidget):
 
         browser_stack.addWidget(browser)
         browser_stack.addWidget(detail)
-        lay.addWidget(browser_stack)
+        lay.addWidget(browser_stack, 1)
+
+        # Store refs
+        container._browser = browser
+        container._thumb = thumb
+        container._scan_worker = None
+
+        def _on_open():
+            d = QFileDialog.getExistingDirectory(container, "选择数据集目录", str(Path.home()))
+            if not d:
+                return
+            root = Path(d)
+            path_label.setText(str(root))
+            open_btn.setEnabled(False)
+            stats_label.setText("扫描中…")
+
+            from gui.dialogs.op_dialogs import ProgressDialog
+            progress = ProgressDialog("扫描数据集", parent=self.window())
+            progress.show()
+
+            worker = ScanWorker(root, parent=container)
+            container._scan_worker = worker
+
+            def on_progress(done, total, name):
+                progress.set_progress(done, total, name)
+
+            def on_done(result):
+                container._scan_worker = None
+                progress.accept()
+                open_btn.setEnabled(True)
+
+                from gui.workers.scan_worker import ScanResult
+                ds = result.dataset if isinstance(result, ScanResult) else result
+                self._dataset = ds
+                browser.load_dataset(ds)
+                stats_label.setText(f"{ds.total_images} 图片 · {len(ds.categories)} 类")
+
+                # Push dataset to all existing workspaces
+                for name_key, (wrapper, _) in self._workspaces.items():
+                    if name_key != "data_source":
+                        for child in wrapper.findChildren(QWidget):
+                            if hasattr(child, "set_dataset"):
+                                child.set_dataset(ds)
+
+            def on_fail(msg):
+                container._scan_worker = None
+                progress.accept()
+                open_btn.setEnabled(True)
+                stats_label.setText(f"失败: {msg}")
+
+            worker.progress.connect(on_progress)
+            worker.finished_ok.connect(on_done)
+            worker.failed.connect(on_fail)
+            worker.start()
+
+        open_btn.clicked.connect(_on_open)
 
         if self._dataset:
             browser.load_dataset(self._dataset)
-
-        # Store references for later updates
-        container._browser = browser
-        container._thumb = thumb
+            path_label.setText(str(self._dataset.root_path))
+            stats_label.setText(f"{self._dataset.total_images} 图片 · {len(self._dataset.categories)} 类")
 
         return container
 

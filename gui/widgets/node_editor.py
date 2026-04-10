@@ -531,6 +531,57 @@ class NodeCanvas(QGraphicsView):
         self._nodes.clear()
         self._scene.clear()
 
+    def load_scheme(self, scheme) -> None:
+        """Load a Scheme into the canvas."""
+        from core.scheme import Scheme
+        self.clear_all()
+        if not isinstance(scheme, Scheme):
+            return
+        # Create nodes
+        for sn in scheme.nodes:
+            self.add_node(sn.node_name, sn.display_name, sn.x, sn.y, sn.step_type)
+            if sn.params:
+                self._nodes[-1].set_params(sn.params)
+        # Create connections
+        for sc in scheme.connections:
+            if sc.src_idx >= len(self._nodes) or sc.tgt_idx >= len(self._nodes):
+                continue
+            src_node = self._nodes[sc.src_idx]
+            tgt_node = self._nodes[sc.tgt_idx]
+            src_port = next((p for p in src_node.outputs if p.port_name == sc.src_port), None)
+            tgt_port = next((p for p in tgt_node.inputs if p.port_name == sc.tgt_port), None)
+            if src_port and tgt_port:
+                conn = ConnectionItem(src_port, tgt_port)
+                self._scene.addItem(conn)
+
+    def to_scheme(self, name: str = "未命名方案") -> "Scheme":
+        """Serialize canvas state to a Scheme object."""
+        from core.scheme import Scheme, SchemeNode, SchemeConnection
+        nodes = []
+        node_idx = {id(n): i for i, n in enumerate(self._nodes)}
+        for n in self._nodes:
+            nodes.append(SchemeNode(
+                n.node_name, n.display_name, n.step_type,
+                n.pos().x(), n.pos().y(), n.get_params(),
+            ))
+        conns = []
+        seen = set()
+        for n in self._nodes:
+            for port in n.outputs:
+                for conn in port.connections:
+                    cid = id(conn)
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    src_i = node_idx.get(id(conn.source.node))
+                    tgt_i = node_idx.get(id(conn.target.node))
+                    if src_i is not None and tgt_i is not None:
+                        conns.append(SchemeConnection(
+                            src_i, conn.source.port_name,
+                            tgt_i, conn.target.port_name,
+                        ))
+        return Scheme(name=name, nodes=nodes, connections=conns)
+
     # ---- connection validation ----
 
     def _can_connect(self, src: PortItem, tgt: PortItem) -> bool:

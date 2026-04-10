@@ -93,20 +93,37 @@ class MainWindow(FluentWindow):
         self._build_titlebar()
         self._build_views()
 
-        # 启动 = 空白画布
-        self.switchTo(self.pipeline_view)
+        # 启动 = 欢迎页
+        self._current_scheme_path = None
+        self.switchTo(self.welcome)
 
     # ---------- 构建 ----------
 
     def _build_views(self) -> None:
         from gui.views.pipeline_view import PipelineView
+        from gui.views.scheme_welcome import SchemeWelcome
+
+        # Welcome page
+        self.welcome = SchemeWelcome()
+        self.welcome.new_scheme.connect(self._on_new_scheme)
+        self.welcome.open_scheme.connect(self._on_open_scheme)
+        self.welcome.use_template.connect(self._on_use_template)
+
+        # Canvas
         self.pipeline_view = PipelineView()
+        self.pipeline_view.canvas_save_requested = lambda: self._save_current_scheme()
 
         self.settings_view = SettingsView()
         self.settings_view.theme_changed.connect(self._on_theme_changed)
 
         # ---- 分组导航 ----
-        # 1) 🔧 工作台（节点画布 — 主视图）
+        # 0) 首页
+        self.addSubInterface(
+            self.welcome, FIF.HOME_FILL, "首页",
+            position=NavigationItemPosition.TOP,
+        )
+
+        # 1) 工作台
         self.addSubInterface(
             self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
             position=NavigationItemPosition.TOP,
@@ -159,9 +176,15 @@ class MainWindow(FluentWindow):
     def _build_titlebar(self) -> None:
         from PyQt6.QtWidgets import QSpacerItem, QSizePolicy
 
-        # 方案名称（标题栏显示）
+        from qfluentwidgets import TransparentToolButton
+
         self._task_name = BodyLabel("未命名方案")
         self._task_name.setObjectName("taskNameLabel")
+
+        self._save_btn = TransparentToolButton(FIF.SAVE)
+        self._save_btn.setFixedSize(32, 30)
+        self._save_btn.setToolTip("保存方案")
+        self._save_btn.clicked.connect(self._save_current_scheme)
 
         try:
             self.navigationInterface.panel.returnButton.hide()
@@ -171,8 +194,9 @@ class MainWindow(FluentWindow):
         bar_layout = self.titleBar.hBoxLayout
         bar_layout.insertSpacing(2, 12)
         bar_layout.insertWidget(3, self._task_name, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar_layout.insertWidget(4, self._save_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         bar_layout.insertSpacerItem(
-            4, QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            5, QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         )
 
     # ---------- 响应式侧栏 ----------
@@ -188,6 +212,47 @@ class MainWindow(FluentWindow):
                 panel.expand(useAni=False)
         except Exception:  # noqa: BLE001
             pass
+
+    # ---------- 方案管理 ----------
+
+    def _on_new_scheme(self) -> None:
+        self.pipeline_view._canvas.clear_all()
+        self._current_scheme_path = None
+        self._task_name.setText("未命名方案")
+        self.switchTo(self.pipeline_view)
+
+    def _on_open_scheme(self, path_str: str) -> None:
+        from pathlib import Path
+        from core.scheme import load_scheme
+        scheme = load_scheme(Path(path_str))
+        if not scheme:
+            return
+        self.pipeline_view._canvas.clear_all()
+        self.pipeline_view._canvas.load_scheme(scheme)
+        self._current_scheme_path = Path(path_str)
+        self._task_name.setText(scheme.name)
+        self.switchTo(self.pipeline_view)
+
+    def _on_use_template(self, idx: int) -> None:
+        from core.scheme import TEMPLATES
+        if idx >= len(TEMPLATES):
+            return
+        tpl = TEMPLATES[idx]
+        self.pipeline_view._canvas.clear_all()
+        self.pipeline_view._canvas.load_scheme(tpl)
+        self._current_scheme_path = None
+        self._task_name.setText(tpl.name)
+        self.switchTo(self.pipeline_view)
+
+    def _save_current_scheme(self) -> None:
+        from core.scheme import save_scheme
+        name = self._task_name.text() or "未命名方案"
+        scheme = self.pipeline_view._canvas.to_scheme(name)
+        path = save_scheme(scheme, self._current_scheme_path)
+        self._current_scheme_path = path
+        from qfluentwidgets import InfoBar, InfoBarPosition
+        InfoBar.success("已保存", str(path.name), parent=self,
+                        duration=2000, position=InfoBarPosition.TOP)
 
     # ---------- 工具操作 ----------
 
