@@ -330,11 +330,24 @@ class NodeCanvas(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        item = self.itemAt(event.pos())
-        while item and not isinstance(item, NodeItem):
-            item = item.parentItem()
-        if isinstance(item, NodeItem):
-            self.node_double_clicked.emit(item)
+        items = self.items(event.pos())
+        node = None
+        for it in items:
+            if isinstance(it, NodeItem):
+                node = it
+                break
+            p = it.parentItem()
+            while p:
+                if isinstance(p, NodeItem):
+                    node = p
+                    break
+                p = p.parentItem()
+            if node:
+                break
+        if node:
+            self.node_double_clicked.emit(node)
+            event.accept()
+            return
         super().mouseDoubleClickEvent(event)
 
     # ---- Drop from sidebar ----

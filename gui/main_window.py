@@ -224,13 +224,14 @@ class MainWindow(FluentWindow):
             "export": FIF.SEND,
         }
         from core.nodes import NODE_REGISTRY
+        import functools
         for nid, spec in NODE_REGISTRY.items():
             icon = _TOOL_ICONS.get(nid, FIF.TAG)
             self.navigationInterface.addItem(
                 routeKey=f"tool_{nid}",
                 icon=icon,
                 text=spec.label,
-                onClick=lambda checked=False, n=nid: self._add_tool_node(n),
+                onClick=functools.partial(self._add_tool_node, nid),
                 selectable=False,
                 tooltip=spec.label,
             )
