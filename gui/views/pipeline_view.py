@@ -82,6 +82,8 @@ class PipelineView(QWidget):
         self._dataset: Dataset | None = None
         self._worker: BatchWorker | None = None
         self._target_format = "YOLO"
+        self._task_type = None
+        self._progress = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)

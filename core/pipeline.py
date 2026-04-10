@@ -63,15 +63,6 @@ class PipelineContext:
         )
 
 
-# ---------- Step Definition ----------
-
-@dataclass
-class StepDef:
-    """A configured step in the pipeline."""
-    node_name: str
-    options: dict[str, Any] = field(default_factory=dict)
-
-
 # ---------- Step Result ----------
 
 @dataclass
@@ -97,103 +88,6 @@ class PipelineResult:
 # ---------- Engine ----------
 
 ProgressCb = Callable[[int, int, str], None]
-
-
-class PipelineEngine:
-    """Executes a sequence of processing steps on a PipelineContext."""
-
-    def __init__(self) -> None:
-        self._steps: list[StepDef] = []
-
-    def add_step(self, node_name: str, options: dict | None = None) -> None:
-        self._steps.append(StepDef(node_name, options or {}))
-
-    def clear(self) -> None:
-        self._steps.clear()
-
-    @property
-    def steps(self) -> list[StepDef]:
-        return list(self._steps)
-
-    def execute(
-        self,
-        ctx: PipelineContext,
-        progress_cb: ProgressCb | None = None,
-    ) -> PipelineResult:
-        """Run all steps in sequence. Returns PipelineResult."""
-        from .nodes import NODES
-
-        results: list[StepResultRecord] = []
-        total = len(self._steps)
-
-        for i, step in enumerate(self._steps):
-            node = NODES.get(step.node_name)
-            if node is None:
-                results.append(StepResultRecord(
-                    node_name=step.node_name,
-                    display_name=step.node_name,
-                    success=False,
-                    message=f"未知节点: {step.node_name}",
-                ))
-                continue
-
-            if progress_cb:
-                progress_cb(i, total, f"执行: {node.display_name}")
-
-            try:
-                step_result = node.execute(ctx.images, step.options, progress_cb=None)
-
-                # Apply step effects to context
-                self._apply_result(ctx, step.node_name, step_result)
-
-                results.append(StepResultRecord(
-                    node_name=step.node_name,
-                    display_name=node.display_name,
-                    success=True,
-                    message=f"完成: {step_result.ok_count} 项通过, {step_result.fail_count} 项问题",
-                    details=step_result.details,
-                ))
-                ctx.step_results[step.node_name] = step_result
-
-            except Exception as e:
-                results.append(StepResultRecord(
-                    node_name=step.node_name,
-                    display_name=node.display_name,
-                    success=False,
-                    message=str(e),
-                ))
-                return PipelineResult(
-                    success=False,
-                    steps_run=i + 1,
-                    steps_total=total,
-                    step_results=results,
-                    error=f"{node.display_name} 执行失败: {e}",
-                )
-
-        if progress_cb:
-            progress_cb(total, total, "全部完成")
-
-        return PipelineResult(
-            success=True,
-            steps_run=total,
-            steps_total=total,
-            step_results=results,
-        )
-
-    @staticmethod
-    def _apply_result(ctx: PipelineContext, node_name: str, result) -> None:
-        """Update pipeline context based on a step's result."""
-        if node_name == "quality_check" and result.details:
-            for issue in result.details:
-                ctx.flagged[str(issue.path)] = issue.kind
-
-        elif node_name == "dedup" and result.details:
-            for group in result.details:
-                for img in group.images[1:]:
-                    ctx.flagged[str(img)] = "duplicate"
-
-        elif node_name == "split" and result.details:
-            ctx.split = result.details
 
 
 # ---------- Graph-based Engine (v3) ----------

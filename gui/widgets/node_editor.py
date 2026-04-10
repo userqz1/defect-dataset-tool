@@ -489,6 +489,7 @@ class NodeCanvas(QGraphicsView):
         self._temp_conn: QGraphicsPathItem | None = None
         self._drag_port: PortItem | None = None
         self._ghost: GhostNodeItem | None = None
+        self._snap_target: PortItem | None = None
         self._zoom = 1.0
 
         self.setAcceptDrops(True)

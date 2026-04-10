@@ -202,9 +202,9 @@ class SplitNode:
         # images here is actually a Dataset
         dataset = images
         opts = SplitOptions(
-            train_ratio=options.get("train", 0.8),
-            val_ratio=options.get("val", 0.1),
-            test_ratio=options.get("test", 0.1),
+            train_ratio=options.get("train_ratio", 0.8),
+            val_ratio=options.get("val_ratio", 0.1),
+            test_ratio=options.get("test_ratio", 0.1),
             stratified=options.get("stratified", True),
         )
         result = split_dataset(dataset, opts)
