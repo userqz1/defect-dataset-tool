@@ -25,7 +25,6 @@ from qfluentwidgets import (
 
 from core import fileops, index_cache, transform as tx
 from core.convert import convert_batch
-from core.dedup import find_duplicates
 from core.exporter.subset import export_subset
 from core.models import Dataset, ImageInfo
 from gui.dialogs.op_dialogs import (
@@ -139,10 +138,6 @@ class BrowserView(QWidget):
                 chip.setChecked(True)
 
         filter_bar.addStretch(1)
-
-        self.dedup_btn = GhostButton(self.tr("查找重复"))
-        self.dedup_btn.clicked.connect(self._do_find_duplicates)
-        filter_bar.addWidget(self.dedup_btn)
 
         self.selection_label = CaptionLabel("")
         filter_bar.addWidget(self.selection_label)
@@ -490,36 +485,6 @@ class BrowserView(QWidget):
             lambda cb: export_subset(sel, out_path, progress_cb=cb),
             self.tr("正在导出子集…"),
         )
-
-    def _do_find_duplicates(self) -> None:
-        if not self._filtered:
-            box = MessageBox(
-                self.tr("查找重复"),
-                self.tr("当前没有可扫描的图片"),
-                self.window(),
-            )
-            box.cancelButton.hide()
-            box.exec()
-            return
-        imgs = list(self._filtered)
-        group_tpl = self.tr("{n} 张: {names}")
-
-        def _run(cb):
-            groups = find_duplicates(imgs, threshold=5, progress_cb=cb)
-            res = fileops.OpResult()
-            for g in groups:
-                if len(g.images) < 2:
-                    continue
-                res.succeeded.append(g.images[0].path)
-                names = ", ".join(i.path.name for i in g.images[:6])
-                if len(g.images) > 6:
-                    names += f"  (+{len(g.images) - 6})"
-                res.failed.append(
-                    (g.images[0].path, group_tpl.format(n=len(g.images), names=names))
-                )
-            return res
-
-        self._run(_run, self.tr("正在计算 pHash…"))
 
     # ---- 类别管理 ----
 
