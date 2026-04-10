@@ -77,8 +77,16 @@ def create_graph() -> NodeGraph:
     for cls in NODE_CLASSES.values():
         graph.register_node(cls)
 
-    # Style the graph
-    viewer = graph.viewer()
-    viewer.setStyleSheet("")  # Clear any default styles, let app QSS handle it
+    # Match app theme colors
+    from gui.theme import T
+    # Parse hex to RGB tuple
+    def _hex_to_rgb(h: str) -> tuple:
+        h = h.lstrip("#")
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+    bg = _hex_to_rgb(T.CONTENT)
+    grid = _hex_to_rgb(T.BORDER)
+    graph.set_background_color(*bg)
+    graph.set_grid_color(*grid)
 
     return graph
