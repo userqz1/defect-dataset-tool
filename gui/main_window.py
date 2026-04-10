@@ -230,45 +230,9 @@ class MainWindow(FluentWindow):
             self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
         )
 
-        # 2) 🔧 数据处理
-        self.navigationInterface.addItem(
-            routeKey="processGroup",
-            icon=FIF.DEVELOPER_TOOLS,
-            text="数据处理",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="数据处理",
-        )
+        # 2) 🔧 工作台（节点画布 — 所有处理工具都在画布里）
         self.addSubInterface(
-            self.pipeline_view, FIF.PLAY, "处理流程", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.cleaning_view, FIF.CERTIFICATE, "数据清洗", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.augment_view, FIF.ALBUM, "增强与变换", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.predict_view, FIF.ROBOT, "AI 预标注", parent="processGroup"
-        )
-        self.addSubInterface(
-            self.split_view, FIF.TILES, "数据集划分", parent="processGroup"
-        )
-
-        # 3) 📋 规范与导出
-        self.navigationInterface.addItem(
-            routeKey="exportGroup",
-            icon=FIF.SHARE,
-            text="规范与导出",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="数据规范与导出",
-        )
-        self.addSubInterface(
-            self.standards_view, FIF.DOCUMENT, "数据规范", parent="exportGroup"
-        )
-        self.addSubInterface(
-            self.export_view, FIF.SEND, "导出向导", parent="exportGroup"
+            self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
         )
 
         # 4) ⚙ 设置
@@ -586,8 +550,8 @@ class MainWindow(FluentWindow):
             task_label = info.display_name if info else ""
         self.dataset_chip.set_project(proj_name, dataset.root_path, task_label)
         self.close_project_btn.show()
-        # 用户打开项目是为了操作图片 → 默认落在浏览页
-        self.switchTo(self.browser_stack)
+        # 打开项目后默认落在工作台（节点画布）
+        self.switchTo(self.pipeline_view)
 
         InfoBar.success(
             title="项目已就绪",
