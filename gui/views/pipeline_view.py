@@ -42,7 +42,8 @@ class _DragToolButton(PushButton):
     MIME_TYPE = "application/x-dataforge-node"
 
     def __init__(self, node_name: str, display_name: str, parent=None):
-        super().__init__(display_name, parent)
+        super().__init__(parent)
+        self.setText(display_name)
         self._node_name = node_name
         self._display_name = display_name
         self._drag_start: QPoint | None = None
