@@ -178,8 +178,13 @@ class MainWindow(FluentWindow):
 
         from qfluentwidgets import TransparentToolButton
 
-        self._task_name = BodyLabel("未命名方案")
-        self._task_name.setObjectName("taskNameLabel")
+        from qfluentwidgets import LineEdit
+        self._task_name = LineEdit()
+        self._task_name.setText("未命名方案")
+        self._task_name.setFixedWidth(180)
+        self._task_name.setFixedHeight(28)
+        self._task_name.setClearButtonEnabled(False)
+        self._task_name.setObjectName("taskNameEdit")
 
         self._save_btn = TransparentToolButton(FIF.SAVE)
         self._save_btn.setFixedSize(32, 30)

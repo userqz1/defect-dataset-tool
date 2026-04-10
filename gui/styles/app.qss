@@ -332,6 +332,20 @@ QFrame#zoomOverlay {{
     border-radius: {RADIUS}px;
 }}
 
+/* 标题栏方案名输入框 */
+LineEdit#taskNameEdit {{
+    border: none;
+    background: transparent;
+    color: {TEXT};
+    font-weight: bold;
+    padding: 2px 4px;
+}}
+LineEdit#taskNameEdit:focus {{
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+    background: {CONTENT};
+}}
+
 /* 节点检查器面板 */
 QFrame#nodeInspector {{
     background-color: {SIDEBAR};
