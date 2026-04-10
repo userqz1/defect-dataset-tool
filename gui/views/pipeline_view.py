@@ -165,11 +165,18 @@ class PipelineView(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # Zoom controls at bottom-right of canvas
-        self._zoom_frame.move(
-            self._canvas.width() - self._zoom_frame.width() - 12,
-            self._canvas.height() - self._zoom_frame.height() - 12,
-        )
+        self._reposition_zoom()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._reposition_zoom()
+
+    def _reposition_zoom(self) -> None:
+        cw = self._canvas.viewport().width()
+        ch = self._canvas.viewport().height()
+        fw = self._zoom_frame.sizeHint().width()
+        fh = self._zoom_frame.sizeHint().height()
+        self._zoom_frame.move(cw - fw - 12, ch - fh - 12)
 
     # ---- Node interaction ----
 
