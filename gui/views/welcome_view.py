@@ -146,22 +146,26 @@ class WelcomeView(QWidget):
         title = LargeTitleLabel("数据工坊")
         title.setObjectName("welcomeTitle")
         header.addWidget(title)
-        subtitle = CaptionLabel("图像数据集管理工具 — 选择一个项目开始")
+        subtitle = CaptionLabel("图像数据集工程平台")
         header.addWidget(subtitle)
         root.addLayout(header)
 
-        # Action buttons
+        # Action buttons — task-oriented
         btn_row = QHBoxLayout()
         btn_row.setSpacing(T.GAP_LG)
-        open_btn = PrimaryPushButton("打开数据集目录")
+        new_btn = PrimaryPushButton("新建任务")
+        new_btn.setFixedHeight(40)
+        new_btn.clicked.connect(self._on_open_folder)
+        btn_row.addWidget(new_btn)
+        open_btn = PushButton("打开已有任务")
         open_btn.setFixedHeight(40)
         open_btn.clicked.connect(self._on_open_folder)
         btn_row.addWidget(open_btn)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        # Recent projects section
-        section_label = SubtitleLabel("最近项目")
+        # Recent tasks section
+        section_label = SubtitleLabel("最近任务")
         root.addWidget(section_label)
 
         self.project_list = QListWidget()

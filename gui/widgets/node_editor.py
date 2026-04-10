@@ -246,6 +246,7 @@ class NodeCanvas(QGraphicsView):
         self._drag_source_port: PortItem | None = None
         self._zoom = 1.0
 
+        self.setAcceptDrops(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -393,3 +394,37 @@ class NodeCanvas(QGraphicsView):
             self.remove_selected()
         else:
             super().keyPressEvent(event)
+
+    # ---- Drag & drop from toolbox ----
+
+    MIME_TYPE = "application/x-dataforge-node"
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if event.mimeData().hasFormat(self.MIME_TYPE):
+            data = bytes(event.mimeData().data(self.MIME_TYPE)).decode()
+            parts = data.split("|", 1)
+            if len(parts) == 2:
+                node_name, display_name = parts
+                pos = self.mapToScene(event.position().toPoint())
+                node = self.add_node(node_name, display_name, pos.x(), pos.y())
+                # Auto-connect to previous node
+                if len(self._nodes) >= 2:
+                    prev = self._nodes[-2]
+                    if prev.outputs and node.inputs:
+                        conn = ConnectionItem(prev.outputs[0], node.inputs[0])
+                        self._scene.addItem(conn)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)

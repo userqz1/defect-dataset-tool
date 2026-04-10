@@ -26,11 +26,50 @@ from qfluentwidgets import (
     ToolButton,
 )
 
+from PyQt6.QtCore import QMimeData, QPoint
+from PyQt6.QtGui import QDrag
+
 from core.models import Dataset
 from core.nodes import NODES
 from gui.theme import T
 from gui.widgets.node_editor import NodeCanvas
 from gui.workers.batch_worker import BatchWorker
+
+
+class _DragToolButton(PushButton):
+    """Tool button that supports drag to canvas."""
+
+    MIME_TYPE = "application/x-dataforge-node"
+
+    def __init__(self, node_name: str, display_name: str, parent=None):
+        super().__init__(display_name, parent)
+        self._node_name = node_name
+        self._display_name = display_name
+        self._drag_start: QPoint | None = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start is None:
+            return
+        if (event.pos() - self._drag_start).manhattanLength() < 10:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self.MIME_TYPE, f"{self._node_name}|{self._display_name}".encode())
+        drag.setMimeData(mime)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        drag.exec(Qt.DropAction.CopyAction)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._drag_start = None
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
 
 
 class PipelineView(QWidget):
@@ -85,12 +124,11 @@ class PipelineView(QWidget):
         tool_layout.setSpacing(T.GAP)
 
         tool_layout.addWidget(StrongBodyLabel("工具箱"))
-        tool_layout.addWidget(CaptionLabel("右键画布或双击添加"))
+        tool_layout.addWidget(CaptionLabel("拖拽工具到画布"))
 
         for name, node in NODES.items():
-            btn = PushButton(node.display_name)
+            btn = _DragToolButton(name, node.display_name)
             btn.setToolTip(node.description)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda checked, n=name, dn=node.display_name: self._add_node(n, dn))
             tool_layout.addWidget(btn)
 
