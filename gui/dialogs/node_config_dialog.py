@@ -65,6 +65,8 @@ class NodeConfigDialog(MessageBoxBase):
             self._build_generic()
 
         self.widget.setMinimumWidth(460)
+        self.widget.setMaximumWidth(520)
+        self.widget.setMaximumHeight(600)
 
     def get_values(self) -> dict[str, Any]:
         """Read values from fields after dialog is accepted."""

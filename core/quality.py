@@ -72,15 +72,31 @@ def check_images(
     opts: QualityOptions | None = None,
     progress_cb=None,
 ) -> list[QualityIssue]:
+    """Check images for quality issues. Uses ThreadPoolExecutor for speed."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     opts = opts or QualityOptions()
     issues: list[QualityIssue] = []
     total = len(images)
-    for i, img in enumerate(images):
-        if progress_cb:
-            progress_cb(i, total, img.path.name)
-        kinds, metrics = check_one(img.path, opts)
-        if kinds:
-            issues.append(QualityIssue(image=img, kinds=kinds, metrics=metrics))
+    done = 0
+
+    workers = min(8, max(1, total // 10))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(check_one, img.path, opts): img for img in images
+        }
+        for fut in as_completed(futures):
+            done += 1
+            img = futures[fut]
+            if progress_cb and done % 20 == 0:
+                progress_cb(done, total, img.path.name)
+            try:
+                kinds, metrics = fut.result()
+                if kinds:
+                    issues.append(QualityIssue(image=img, kinds=kinds, metrics=metrics))
+            except Exception:
+                issues.append(QualityIssue(image=img, kinds=["corrupt"], metrics={}))
+
     if progress_cb:
         progress_cb(total, total, "")
     return issues

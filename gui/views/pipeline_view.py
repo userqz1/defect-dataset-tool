@@ -74,6 +74,7 @@ class PipelineView(QWidget):
     """Node canvas + stacked workspace views."""
 
     dataset_changed = pyqtSignal()
+    save_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -99,18 +100,31 @@ class PipelineView(QWidget):
         cp_lay.setContentsMargins(0, 0, 0, 0)
         cp_lay.setSpacing(0)
 
-        # Top bar
+        # Top bar: scheme name + save + run
         topbar = QFrame()
         topbar.setObjectName("detailTopBar")
         topbar.setFixedHeight(44)
         top_lay = QHBoxLayout(topbar)
         top_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
-        top_lay.setSpacing(T.GAP_LG)
-        self._format_label = StrongBodyLabel("目标: YOLO")
-        top_lay.addWidget(self._format_label)
-        self._grid_status = CaptionLabel("")
-        top_lay.addWidget(self._grid_status)
+        top_lay.setSpacing(T.GAP)
+
+        from qfluentwidgets import LineEdit
+        self._scheme_name = LineEdit()
+        self._scheme_name.setFixedWidth(180)
+        self._scheme_name.setFixedHeight(28)
+        self._scheme_name.setClearButtonEnabled(False)
+        self._scheme_name.setObjectName("taskNameEdit")
+        self._scheme_name.setText("未命名方案")
+        top_lay.addWidget(self._scheme_name)
+
+        save_btn = TransparentToolButton(FIF.SAVE)
+        save_btn.setFixedSize(28, 28)
+        save_btn.setToolTip("保存方案")
+        save_btn.clicked.connect(self._on_save_clicked)
+        top_lay.addWidget(save_btn)
+
         top_lay.addStretch(1)
+
         run_btn = PrimaryPushButton("执行流程")
         run_btn.setIcon(FIF.PLAY)
         run_btn.clicked.connect(self._on_run)
@@ -148,28 +162,44 @@ class PipelineView(QWidget):
 
     # ---- API ----
 
+    def set_scheme_name(self, name: str) -> None:
+        self._scheme_name.setText(name)
+
+    def get_scheme_name(self) -> str:
+        return self._scheme_name.text()
+
+    def clear_workspaces(self) -> None:
+        """Remove cached workspaces (called when switching schemes)."""
+        for _name, (wrapper, idx) in list(self._workspaces.items()):
+            self._stack.removeWidget(wrapper)
+            wrapper.deleteLater()
+        self._workspaces.clear()
+
+    def _on_save_clicked(self) -> None:
+        self.save_requested.emit()
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
-        self._run_btn.setEnabled(dataset is not None)
-        self._refresh_grid()
 
     def set_task_type(self, task_type) -> None:
         self._task_type = task_type
-        from core.task_types import TASK_REGISTRY
-        info = TASK_REGISTRY.get(task_type)
-        if info and info.export_formats:
-            self._target_format = info.export_formats[0]
-        self._refresh_grid()
 
     # ---- Layout ----
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # Zoom controls at bottom-right of canvas
-        self._zoom_frame.move(
-            self._canvas.width() - self._zoom_frame.width() - 12,
-            self._canvas.height() - self._zoom_frame.height() - 12,
-        )
+        self._reposition_zoom()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._reposition_zoom()
+
+    def _reposition_zoom(self) -> None:
+        cw = self._canvas.viewport().width()
+        ch = self._canvas.viewport().height()
+        fw = self._zoom_frame.sizeHint().width()
+        fh = self._zoom_frame.sizeHint().height()
+        self._zoom_frame.move(cw - fw - 12, ch - fh - 12)
 
     # ---- Node interaction ----
 
@@ -380,21 +410,6 @@ class PipelineView(QWidget):
             stats_label.setText(f"{self._dataset.total_images} 图片 · {len(self._dataset.categories)} 类")
 
         return container
-
-    # ---- Grid status ----
-
-    def _refresh_grid(self) -> None:
-        from core.format_grid import build_grid
-        grid = build_grid(self._target_format, self._dataset)
-        self._format_label.setText(f"目标: {grid.format_name}")
-        if grid.ready:
-            self._grid_status.setText(f"\u2713 就绪 ({grid.progress_text})")
-            self._grid_status.setObjectName("readinessOk")
-        else:
-            self._grid_status.setText(f"{grid.required_filled}/{grid.required_count} 就绪")
-            self._grid_status.setObjectName("readinessGap")
-        self._grid_status.style().unpolish(self._grid_status)
-        self._grid_status.style().polish(self._grid_status)
 
     # ---- Pipeline execution (graph-based) ----
 

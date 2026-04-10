@@ -816,22 +816,50 @@ class NodeCanvas(QGraphicsView):
     # ---- context menu ----
 
     def contextMenuEvent(self, event) -> None:
-        from core.nodes import NODES
+        item = self.itemAt(event.pos())
+        # Walk up to find NodeItem
+        while item and not isinstance(item, NodeItem):
+            item = item.parentItem()
+
         menu = QMenu(self)
-        for name, node in NODES.items():
-            action = menu.addAction(f"添加: {node.display_name}")
+
+        if isinstance(item, NodeItem):
+            # ---- Node context menu ----
+            menu.addAction("打开配置", lambda: self.node_double_clicked.emit(item))
+            menu.addSeparator()
+            menu.addAction("断开所有连线", lambda: self._disconnect_node(item))
+            menu.addAction("删除节点", lambda: self._remove_node(item))
+        else:
+            # ---- Canvas context menu ----
+            from core.nodes import NODES
             pos = self.mapToScene(event.pos())
-            action.triggered.connect(
-                lambda checked, n=name, dn=node.display_name, st=node.step_type, p=pos:
-                self.add_node(n, dn, p.x(), p.y(), st)
-            )
-        menu.addSeparator()
-        if self._scene.selectedItems():
-            menu.addAction("删除选中", self.remove_selected)
+            for name, node in NODES.items():
+                action = menu.addAction(f"添加  {node.display_name}")
+                action.triggered.connect(
+                    lambda checked, n=name, dn=node.display_name, st=node.step_type, p=pos:
+                    self.add_node(n, dn, p.x(), p.y(), st)
+                )
+            if self._scene.selectedItems():
+                menu.addSeparator()
+                menu.addAction("删除选中", self.remove_selected)
+
         menu.exec(event.globalPos())
 
+    def _disconnect_node(self, node: NodeItem) -> None:
+        """Remove all connections from a node."""
+        for port in node.inputs + node.outputs:
+            for conn in list(port.connections):
+                conn.remove()
+
+    def _remove_node(self, node: NodeItem) -> None:
+        """Remove a single node and its connections."""
+        self._disconnect_node(node)
+        self._scene.removeItem(node)
+        if node in self._nodes:
+            self._nodes.remove(node)
+
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Delete:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.remove_selected()
         else:
             super().keyPressEvent(event)

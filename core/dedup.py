@@ -1,7 +1,11 @@
-"""Perceptual-hash based image deduplication."""
+"""Perceptual-hash based image deduplication.
+
+Optimized: parallel hash computation via ThreadPoolExecutor,
+images resized to 128x128 before hashing to reduce I/O.
+"""
 from __future__ import annotations
 
-from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +25,16 @@ class DuplicateGroup:
         return len(self.images)
 
 
+def _hash_one(img: ImageInfo) -> tuple[ImageInfo, imagehash.ImageHash | None]:
+    """Compute pHash for a single image (resize first for speed)."""
+    try:
+        with Image.open(img.path) as im:
+            im = im.convert("RGB").resize((128, 128), Image.Resampling.LANCZOS)
+            return img, imagehash.phash(im)
+    except Exception:
+        return img, None
+
+
 def find_duplicates(
     images: list[ImageInfo],
     threshold: int = 5,
@@ -28,24 +42,29 @@ def find_duplicates(
 ) -> list[DuplicateGroup]:
     """Find duplicate images using perceptual hash (pHash).
 
-    `threshold` is the max Hamming distance considered duplicate (0 = identical,
-    5 = visually nearly identical).
+    Uses ThreadPoolExecutor for parallel I/O. Images resized to 128x128
+    before hashing (pHash only needs ~32x32, so this is plenty).
     """
-    hashes: list[tuple[ImageInfo, imagehash.ImageHash]] = []
     total = len(images)
-    for i, img in enumerate(images):
-        if progress_cb:
-            progress_cb(i, total, img.path.name)
-        try:
-            with Image.open(img.path) as im:
-                h = imagehash.phash(im)
-            hashes.append((img, h))
-        except Exception:
-            continue
+    hashes: list[tuple[ImageInfo, imagehash.ImageHash]] = []
+
+    # Parallel hash computation (I/O bound → threads)
+    workers = min(8, max(1, total // 10))
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_hash_one, img): img for img in images}
+        for fut in as_completed(futures):
+            done += 1
+            img, h = fut.result()
+            if h is not None:
+                hashes.append((img, h))
+            if progress_cb and done % 20 == 0:
+                progress_cb(done, total, img.path.name)
+
     if progress_cb:
         progress_cb(total, total, "")
 
-    # 简单 O(n²) 分组；对中等数据集足够；超大集需要 BK-tree
+    # Group by hamming distance (O(n²) but fast for <10k hashed images)
     groups: list[DuplicateGroup] = []
     visited = [False] * len(hashes)
     for i in range(len(hashes)):
