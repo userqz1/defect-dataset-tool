@@ -230,10 +230,38 @@ class MainWindow(FluentWindow):
             self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
         )
 
-        # 2) 🔧 工作台（节点画布 — 所有处理工具都在画布里）
+        # 2) 🔧 工作台（节点画布）
         self.addSubInterface(
             self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
         )
+
+        # 3) 🧰 工具（点击添加节点到画布）
+        self.navigationInterface.addItem(
+            routeKey="toolsGroup",
+            icon=FIF.ALBUM,
+            text="工具",
+            onClick=lambda: None,
+            selectable=False,
+            tooltip="点击工具添加到画布",
+        )
+        _tool_icons = {
+            "quality_check": FIF.CERTIFICATE,
+            "dedup": FIF.COPY,
+            "augment": FIF.ADD,
+            "split": FIF.TILES,
+        }
+        from core.nodes import NODES
+        for name, node in NODES.items():
+            icon = _tool_icons.get(name, FIF.TAG)
+            self.navigationInterface.addItem(
+                routeKey=f"tool_{name}",
+                icon=icon,
+                text=node.display_name,
+                onClick=lambda checked=False, n=name, dn=node.display_name: self._add_tool_node(n, dn),
+                selectable=False,
+                tooltip=node.description,
+                parentRouteKey="toolsGroup",
+            )
 
         # 4) ⚙ 设置
         self.addSubInterface(
@@ -414,6 +442,11 @@ class MainWindow(FluentWindow):
 
     def _on_detail_back(self) -> None:
         self.browser_stack.setCurrentWidget(self.browser)
+
+    def _add_tool_node(self, node_name: str, display_name: str) -> None:
+        """Sidebar tool clicked → add node to canvas and switch to workspace."""
+        self.switchTo(self.pipeline_view)
+        self.pipeline_view._add_node(node_name, display_name)
 
     def _on_navigate_to(self, route: str) -> None:
         """Readiness bar click → jump to the named view."""

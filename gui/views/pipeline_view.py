@@ -7,70 +7,21 @@ and execute the pipeline to fill the grid.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QSplitter,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
     PrimaryPushButton,
-    PushButton,
     StrongBodyLabel,
-    SubtitleLabel,
-    ToolButton,
 )
-
-from PyQt6.QtCore import QMimeData, QPoint
-from PyQt6.QtGui import QDrag
 
 from core.models import Dataset
 from core.nodes import NODES
 from gui.theme import T
 from gui.widgets.node_editor import NodeCanvas
 from gui.workers.batch_worker import BatchWorker
-
-
-class _DragToolButton(PushButton):
-    """Tool button that supports drag to canvas."""
-
-    MIME_TYPE = "application/x-dataforge-node"
-
-    def __init__(self, node_name: str, display_name: str, parent=None):
-        super().__init__(parent)
-        self.setText(display_name)
-        self._node_name = node_name
-        self._display_name = display_name
-        self._drag_start: QPoint | None = None
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start = event.pos()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag_start is None:
-            return
-        if (event.pos() - self._drag_start).manhattanLength() < 10:
-            return
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(self.MIME_TYPE, f"{self._node_name}|{self._display_name}".encode())
-        drag.setMimeData(mime)
-        self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        drag.exec(Qt.DropAction.CopyAction)
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self._drag_start = None
-
-    def mouseReleaseEvent(self, event):
-        self._drag_start = None
-        super().mouseReleaseEvent(event)
 
 
 class PipelineView(QWidget):
@@ -113,45 +64,10 @@ class PipelineView(QWidget):
 
         root.addWidget(topbar)
 
-        # ---- Main area: sidebar toolbox + canvas ----
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # Left: tool palette
-        tool_panel = QFrame()
-        tool_panel.setObjectName("categorySidebar")
-        tool_panel.setFixedWidth(200)
-        tool_layout = QVBoxLayout(tool_panel)
-        tool_layout.setContentsMargins(T.PAD, T.PAD, T.PAD, T.PAD)
-        tool_layout.setSpacing(T.GAP)
-
-        tool_layout.addWidget(StrongBodyLabel("工具箱"))
-        tool_layout.addWidget(CaptionLabel("拖拽工具到画布"))
-
-        for name, node in NODES.items():
-            btn = _DragToolButton(name, node.display_name)
-            btn.setToolTip(node.description)
-            btn.clicked.connect(lambda checked, n=name, dn=node.display_name: self._add_node(n, dn))
-            tool_layout.addWidget(btn)
-
-        tool_layout.addStretch(1)
-
-        # Grid slots display
-        tool_layout.addWidget(StrongBodyLabel("格子状态"))
-        self._grid_slots_layout = QVBoxLayout()
-        self._grid_slots_layout.setSpacing(2)
-        tool_layout.addLayout(self._grid_slots_layout)
-        self._grid_slot_widgets: list[QWidget] = []
-
-        splitter.addWidget(tool_panel)
-
-        # Right: node canvas
+        # ---- Canvas (full width — tools come from main sidebar) ----
         self._canvas = NodeCanvas()
         self._canvas.node_double_clicked.connect(self._on_node_double_clicked)
-        splitter.addWidget(self._canvas)
-
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter, 1)
+        root.addWidget(self._canvas, 1)
 
     # ---- API ----
 
@@ -204,25 +120,13 @@ class PipelineView(QWidget):
         self._format_label.setText(f"目标: {grid.format_name}")
 
         if grid.ready:
-            self._grid_status.setText(f"✓ 就绪")
+            self._grid_status.setText(f"✓ 就绪 ({grid.progress_text})")
             self._grid_status.setObjectName("readinessOk")
         else:
             self._grid_status.setText(f"{grid.required_filled}/{grid.required_count} 就绪")
             self._grid_status.setObjectName("readinessGap")
         self._grid_status.style().unpolish(self._grid_status)
         self._grid_status.style().polish(self._grid_status)
-
-        # Update sidebar grid slots
-        for w in self._grid_slot_widgets:
-            self._grid_slots_layout.removeWidget(w)
-            w.deleteLater()
-        self._grid_slot_widgets.clear()
-
-        for slot in grid.slots:
-            lbl = CaptionLabel(f"{slot.icon} {slot.name}: {slot.status_text}")
-            lbl.setObjectName("readinessOk" if slot.filled else "readinessGap")
-            self._grid_slots_layout.addWidget(lbl)
-            self._grid_slot_widgets.append(lbl)
 
     def _on_run(self) -> None:
         if not self._dataset or self._worker:
