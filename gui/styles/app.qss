@@ -303,3 +303,43 @@ QLabel#readinessGap {{
     padding: 2px 8px;
     font-weight: bold;
 }}
+
+/* ============================================================
+ * 12. 节点编辑器工具箱 / 缩放按钮
+ * ============================================================ */
+
+QFrame#toolboxPanel {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS_LG}px;
+}}
+QFrame#toolboxItem:hover {{
+    background-color: {HOVER};
+    border-radius: {RADIUS}px;
+}}
+QLabel#toolboxSection {{
+    color: {TEXT_3};
+    padding: 4px 8px 2px 8px;
+    font-weight: bold;
+}}
+QLabel#toolboxTitle {{
+    font-weight: bold;
+    color: {TEXT_2};
+}}
+QFrame#zoomOverlay {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+}}
+
+/* 节点检查器面板 */
+QFrame#nodeInspector {{
+    background-color: {SIDEBAR};
+    border-left: 1px solid {BORDER};
+}}
+QFrame#inspectorHeader {{
+    border-bottom: 1px solid {BORDER};
+}}
+QLabel#inspectorDesc {{
+    color: {TEXT_3};
+}}

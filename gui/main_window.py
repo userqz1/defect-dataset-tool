@@ -16,76 +16,22 @@ Layout (VS Code-style)：
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QFileDialog, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QWidget
 from qfluentwidgets import (
     BodyLabel,
-    CaptionLabel,
     FluentIcon as FIF,
     FluentWindow,
-    InfoBar,
-    InfoBarPosition,
     NavigationItemPosition,
-    TransparentToolButton,
     setTheme,
     setThemeColor,
     Theme,
 )
 
-from core.models import Dataset
-from core.project import Project, create_project, load_project, save_project
-from core.recent import add_recent
 from gui.theme import T, load_qss, set_theme as set_app_theme
-from gui.views.augment_view import AugmentView
-from gui.views.browser_view import BrowserView
-from gui.views.cleaning_view import CleaningView
-from gui.views.detail_view import DetailView
-from gui.views.overview_view import OverviewView
-from gui.views.export_view import ExportView
-from gui.views.placeholder_view import PlaceholderView
-from gui.views.predict_view import PredictView
 from gui.views.settings_view import SettingsView
-from gui.views.split_view import SplitView
-from gui.views.standards_view import StandardsView
-from gui.views.welcome_view import WelcomeView
-from gui.workers.scan_worker import ScanWorker
-from gui.workers.thumbnail_worker import ThumbnailWorker
 
-
-class _DatasetChip(QWidget):
-    """标题栏里显示项目名（短），hover 显示完整路径。固定最大宽度防止拉伸。"""
-
-    MAX_NAME_LEN = 20
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("datasetChip")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMaximumWidth(300)
-        from PyQt6.QtWidgets import QHBoxLayout
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(T.GAP_LG, T.GAP_XS, T.GAP_LG, T.GAP_XS)
-        layout.setSpacing(0)
-        self.hide()
-        self.name_label = BodyLabel("")
-        self.name_label.setObjectName("datasetChipName")
-        layout.addWidget(self.name_label)
-
-    def set_project(self, name: str, path: Path, task_label: str = "") -> None:
-        display = name if len(name) <= self.MAX_NAME_LEN else name[:self.MAX_NAME_LEN - 1] + "…"
-        if task_label:
-            display = f"{display}  ·  {task_label}"
-        self.name_label.setText(display)
-        self.setToolTip(str(path))
-        self.show()
-
-    def clear(self) -> None:
-        self.name_label.setText("")
-        self.setToolTip("")
-        self.hide()
 
 
 def _install_nav_expand_patch() -> None:
@@ -138,122 +84,57 @@ class MainWindow(FluentWindow):
         self.setWindowTitle("数据工坊")
         self.resize(1280, 800)
 
-        self._scan_worker: ScanWorker | None = None
-        self._scan_progress = None
-        self._dataset_root: Path | None = None
-        self._project: Project | None = None
-
         # 导航历史
         self._nav_history: list[str] = []
         self._nav_cursor: int = -1
         self._nav_navigating: bool = False
         self._nav_collapse_threshold = 1100
 
-        # 缩略图后台线程
-        self._thumb_worker = ThumbnailWorker(size=170, parent=self)
-        self._thumb_worker.start()
-
         self._build_titlebar()
         self._build_views()
 
-        # 启动时显示欢迎页
-        self.switchTo(self.welcome_view)
+        # 启动 = 空白画布
+        self.switchTo(self.pipeline_view)
 
     # ---------- 构建 ----------
 
     def _build_views(self) -> None:
-        # 欢迎页
-        self.welcome_view = WelcomeView()
-        self.welcome_view.open_project.connect(self._open_project)
-        self.welcome_view.open_folder.connect(self._on_open_clicked)
-
-        # 核心视图
-        self.overview = OverviewView()
-
-        self.browser = BrowserView()
-        self.detail = DetailView()
-        self.browser.thumb_request.connect(self._thumb_worker.request)
-        self.browser.clear_thumb_queue.connect(self._thumb_worker.clear_queue)
-        self._thumb_worker.thumb_ready.connect(self.browser.on_thumb_ready)
-        self.browser.image_activated.connect(self._on_image_activated)
-        self.browser.dataset_changed.connect(self._on_dataset_changed)
-        self.browser.navigate_to.connect(self._on_navigate_to)
-        self.detail.back_requested.connect(self._on_detail_back)
-
-        self.browser_stack = QStackedWidget()
-        self.browser_stack.setObjectName("browserStack")
-        self.browser_stack.addWidget(self.browser)
-        self.browser_stack.addWidget(self.detail)
-
         from gui.views.pipeline_view import PipelineView
         self.pipeline_view = PipelineView()
 
-        self.cleaning_view = CleaningView()
-        self.augment_view = AugmentView()
-        self.predict_view = PredictView()
-        self.split_view = SplitView()
-        self.browser.add_to_split.connect(self._on_add_to_split)
-        self.split_view.go_export.connect(lambda: self.switchTo(self.export_view))
-        self.augment_view.set_selection_provider(self.browser.get_selected_images)
-        self.export_view = ExportView()
-        self.standards_view = StandardsView()
         self.settings_view = SettingsView()
-        self.settings_view.open_recent.connect(lambda p: self._open_project(Path(p)))
         self.settings_view.theme_changed.connect(self._on_theme_changed)
 
         # ---- 分组导航 ----
-        # 0) 欢迎页（首页入口）
+        # 1) 🔧 工作台（节点画布 — 主视图）
         self.addSubInterface(
-            self.welcome_view, FIF.HOME_FILL, "首页",
+            self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
             position=NavigationItemPosition.TOP,
         )
 
-        # 1) 📂 工作区
-        self.navigationInterface.addItem(
-            routeKey="datasetGroup",
-            icon=FIF.FOLDER,
-            text="工作区",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="工作区",
-        )
-        self.navigationInterface.addItem(
-            routeKey="openDatasetItem",
-            icon=FIF.FOLDER_ADD,
-            text="切换项目…",
-            onClick=self._on_open_clicked,
-            selectable=False,
-            tooltip="打开其他数据集",
-            parentRouteKey="datasetGroup",
-        )
-        self.addSubInterface(
-            self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
-        )
-
-        # 2) 🔧 工作台（节点画布）
-        self.addSubInterface(
-            self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
-        )
-
-        # 3) 🧰 工具（点击添加节点到画布）
+        # 2) 🧰 工具（拖拽或点击添加节点到画布）
         self.navigationInterface.addItem(
             routeKey="toolsGroup",
             icon=FIF.ALBUM,
             text="工具",
             onClick=lambda: None,
             selectable=False,
-            tooltip="点击工具添加到画布",
+            tooltip="拖拽工具到画布，或点击添加",
         )
         _tool_icons = {
+            "data_source": FIF.FOLDER,
             "quality_check": FIF.CERTIFICATE,
             "dedup": FIF.COPY,
             "augment": FIF.ADD,
             "split": FIF.TILES,
+            "export": FIF.SHARE,
         }
         from core.nodes import NODES
+        from gui.widgets.toolbox_panel import NodeDragFilter
+        self._drag_filters: list[NodeDragFilter] = []  # prevent GC
         for name, node in NODES.items():
             icon = _tool_icons.get(name, FIF.TAG)
-            self.navigationInterface.addItem(
+            w = self.navigationInterface.addItem(
                 routeKey=f"tool_{name}",
                 icon=icon,
                 text=node.display_name,
@@ -262,6 +143,11 @@ class MainWindow(FluentWindow):
                 tooltip=node.description,
                 parentRouteKey="toolsGroup",
             )
+            # Install drag filter on the inner button widget
+            if hasattr(w, "itemWidget"):
+                filt = NodeDragFilter(name, node.display_name, node.step_type, w.itemWidget)
+                w.itemWidget.installEventFilter(filt)
+                self._drag_filters.append(filt)
 
         # 4) ⚙ 设置
         self.addSubInterface(
@@ -274,26 +160,9 @@ class MainWindow(FluentWindow):
     def _build_titlebar(self) -> None:
         from PyQt6.QtWidgets import QSpacerItem, QSizePolicy
 
-        self.dataset_chip = _DatasetChip()
-
-        # 导航 ← →
-        self.back_btn = TransparentToolButton(FIF.LEFT_ARROW)
-        self.back_btn.setToolTip("后退")
-        self.back_btn.setFixedSize(34, 30)
-        self.back_btn.clicked.connect(self._nav_go_back)
-        self.fwd_btn = TransparentToolButton(FIF.RIGHT_ARROW)
-        self.fwd_btn.setToolTip("前进")
-        self.fwd_btn.setFixedSize(34, 30)
-        self.fwd_btn.clicked.connect(self._nav_go_forward)
-        self.back_btn.setEnabled(False)
-        self.fwd_btn.setEnabled(False)
-
-        # 关闭项目按钮（带文字更醒目）
-        from qfluentwidgets import HyperlinkButton
-        self.close_project_btn = HyperlinkButton("", "关闭项目")
-        self.close_project_btn.setFixedHeight(30)
-        self.close_project_btn.clicked.connect(self._close_project)
-        self.close_project_btn.hide()
+        # 方案名称（标题栏显示）
+        self._task_name = BodyLabel("未命名方案")
+        self._task_name.setObjectName("taskNameLabel")
 
         try:
             self.navigationInterface.panel.returnButton.hide()
@@ -301,123 +170,11 @@ class MainWindow(FluentWindow):
             pass
 
         bar_layout = self.titleBar.hBoxLayout
-        bar_layout.insertWidget(2, self.back_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        bar_layout.insertWidget(3, self.fwd_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        bar_layout.insertSpacing(4, 12)
-        bar_layout.insertWidget(5, self.dataset_chip, 0, Qt.AlignmentFlag.AlignVCenter)
-        bar_layout.insertWidget(6, self.close_project_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar_layout.insertSpacing(2, 12)
+        bar_layout.insertWidget(3, self._task_name, 0, Qt.AlignmentFlag.AlignVCenter)
         bar_layout.insertSpacerItem(
-            7, QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            4, QSpacerItem(0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         )
-
-    # ---------- 项目生命周期 ----------
-
-    def _open_project(self, root: Path) -> None:
-        """Open or create a project, then scan."""
-        if self._scan_worker and self._scan_worker.isRunning():
-            return
-        # Save current project first
-        self._save_current_project()
-
-        project = load_project(root)
-        if project is None:
-            from gui.dialogs.op_dialogs import NewProjectDialog
-            dlg = NewProjectDialog(root.name, parent=self)
-            if not dlg.exec():
-                return
-            name, task_type = dlg.options()
-            project = create_project(root, name=name, task_type=task_type)
-        self._project = project
-
-        # 立刻显示进度弹窗，用户第一时间看到反馈
-        from gui.dialogs.op_dialogs import ProgressDialog
-        self._scan_progress = ProgressDialog("打开项目", parent=self)
-        self._scan_progress.label.setText(str(root))
-        self._scan_progress.show()
-
-        self._start_scan(root)
-
-    def _close_project(self) -> None:
-        """Save state and return to welcome page."""
-        # 检查 detail view 是否有未保存修改
-        if hasattr(self, 'detail') and getattr(self.detail, '_dirty', False):
-            from qfluentwidgets import MessageBox
-            box = MessageBox(
-                "未保存的修改",
-                "当前图片有未保存的标注修改，关闭项目将丢失这些修改。确定关闭？",
-                self,
-            )
-            box.yesButton.setText("关闭项目")
-            box.cancelButton.setText("返回编辑")
-            if not box.exec():
-                return
-        self._save_current_project()
-        self._project = None
-        self._dataset_root = None
-        self.dataset_chip.clear()
-        self.close_project_btn.hide()
-        self.welcome_view.refresh()
-        self.switchTo(self.welcome_view)
-
-    def _save_current_project(self) -> None:
-        """Collect state from all views and persist."""
-        if self._project is None:
-            return
-        # Collect browse state
-        self._project.browse_state = self.browser.save_state()
-        # Collect export config
-        self._project.export_config = self.export_view.save_state()
-        # Collect split state
-        self._project.split_state = self.split_view.save_state()
-        # Collect data standard
-        self._project.data_standard = self.standards_view.get_standard().to_dict()
-        save_project(self._project)
-
-    # ---------- 导航历史 ----------
-
-    def switchTo(self, interface):  # type: ignore[override]
-        super().switchTo(interface)
-        if self._nav_navigating:
-            return
-        key = interface.objectName()
-        if not key:
-            return
-        if self._nav_cursor < len(self._nav_history) - 1:
-            self._nav_history = self._nav_history[: self._nav_cursor + 1]
-        if not self._nav_history or self._nav_history[-1] != key:
-            self._nav_history.append(key)
-            self._nav_cursor = len(self._nav_history) - 1
-        self._update_nav_buttons()
-
-    def _switch_to_key(self, key: str) -> None:
-        for i in range(self.stackedWidget.count()):
-            w = self.stackedWidget.widget(i)
-            if w.objectName() == key:
-                self._nav_navigating = True
-                try:
-                    super().switchTo(w)
-                    self.navigationInterface.setCurrentItem(key)
-                finally:
-                    self._nav_navigating = False
-                return
-
-    def _nav_go_back(self) -> None:
-        if self._nav_cursor <= 0:
-            return
-        self._nav_cursor -= 1
-        self._switch_to_key(self._nav_history[self._nav_cursor])
-        self._update_nav_buttons()
-
-    def _nav_go_forward(self) -> None:
-        if self._nav_cursor >= len(self._nav_history) - 1:
-            return
-        self._nav_cursor += 1
-        self._switch_to_key(self._nav_history[self._nav_cursor])
-        self._update_nav_buttons()
-
-    def _update_nav_buttons(self) -> None:
-        self.back_btn.setEnabled(self._nav_cursor > 0)
-        self.fwd_btn.setEnabled(self._nav_cursor < len(self._nav_history) - 1)
 
     # ---------- 响应式侧栏 ----------
 
@@ -433,81 +190,12 @@ class MainWindow(FluentWindow):
         except Exception:  # noqa: BLE001
             pass
 
-    # ---------- 浏览/详情切换 ----------
-
-    def _on_image_activated(self, image, image_list) -> None:
-        self.detail.show_image(image, image_list)
-        self.browser_stack.setCurrentWidget(self.detail)
-        self.detail.setFocus()
-
-    def _on_detail_back(self) -> None:
-        self.browser_stack.setCurrentWidget(self.browser)
+    # ---------- 工具操作 ----------
 
     def _add_tool_node(self, node_name: str, display_name: str) -> None:
-        """Sidebar tool clicked → add node to canvas and switch to workspace."""
+        """Sidebar tool clicked → add node to canvas."""
         self.switchTo(self.pipeline_view)
         self.pipeline_view._add_node(node_name, display_name)
-
-    def _on_navigate_to(self, route: str) -> None:
-        """Readiness bar click → jump to the named view."""
-        view_map = {
-            "predictView": self.predict_view,
-            "splitView": self.split_view,
-            "cleaningView": self.cleaning_view,
-            "augmentView": self.augment_view,
-            "exportView": self.export_view,
-        }
-        target = view_map.get(route)
-        if target:
-            self.switchTo(target)
-
-    # ---------- 打开数据集 ----------
-
-    def _on_open_clicked(self) -> None:
-        directory = QFileDialog.getExistingDirectory(
-            self, "选择数据集根目录", str(Path.home())
-        )
-        if not directory:
-            return
-        self._open_project(Path(directory))
-
-    def _start_scan(self, root: Path) -> None:
-        if self._scan_worker and self._scan_worker.isRunning():
-            return
-        # 进度弹窗已在 _open_project 中创建并显示
-        # 这里只需要确保存在（dataset_changed 重扫描时也需要）
-        if self._scan_progress is None:
-            from gui.dialogs.op_dialogs import ProgressDialog
-            self._scan_progress = ProgressDialog("扫描数据集", parent=self)
-            self._scan_progress.label.setText(str(root))
-            self._scan_progress.show()
-
-        self._scan_worker = ScanWorker(root, parent=self)
-        self._scan_worker.progress.connect(self._on_scan_progress)
-        self._scan_worker.phase.connect(self._on_scan_phase)
-        self._scan_worker.finished_ok.connect(self._on_scan_done)
-        self._scan_worker.failed.connect(self._on_scan_failed)
-        self._scan_worker.start()
-
-    def _on_scan_phase(self, phase: str) -> None:
-        if self._scan_progress is None:
-            return
-        labels = {
-            "scan": "扫描数据集 · 索引文件",
-            "annotate": "扫描数据集 · 解析标注",
-            "analyze": "扫描数据集 · 分析统计",
-        }
-        self._scan_progress.titleLabel.setText(labels.get(phase, phase))
-
-    def _on_scan_progress(self, done: int, total: int, name: str) -> None:
-        if self._scan_progress is None:
-            return
-        self._scan_progress.set_progress(done, total, name)
-
-    def _close_scan_progress(self) -> None:
-        if self._scan_progress is not None:
-            self._scan_progress.accept()
-            self._scan_progress = None
 
     def _on_theme_changed(self, name: str) -> None:
         set_app_theme(name, window=self)
@@ -515,114 +203,3 @@ class MainWindow(FluentWindow):
         setThemeColor(QColor(T.ACCENT))
         from core.user_settings import save_settings, UserSettings
         save_settings(UserSettings(theme=name))
-
-    def _on_dataset_changed(self) -> None:
-        if self._dataset_root:
-            self._start_scan(self._dataset_root)
-
-    def _on_add_to_split(self, bucket: str, images) -> None:
-        self.split_view.add_to_manual_bucket(bucket, images)
-        self.switchTo(self.split_view)
-
-    def _on_scan_done(self, result) -> None:
-        # result 是 ScanResult — 所有耗时操作已在 Worker 线程完成
-        from gui.workers.scan_worker import ScanResult
-        if isinstance(result, ScanResult):
-            dataset = result.dataset
-            ext_stats = result.ext_stats
-        else:
-            dataset = result
-            ext_stats = None
-
-        self._dataset_root = dataset.root_path
-        add_recent(dataset.root_path)
-
-        # 设置视图（轻量赋值，不阻塞主线程）
-        self.overview.set_dataset(dataset)
-        if ext_stats:
-            self.overview._on_extended_stats(ext_stats)
-        # 传任务类型给浏览页，驱动合规检查
-        if self._project:
-            self.browser.set_task_type(self._project.task_type)
-        self.browser.load_dataset(dataset)
-        self.settings_view.refresh()
-        for v in (
-            self.pipeline_view,
-            self.cleaning_view,
-            self.augment_view,
-            self.predict_view,
-            self.split_view,
-            self.export_view,
-            self.standards_view,
-        ):
-            v.set_dataset(dataset)
-        # 任务类型驱动各视图
-        if self._project:
-            self.export_view.set_task_type(self._project.task_type)
-            self.pipeline_view.set_task_type(self._project.task_type)
-
-        # 恢复项目状态
-        if self._project:
-            self.browser.restore_state(self._project.browse_state)
-            self.export_view.restore_state(self._project.export_config)
-            self.split_view.restore_state(self._project.split_state)
-            if self._project.data_standard:
-                from core.standards import DataStandard
-                self.standards_view.set_standard(
-                    DataStandard.from_dict(self._project.data_standard)
-                )
-
-        # 一切就绪，关闭弹窗 → 用户直接看到完整的工作区
-        self._close_scan_progress()
-
-        proj_name = self._project.name if self._project else dataset.name
-        task_label = ""
-        if self._project:
-            from core.task_types import TASK_REGISTRY
-            info = TASK_REGISTRY.get(self._project.task_type)
-            task_label = info.display_name if info else ""
-        self.dataset_chip.set_project(proj_name, dataset.root_path, task_label)
-        self.close_project_btn.show()
-        # 打开项目后默认落在工作台（节点画布）
-        self.switchTo(self.pipeline_view)
-
-        InfoBar.success(
-            title="项目已就绪",
-            content=f"{dataset.total_images} 张图片 · {len(dataset.categories)} 类",
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=3000,
-            parent=self,
-        )
-
-    def _on_scan_failed(self, msg: str) -> None:
-        self._close_scan_progress()
-        InfoBar.error(
-            title="扫描失败",
-            content=msg,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=5000,
-            parent=self,
-        )
-
-    def closeEvent(self, e):  # type: ignore[override]
-        # 检查未保存修改
-        if hasattr(self, 'detail') and getattr(self.detail, '_dirty', False):
-            from qfluentwidgets import MessageBox
-            box = MessageBox(
-                "未保存的修改",
-                "当前图片有未保存的标注修改，退出将丢失。确定退出？",
-                self,
-            )
-            box.yesButton.setText("退出")
-            box.cancelButton.setText("取消")
-            if not box.exec():
-                e.ignore()
-                return
-        self._save_current_project()
-        try:
-            self._thumb_worker.stop()
-        except Exception:
-            pass
-        super().closeEvent(e)

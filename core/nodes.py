@@ -21,6 +21,29 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
 
+# ---------- Port & parameter definitions ----------
+
+@dataclass(frozen=True)
+class PortDef:
+    """Typed port on a processing node."""
+    name: str           # machine key, e.g. "passed"
+    label: str          # display, e.g. "合格"
+    direction: str      # "input" | "output"
+    data_type: str = "dataset"   # "dataset" | "report"
+
+
+@dataclass(frozen=True)
+class ParamDef:
+    """Configurable parameter on a processing node."""
+    name: str
+    label: str
+    type: str          # "int" | "float" | "str" | "bool" | "choice" | "path"
+    default: Any = None
+    choices: tuple[str, ...] | None = None
+    min_val: float | None = None
+    max_val: float | None = None
+
+
 # ---------- Result type ----------
 
 @dataclass
@@ -78,6 +101,14 @@ class QualityCheckNode:
     display_name = "质量检查"
     step_type = "clean"
     description = "检测模糊/空白/过曝/欠曝/损坏图像"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+        PortDef("passed", "合格", "output", "dataset"),
+        PortDef("rejected", "不合格", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("blur_threshold", "模糊阈值", "int", 100, min_val=10, max_val=500),
+    )
 
     def execute(self, images, options, progress_cb=None):
         from .quality import QualityOptions, check_images
@@ -95,6 +126,14 @@ class DedupNode:
     display_name = "重复检测"
     step_type = "clean"
     description = "基于感知哈希发现重复或近似图片"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+        PortDef("unique", "唯一", "output", "dataset"),
+        PortDef("duplicates", "重复", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("threshold", "相似阈值", "int", 5, min_val=0, max_val=20),
+    )
 
     def execute(self, images, options, progress_cb=None):
         from .dedup import find_duplicates
@@ -113,6 +152,16 @@ class AugmentNode:
     display_name = "数据增强"
     step_type = "augment"
     description = "生成增强样本"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+        PortDef("output", "增强后", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("flip_h", "水平翻转", "bool", True),
+        ParamDef("flip_v", "垂直翻转", "bool", False),
+        ParamDef("rotate", "随机旋转", "bool", True),
+        ParamDef("brightness", "亮度调整", "bool", True),
+    )
 
     def execute(self, images, options, progress_cb=None):
         from .augment import AugmentOptions, augment_batch
@@ -135,6 +184,18 @@ class SplitNode:
     display_name = "数据集划分"
     step_type = "split"
     description = "划分 train/val/test"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+        PortDef("train", "训练集", "output", "dataset"),
+        PortDef("val", "验证集", "output", "dataset"),
+        PortDef("test", "测试集", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("train_ratio", "训练集比例", "float", 0.8, min_val=0.1, max_val=0.95),
+        ParamDef("val_ratio", "验证集比例", "float", 0.1, min_val=0.0, max_val=0.5),
+        ParamDef("test_ratio", "测试集比例", "float", 0.1, min_val=0.0, max_val=0.5),
+        ParamDef("stratified", "分层采样", "bool", True),
+    )
 
     def execute(self, images, options, progress_cb=None):
         from .splitter import SplitOptions, split_dataset
@@ -151,12 +212,75 @@ class SplitNode:
         return StepResult(ok_count=total, details=result)
 
 
+class DataSourceNode:
+    name = "data_source"
+    display_name = "数据源"
+    step_type = "input"
+    description = "加载数据集目录，作为流程入口"
+    ports = (
+        PortDef("output", "数据集", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("root_dir", "数据集目录", "path", ""),
+    )
+
+    def execute(self, images, options, progress_cb=None):
+        return StepResult(ok_count=len(images) if images else 0)
+
+
+class ExportNode:
+    name = "export"
+    display_name = "导出"
+    step_type = "export"
+    description = "导出为 YOLO/COCO/VOC 等格式"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+    )
+    parameters = (
+        ParamDef("format", "导出格式", "choice", "YOLO",
+                 choices=("YOLO", "COCO", "VOC", "CSV")),
+        ParamDef("out_dir", "输出目录", "path", ""),
+    )
+
+    def execute(self, images, options, progress_cb=None):
+        fmt = options.get("format", "yolo")
+        out_dir = Path(options.get("out_dir", "."))
+        from .exporter import export_dataset
+        result = export_dataset(images, fmt, out_dir, progress_cb=progress_cb)
+        return StepResult(
+            ok_count=result.get("count", 0),
+            output_paths=result.get("paths", []),
+            details=result,
+        )
+
+
+# ---------- Category visual metadata (pure Python — no Qt) ----------
+
+@dataclass(frozen=True)
+class CategoryMeta:
+    """Display metadata for a node category. Token names resolved in GUI layer."""
+    display_name: str       # e.g. "清洁"
+    color_token: str        # e.g. "NODE_CAT_CLEAN" — getattr(T, token) in GUI
+    icon_name: str          # FluentIcon enum name, e.g. "CERTIFICATE"
+
+
+CATEGORY_META: dict[str, CategoryMeta] = {
+    "clean":   CategoryMeta("清洁", "NODE_CAT_CLEAN", "CERTIFICATE"),
+    "augment": CategoryMeta("增强", "NODE_CAT_AUGMENT", "ADD"),
+    "split":   CategoryMeta("划分", "NODE_CAT_SPLIT", "TILES"),
+    "export":  CategoryMeta("导出", "NODE_CAT_EXPORT", "SHARE"),
+    "input":   CategoryMeta("输入", "NODE_CAT_INPUT", "FOLDER"),
+}
+
+
 # ---------- Node registry ----------
 
 NODES: dict[str, ProcessingNode] = {
+    "data_source": DataSourceNode(),
     "quality_check": QualityCheckNode(),
     "dedup": DedupNode(),
     "augment": AugmentNode(),
     "split": SplitNode(),
+    "export": ExportNode(),
 }
 """All available processing nodes, keyed by name."""

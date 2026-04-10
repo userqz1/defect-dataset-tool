@@ -44,6 +44,16 @@ class Tokens:
     SUCCESS: str
     WARNING: str
 
+    # ---- Node editor ----
+    NODE_CAT_CLEAN: str = ""
+    NODE_CAT_AUGMENT: str = ""
+    NODE_CAT_SPLIT: str = ""
+    NODE_CAT_EXPORT: str = ""
+    NODE_CAT_INPUT: str = ""
+    NODE_BG: str = ""
+    NODE_BG_HEADER: str = ""
+    NODE_SHADOW: str = ""
+
     # ---- Geometry ----
     RADIUS: int = 6
     RADIUS_LG: int = 8
@@ -82,6 +92,14 @@ LIGHT = Tokens(
     ACCENT_SOFT="#f4e8e2",
     SUCCESS="#5a7a3c",
     WARNING="#b8842b",
+    NODE_CAT_CLEAN="#4a9a8a",
+    NODE_CAT_AUGMENT="#8a6ac0",
+    NODE_CAT_SPLIT="#c09840",
+    NODE_CAT_EXPORT="#5a8a3c",
+    NODE_CAT_INPUT="#5a7acf",
+    NODE_BG="#ffffff",
+    NODE_BG_HEADER="#f7f5f0",
+    NODE_SHADOW="#2d2a2640",
 )
 
 DARK = Tokens(
@@ -98,6 +116,14 @@ DARK = Tokens(
     ACCENT_SOFT="#3d2a22",
     SUCCESS="#7a9a4c",
     WARNING="#d09a3a",
+    NODE_CAT_CLEAN="#5abaa0",
+    NODE_CAT_AUGMENT="#a080e0",
+    NODE_CAT_SPLIT="#d0a850",
+    NODE_CAT_EXPORT="#70a050",
+    NODE_CAT_INPUT="#6a8adf",
+    NODE_BG="#2d2a26",
+    NODE_BG_HEADER="#332f2b",
+    NODE_SHADOW="#00000060",
 )
 
 THEMES = {"light": LIGHT, "dark": DARK}
