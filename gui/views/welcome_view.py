@@ -39,6 +39,8 @@ class _ProjectCardDelegate(QStyledItemDelegate):
 
     CARD_HEIGHT = 92
     MARGIN = 6        # gap between card edge and option.rect
+    PAD_H = 20        # horizontal padding inside card
+    PAD_V = 14        # vertical padding inside card
     NAME_H = 22       # name line height
     PATH_H = 20       # path line height
     LINE_GAP = 6      # gap between name and path
@@ -69,9 +71,9 @@ class _ProjectCardDelegate(QStyledItemDelegate):
             return
 
         # Content area well inside the card
-        cx = card.x() + T.PAD_XL
-        cy = card.y() + T.PAD_LG - 2
-        cw = card.width() - 2 * T.PAD_XL
+        cx = card.x() + self.PAD_H
+        cy = card.y() + self.PAD_V
+        cw = card.width() - 2 * self.PAD_H
 
         # Row 1: Name (left) + Date (right)
         name_font = QFont(painter.font())
@@ -128,8 +130,9 @@ class _ProjectCardDelegate(QStyledItemDelegate):
 class WelcomeView(QWidget):
     """Startup welcome page with project list."""
 
-    open_project = pyqtSignal(Path)     # user selected a project to open
-    open_folder = pyqtSignal()          # user wants to pick a new folder
+    open_project = pyqtSignal(Path)     # user selected an existing task
+    open_folder = pyqtSignal()          # user wants to open an existing task folder
+    new_task = pyqtSignal()             # user wants a blank canvas
 
     def __init__(self) -> None:
         super().__init__()
@@ -137,7 +140,7 @@ class WelcomeView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_HERO, T.PAD_3XL, T.PAD_HERO, T.PAD_2XL)
+        root.setContentsMargins(60, 48, 60, 32)
         root.setSpacing(T.GAP_XL)
 
         # Header
@@ -150,22 +153,22 @@ class WelcomeView(QWidget):
         header.addWidget(subtitle)
         root.addLayout(header)
 
-        # Action buttons — task-oriented
+        # Action buttons — 方案 oriented
         btn_row = QHBoxLayout()
         btn_row.setSpacing(T.GAP_LG)
-        new_btn = PrimaryPushButton("新建任务")
+        new_btn = PrimaryPushButton("新建方案")
         new_btn.setFixedHeight(40)
-        new_btn.clicked.connect(self._on_open_folder)
+        new_btn.clicked.connect(self._on_new_task)
         btn_row.addWidget(new_btn)
-        open_btn = PushButton("打开已有任务")
+        open_btn = PushButton("打开已有方案")
         open_btn.setFixedHeight(40)
         open_btn.clicked.connect(self._on_open_folder)
         btn_row.addWidget(open_btn)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        # Recent tasks section
-        section_label = SubtitleLabel("最近任务")
+        # Recent section
+        section_label = SubtitleLabel("最近方案")
         root.addWidget(section_label)
 
         self.project_list = QListWidget()
@@ -173,14 +176,13 @@ class WelcomeView(QWidget):
         self.project_list.setFrameShape(QFrame.Shape.NoFrame)
         self.project_list.setItemDelegate(_ProjectCardDelegate(self))
         self.project_list.setMouseTracking(True)
-        self.project_list.setToolTip("双击打开项目，右键查看更多选项")
         self.project_list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.project_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.project_list.customContextMenuRequested.connect(self._on_context_menu)
         root.addWidget(self.project_list, 1)
 
         # Empty hint
-        self.empty_label = CaptionLabel("还没有打开过数据集，点击上方按钮开始。")
+        self.empty_label = CaptionLabel("还没有创建过方案，点击「新建方案」开始。")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.empty_label)
 
@@ -204,6 +206,9 @@ class WelcomeView(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, s)
             item.setSizeHint(QSize(0, _ProjectCardDelegate.CARD_HEIGHT + 2 * _ProjectCardDelegate.MARGIN))
             self.project_list.addItem(item)
+
+    def _on_new_task(self) -> None:
+        self.new_task.emit()
 
     def _on_open_folder(self) -> None:
         self.open_folder.emit()

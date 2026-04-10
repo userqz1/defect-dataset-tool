@@ -67,17 +67,15 @@ class _DatasetChip(QWidget):
         self.setMaximumWidth(300)
         from PyQt6.QtWidgets import QHBoxLayout
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(T.GAP_LG, T.GAP_XS, T.GAP_LG, T.GAP_XS)
+        layout.setContentsMargins(12, 4, 12, 4)
         layout.setSpacing(0)
         self.hide()
         self.name_label = BodyLabel("")
         self.name_label.setObjectName("datasetChipName")
         layout.addWidget(self.name_label)
 
-    def set_project(self, name: str, path: Path, task_label: str = "") -> None:
+    def set_project(self, name: str, path: Path) -> None:
         display = name if len(name) <= self.MAX_NAME_LEN else name[:self.MAX_NAME_LEN - 1] + "…"
-        if task_label:
-            display = f"{display}  ·  {task_label}"
         self.name_label.setText(display)
         self.setToolTip(str(path))
         self.show()
@@ -166,6 +164,7 @@ class MainWindow(FluentWindow):
         self.welcome_view = WelcomeView()
         self.welcome_view.open_project.connect(self._open_project)
         self.welcome_view.open_folder.connect(self._on_open_clicked)
+        self.welcome_view.new_task.connect(self._on_new_task)
 
         # 核心视图
         self.overview = OverviewView()
@@ -177,7 +176,6 @@ class MainWindow(FluentWindow):
         self._thumb_worker.thumb_ready.connect(self.browser.on_thumb_ready)
         self.browser.image_activated.connect(self._on_image_activated)
         self.browser.dataset_changed.connect(self._on_dataset_changed)
-        self.browser.navigate_to.connect(self._on_navigate_to)
         self.detail.back_requested.connect(self._on_detail_back)
 
         self.browser_stack = QStackedWidget()
@@ -208,60 +206,37 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.TOP,
         )
 
-        # 1) 📂 工作区
-        self.navigationInterface.addItem(
-            routeKey="datasetGroup",
-            icon=FIF.FOLDER,
-            text="工作区",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="工作区",
-        )
-        self.navigationInterface.addItem(
-            routeKey="openDatasetItem",
-            icon=FIF.FOLDER_ADD,
-            text="切换项目…",
-            onClick=self._on_open_clicked,
-            selectable=False,
-            tooltip="打开其他数据集",
-            parentRouteKey="datasetGroup",
-        )
-        self.addSubInterface(
-            self.browser_stack, FIF.PHOTO, "浏览", parent="datasetGroup"
-        )
+        # 1) 浏览
+        self.addSubInterface(self.browser_stack, FIF.PHOTO, "浏览")
 
-        # 2) 🔧 工作台（节点画布）
-        self.addSubInterface(
-            self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台",
-        )
+        # 2) 工作台（节点画布）
+        self.addSubInterface(self.pipeline_view, FIF.DEVELOPER_TOOLS, "工作台")
 
-        # 3) 🧰 工具（点击添加节点到画布）
-        self.navigationInterface.addItem(
-            routeKey="toolsGroup",
-            icon=FIF.ALBUM,
-            text="工具",
-            onClick=lambda: None,
-            selectable=False,
-            tooltip="点击工具添加到画布",
-        )
-        _tool_icons = {
+        # 3) 节点工具箱 — 点击添加到画布
+        self.navigationInterface.addSeparator()
+
+        _TOOL_ICONS = {
+            "data_source": FIF.FOLDER,
             "quality_check": FIF.CERTIFICATE,
             "dedup": FIF.COPY,
             "augment": FIF.ADD,
             "split": FIF.TILES,
+            "export": FIF.SEND,
         }
-        from core.nodes import NODES
-        for name, node in NODES.items():
-            icon = _tool_icons.get(name, FIF.TAG)
+        from core.nodes import NODE_REGISTRY
+        import functools
+        for nid, spec in NODE_REGISTRY.items():
+            icon = _TOOL_ICONS.get(nid, FIF.TAG)
             self.navigationInterface.addItem(
-                routeKey=f"tool_{name}",
+                routeKey=f"tool_{nid}",
                 icon=icon,
-                text=node.display_name,
-                onClick=lambda checked=False, n=name, dn=node.display_name: self._add_tool_node(n, dn),
+                text=spec.label,
+                onClick=functools.partial(self._add_tool_node, nid),
                 selectable=False,
-                tooltip=node.description,
-                parentRouteKey="toolsGroup",
+                tooltip=spec.label,
             )
+
+        self.navigationInterface.addSeparator()
 
         # 4) ⚙ 设置
         self.addSubInterface(
@@ -321,12 +296,7 @@ class MainWindow(FluentWindow):
 
         project = load_project(root)
         if project is None:
-            from gui.dialogs.op_dialogs import NewProjectDialog
-            dlg = NewProjectDialog(root.name, parent=self)
-            if not dlg.exec():
-                return
-            name, task_type = dlg.options()
-            project = create_project(root, name=name, task_type=task_type)
+            project = create_project(root)
         self._project = project
 
         # 立刻显示进度弹窗，用户第一时间看到反馈
@@ -443,23 +413,15 @@ class MainWindow(FluentWindow):
     def _on_detail_back(self) -> None:
         self.browser_stack.setCurrentWidget(self.browser)
 
-    def _add_tool_node(self, node_name: str, display_name: str) -> None:
-        """Sidebar tool clicked → add node to canvas and switch to workspace."""
+    def _on_new_task(self) -> None:
+        """Create a blank canvas — new task/方案."""
+        self.pipeline_view.clear()
         self.switchTo(self.pipeline_view)
-        self.pipeline_view._add_node(node_name, display_name)
 
-    def _on_navigate_to(self, route: str) -> None:
-        """Readiness bar click → jump to the named view."""
-        view_map = {
-            "predictView": self.predict_view,
-            "splitView": self.split_view,
-            "cleaningView": self.cleaning_view,
-            "augmentView": self.augment_view,
-            "exportView": self.export_view,
-        }
-        target = view_map.get(route)
-        if target:
-            self.switchTo(target)
+    def _add_tool_node(self, node_id: str) -> None:
+        """Sidebar tool clicked → switch to workspace + add node."""
+        self.switchTo(self.pipeline_view)
+        self.pipeline_view.add_node(node_id)
 
     # ---------- 打开数据集 ----------
 
@@ -541,13 +503,9 @@ class MainWindow(FluentWindow):
         self.overview.set_dataset(dataset)
         if ext_stats:
             self.overview._on_extended_stats(ext_stats)
-        # 传任务类型给浏览页，驱动合规检查
-        if self._project:
-            self.browser.set_task_type(self._project.task_type)
         self.browser.load_dataset(dataset)
         self.settings_view.refresh()
         for v in (
-            self.pipeline_view,
             self.cleaning_view,
             self.augment_view,
             self.predict_view,
@@ -556,10 +514,6 @@ class MainWindow(FluentWindow):
             self.standards_view,
         ):
             v.set_dataset(dataset)
-        # 任务类型驱动各视图
-        if self._project:
-            self.export_view.set_task_type(self._project.task_type)
-            self.pipeline_view.set_task_type(self._project.task_type)
 
         # 恢复项目状态
         if self._project:
@@ -576,15 +530,10 @@ class MainWindow(FluentWindow):
         self._close_scan_progress()
 
         proj_name = self._project.name if self._project else dataset.name
-        task_label = ""
-        if self._project:
-            from core.task_types import TASK_REGISTRY
-            info = TASK_REGISTRY.get(self._project.task_type)
-            task_label = info.display_name if info else ""
-        self.dataset_chip.set_project(proj_name, dataset.root_path, task_label)
+        self.dataset_chip.set_project(proj_name, dataset.root_path)
         self.close_project_btn.show()
-        # 打开项目后默认落在工作台（节点画布）
-        self.switchTo(self.pipeline_view)
+        # 用户打开项目是为了操作图片 → 默认落在浏览页
+        self.switchTo(self.browser_stack)
 
         InfoBar.success(
             title="项目已就绪",

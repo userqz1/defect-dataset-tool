@@ -1,430 +1,395 @@
-"""Node editor canvas — drag-and-drop visual pipeline builder.
+"""Custom node editor — QGraphicsView canvas with themed nodes.
 
-QGraphicsView-based node graph editor. Users drag tools from the sidebar,
-place nodes on the canvas, connect ports, and click nodes to configure.
-
-Components:
-- NodeCanvas: QGraphicsView + QGraphicsScene (zoom/pan/grid background)
-- NodeItem: QGraphicsItem (title bar + ports + body)
-- PortItem: input/output connection point
-- ConnectionItem: bezier curve between two ports
+Design: white card nodes, accent title bar, manual port connections,
+parameters as read-only summary on node, double-click to edit.
 """
 from __future__ import annotations
 
-import math
+import uuid
 from typing import Any
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import (
-    QBrush,
-    QColor,
-    QFont,
-    QLinearGradient,
-    QPainter,
-    QPainterPath,
-    QPen,
-)
+from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
-    QGraphicsEllipseItem,
-    QGraphicsItem,
-    QGraphicsPathItem,
-    QGraphicsRectItem,
-    QGraphicsScene,
-    QGraphicsTextItem,
-    QGraphicsView,
-    QMenu,
-    QWidget,
+    QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem,
+    QGraphicsRectItem, QGraphicsScene, QGraphicsSimpleTextItem,
+    QGraphicsView, QMenu, QWidget,
 )
 
 from gui.theme import T
 
+# ---------- Sizing ----------
+NODE_W = 200
+HEADER_H = 28
+PORT_R = 6
+PORT_SPACING = 22
+PARAM_LINE_H = 18
+GRID = 20
+BODY_PAD = 10
 
-# ---------- Constants ----------
-
-NODE_WIDTH = 180
-NODE_HEADER_H = 32
-NODE_PORT_H = 24
-NODE_BODY_PAD = 8
-PORT_RADIUS = 6
-GRID_SIZE = 20
-
-# Colors (will reference tokens at paint time)
-_C = {
-    "node_bg": "#2d2a26",
-    "node_header": "#c96442",
-    "node_border": "#3a3733",
-    "port_in": "#5a9a5a",
-    "port_out": "#5a7acf",
-    "connection": "#9a958a",
-    "text": "#ece7df",
-    "grid": "#3a3733",
-    "canvas": "#1f1d1b",
-}
-
-
-def _update_colors():
-    """Refresh colors from current theme tokens."""
-    _C["node_bg"] = T.CONTENT
-    _C["node_header"] = T.ACCENT
-    _C["node_border"] = T.BORDER
-    _C["port_in"] = T.SUCCESS
-    _C["port_out"] = "#5a7acf"
-    _C["connection"] = T.TEXT_3
-    _C["text"] = T.TEXT
-    _C["grid"] = T.BORDER
-    _C["canvas"] = T.SURFACE_DIM
-
-
-# ---------- Port ----------
 
 class PortItem(QGraphicsEllipseItem):
-    """Input or output port on a node."""
-
-    def __init__(self, name: str, is_output: bool, parent: NodeItem) -> None:
-        super().__init__(-PORT_RADIUS, -PORT_RADIUS, PORT_RADIUS * 2, PORT_RADIUS * 2, parent)
-        self.name = name
+    def __init__(self, name: str, is_output: bool, parent: "NodeItem"):
+        d = PORT_R * 2
+        super().__init__(-PORT_R, -PORT_R, d, d, parent)
+        self.port_name = name
         self.is_output = is_output
         self.node: NodeItem = parent
         self.connections: list[ConnectionItem] = []
-
-        color = QColor(_C["port_out"] if is_output else _C["port_in"])
+        color = QColor(T.ACCENT)
         self.setBrush(QBrush(color))
-        self.setPen(QPen(QColor(_C["node_border"]), 1))
-        self.setZValue(2)
+        self.setPen(QPen(color.darker(120), 1))
+        self.setZValue(3)
         self.setCursor(Qt.CursorShape.CrossCursor)
-        self.setToolTip(name)
+        # Label
+        lbl = QGraphicsSimpleTextItem(name, parent)
+        f = QFont(); f.setPointSize(8)
+        lbl.setFont(f)
+        lbl.setBrush(QBrush(QColor(T.TEXT_2)))
+        w = lbl.boundingRect().width()
+        if is_output:
+            lbl.setPos(self.x() - w - PORT_R - 4, self.y() - 6)
+        else:
+            lbl.setPos(self.x() + PORT_R + 4, self.y() - 6)
+        self._lbl = lbl
 
     @property
     def center_scene(self) -> QPointF:
         return self.scenePos()
 
 
-# ---------- Connection ----------
-
 class ConnectionItem(QGraphicsPathItem):
-    """Bezier curve connecting two ports."""
-
-    def __init__(self, source: PortItem, target: PortItem) -> None:
+    def __init__(self, src: PortItem, tgt: PortItem):
         super().__init__()
-        self.source = source
-        self.target = target
-        source.connections.append(self)
-        target.connections.append(self)
-        self.setPen(QPen(QColor(_C["connection"]), 2))
+        self.source = src
+        self.target = tgt
+        src.connections.append(self)
+        tgt.connections.append(self)
+        self.setPen(QPen(QColor(T.TEXT_3), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         self.setZValue(0)
         self.update_path()
 
-    def update_path(self) -> None:
-        p1 = self.source.center_scene
-        p2 = self.target.center_scene
-        dx = abs(p2.x() - p1.x()) * 0.5
+    def update_path(self):
+        p1, p2 = self.source.center_scene, self.target.center_scene
+        dx = max(abs(p2.x() - p1.x()) * 0.5, 40)
         path = QPainterPath()
         path.moveTo(p1)
         path.cubicTo(p1.x() + dx, p1.y(), p2.x() - dx, p2.y(), p2.x(), p2.y())
         self.setPath(path)
 
-    def remove(self) -> None:
-        if self in self.source.connections:
-            self.source.connections.remove(self)
-        if self in self.target.connections:
-            self.target.connections.remove(self)
-        scene = self.scene()
-        if scene:
-            scene.removeItem(self)
+    def remove(self):
+        for lst in (self.source.connections, self.target.connections):
+            if self in lst:
+                lst.remove(self)
+        if self.scene():
+            self.scene().removeItem(self)
 
-
-# ---------- Node ----------
 
 class NodeItem(QGraphicsRectItem):
-    """A processing node on the canvas."""
-
-    def __init__(self, node_name: str, display_name: str, x: float = 0, y: float = 0) -> None:
-        self.node_name = node_name
-        self.display_name = display_name
+    def __init__(self, node_id: str, label: str, category: str,
+                 input_names: list[str], output_names: list[str],
+                 param_summary: list[str],
+                 x: float = 0, y: float = 0):
+        self.node_id = node_id
+        self.instance_id = str(uuid.uuid4())[:8]
+        self.display_name = label
+        self.category = category
         self.inputs: list[PortItem] = []
         self.outputs: list[PortItem] = []
-        self._options: dict[str, Any] = {}
-        self._status: str = ""
+        self._params: dict[str, Any] = {}
+        self._param_labels: list[QGraphicsSimpleTextItem] = []
 
-        # Calculate size
-        n_ports = max(1, 1)  # 1 input, 1 output
-        body_h = n_ports * NODE_PORT_H + NODE_BODY_PAD * 2
-        total_h = NODE_HEADER_H + body_h
+        n_ports = max(len(input_names), len(output_names), 1)
+        n_params = len(param_summary)
+        body_h = max(n_ports * PORT_SPACING, n_params * PARAM_LINE_H + BODY_PAD * 2, 40)
+        total_h = HEADER_H + body_h
 
-        super().__init__(0, 0, NODE_WIDTH, total_h)
+        super().__init__(0, 0, NODE_W, total_h)
         self.setPos(x, y)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.setZValue(1)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
-
-        # Styling
-        self.setBrush(QBrush(QColor(_C["node_bg"])))
-        self.setPen(QPen(QColor(_C["node_border"]), 1.5))
-        self.setRect(0, 0, NODE_WIDTH, total_h)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
 
         # Title
-        self._title = QGraphicsTextItem(display_name, self)
-        self._title.setDefaultTextColor(QColor("#ffffff"))
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(9)
-        self._title.setFont(font)
-        self._title.setPos(8, 4)
+        t = QGraphicsSimpleTextItem(label, self)
+        f = QFont(); f.setPointSize(9); f.setBold(True)
+        t.setFont(f)
+        t.setBrush(QBrush(QColor("#fff")))
+        t.setPos(10, 5)
 
-        # Status text
-        self._status_item = QGraphicsTextItem("", self)
-        self._status_item.setDefaultTextColor(QColor(_C["connection"]))
-        sfont = QFont()
-        sfont.setPointSize(8)
-        self._status_item.setFont(sfont)
-        self._status_item.setPos(8, NODE_HEADER_H + 4)
+        # Param summary lines
+        py = HEADER_H + BODY_PAD
+        pf = QFont(); pf.setPointSize(8)
+        for text in param_summary:
+            lbl = QGraphicsSimpleTextItem(text, self)
+            lbl.setFont(pf)
+            lbl.setBrush(QBrush(QColor(T.TEXT_2)))
+            lbl.setPos(10, py)
+            self._param_labels.append(lbl)
+            py += PARAM_LINE_H
 
         # Ports
-        port_y = NODE_HEADER_H + NODE_BODY_PAD + NODE_PORT_H // 2
+        port_y_start = HEADER_H + body_h // (max(len(input_names), 1) + 1)
+        for i, name in enumerate(input_names):
+            p = PortItem(name, False, self)
+            p.setPos(0, HEADER_H + (i + 1) * body_h // (len(input_names) + 1))
+            self.inputs.append(p)
+        for i, name in enumerate(output_names):
+            p = PortItem(name, True, self)
+            p.setPos(NODE_W, HEADER_H + (i + 1) * body_h // (len(output_names) + 1))
+            self.outputs.append(p)
 
-        inp = PortItem("输入", False, self)
-        inp.setPos(0, port_y)
-        self.inputs.append(inp)
+    def update_param_summary(self, lines: list[str]):
+        pf = QFont(); pf.setPointSize(8)
+        for i, lbl in enumerate(self._param_labels):
+            if i < len(lines):
+                lbl.setText(lines[i])
+            else:
+                lbl.setText("")
 
-        out = PortItem("输出", True, self)
-        out.setPos(NODE_WIDTH, port_y)
-        self.outputs.append(out)
-
-    def paint(self, painter: QPainter, option, widget=None) -> None:
-        # Body
-        rect = self.rect()
+    def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Background
-        painter.setBrush(QBrush(QColor(_C["node_bg"])))
-        border_color = QColor(T.ACCENT) if self.isSelected() else QColor(_C["node_border"])
-        painter.setPen(QPen(border_color, 2 if self.isSelected() else 1))
-        painter.drawRoundedRect(rect, 6, 6)
-
-        # Header bar
-        header = QRectF(rect.x(), rect.y(), rect.width(), NODE_HEADER_H)
-        grad = QLinearGradient(header.topLeft(), header.topRight())
-        grad.setColorAt(0, QColor(_C["node_header"]))
-        grad.setColorAt(1, QColor(_C["node_header"]).darker(120))
+        rect = self.rect()
+        r = 8
+        # Shadow
+        painter.setBrush(QBrush(QColor(0, 0, 0, 30)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect.adjusted(2, 2, 2, 2), r, r)
+        # Body
+        painter.setBrush(QBrush(QColor(T.CONTENT)))
+        bc = QColor(T.ACCENT) if self.isSelected() else QColor(T.BORDER)
+        painter.setPen(QPen(bc, 2 if self.isSelected() else 1))
+        painter.drawRoundedRect(rect, r, r)
+        # Header
+        accent = QColor(T.ACCENT)
+        grad = QLinearGradient(rect.topLeft(), QPointF(rect.right(), rect.top()))
+        grad.setColorAt(0, accent)
+        grad.setColorAt(1, accent.darker(115))
         painter.setBrush(QBrush(grad))
         painter.setPen(Qt.PenStyle.NoPen)
-        path = QPainterPath()
-        path.addRoundedRect(header, 6, 6)
-        # Clip bottom corners of header
-        clip = QRectF(rect.x(), rect.y() + NODE_HEADER_H - 6, rect.width(), 6)
-        path.addRect(clip)
-        painter.drawPath(path)
-
-    def set_status(self, text: str) -> None:
-        self._status = text
-        self._status_item.setPlainText(text)
+        hp = QPainterPath()
+        hp.addRoundedRect(QRectF(rect.x(), rect.y(), rect.width(), HEADER_H), r, r)
+        bp = QPainterPath()
+        bp.addRect(QRectF(rect.x(), rect.y() + HEADER_H - r, rect.width(), r))
+        painter.drawPath(hp.united(bp))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            # Update all connections
             for port in self.inputs + self.outputs:
                 for conn in port.connections:
                     conn.update_path()
         return super().itemChange(change, value)
 
 
-# ---------- Canvas ----------
+MIME_TYPE = "application/x-dataforge-node"
+
 
 class NodeCanvas(QGraphicsView):
-    """Zoomable/pannable canvas for node editing."""
+    node_selected = pyqtSignal(object)
+    node_double_clicked = pyqtSignal(object)
 
-    node_selected = pyqtSignal(str, str)  # (node_name, display_name)
-    node_double_clicked = pyqtSignal(str)  # node_name
-
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None):
         self._scene = QGraphicsScene()
         super().__init__(self._scene, parent)
         self._nodes: list[NodeItem] = []
-        self._temp_connection: QGraphicsPathItem | None = None
-        self._drag_source_port: PortItem | None = None
+        self._temp: QGraphicsPathItem | None = None
+        self._drag_port: PortItem | None = None
         self._zoom = 1.0
+        self._pan_start: QPointF | None = None
 
         self.setAcceptDrops(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scene.setSceneRect(-2000, -2000, 4000, 4000)
-        _update_colors()
-        self.setBackgroundBrush(QBrush(QColor(_C["canvas"])))
+        self._scene.setSceneRect(-3000, -3000, 6000, 6000)
+        self.setBackgroundBrush(QBrush(QColor(T.SURFACE_DIM)))
 
-    def add_node(self, node_name: str, display_name: str, x: float = 0, y: float = 0) -> NodeItem:
-        """Add a node to the canvas."""
-        node = NodeItem(node_name, display_name, x, y)
+    def add_node(self, node_id: str, x: float = 0, y: float = 0) -> NodeItem | None:
+        from core.nodes import NODE_REGISTRY
+        spec = NODE_REGISTRY.get(node_id)
+        if not spec:
+            return None
+        summary = []
+        for p in spec.parameters:
+            if p.param_type == "bool":
+                summary.append(f"{'✓' if p.default else '✗'} {p.label}")
+            elif p.param_type == "choice":
+                summary.append(f"{p.label}: {p.default}")
+            else:
+                summary.append(f"{p.label}: {p.default}")
+        node = NodeItem(
+            node_id, spec.label, spec.category,
+            [p.name for p in spec.inputs], [p.name for p in spec.outputs],
+            summary, x, y,
+        )
+        node.set_params({p.name: p.default for p in spec.parameters})
         self._scene.addItem(node)
         self._nodes.append(node)
         return node
 
-    def remove_selected(self) -> None:
-        """Remove all selected nodes and their connections."""
+    def get_nodes(self) -> list[NodeItem]:
+        return list(self._nodes)
+
+    def remove_selected(self):
         for item in list(self._scene.selectedItems()):
             if isinstance(item, NodeItem):
-                # Remove connections
                 for port in item.inputs + item.outputs:
-                    for conn in list(port.connections):
-                        conn.remove()
+                    for c in list(port.connections):
+                        c.remove()
                 self._scene.removeItem(item)
                 if item in self._nodes:
                     self._nodes.remove(item)
 
-    def get_nodes(self) -> list[NodeItem]:
-        return list(self._nodes)
-
-    def clear_all(self) -> None:
+    def clear_all(self):
         self._nodes.clear()
         self._scene.clear()
 
-    # ---- Events ----
-
-    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+    # ---- Grid ----
+    def drawBackground(self, painter: QPainter, rect: QRectF):
         super().drawBackground(painter, rect)
-        # Draw grid
-        pen = QPen(QColor(_C["grid"]), 0.5)
+        pen = QPen(QColor(T.BORDER), 0.4)
         painter.setPen(pen)
-
-        left = int(rect.left()) - (int(rect.left()) % GRID_SIZE)
-        top = int(rect.top()) - (int(rect.top()) % GRID_SIZE)
-
-        lines = []
-        x = left
+        l = int(rect.left()) - (int(rect.left()) % GRID)
+        t = int(rect.top()) - (int(rect.top()) % GRID)
+        x = l
         while x < rect.right():
-            lines.append((QPointF(x, rect.top()), QPointF(x, rect.bottom())))
-            x += GRID_SIZE
-        y = top
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            x += GRID
+        y = t
         while y < rect.bottom():
-            lines.append((QPointF(rect.left(), y), QPointF(rect.right(), y)))
-            y += GRID_SIZE
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            y += GRID
 
-        for p1, p2 in lines:
-            painter.drawLine(p1, p2)
-
-    def wheelEvent(self, event) -> None:
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self._zoom *= factor
-        self._zoom = max(0.2, min(3.0, self._zoom))
-        self.setTransform(self.transform().scale(factor, factor) if abs(factor - 1) > 0.001 else self.transform())
-        # Simpler zoom
+    # ---- Zoom ----
+    def wheelEvent(self, event):
+        f = 1.12 if event.angleDelta().y() > 0 else 1 / 1.12
+        self._zoom = max(0.15, min(4.0, self._zoom * f))
         self.resetTransform()
         self.scale(self._zoom, self._zoom)
 
-    def mousePressEvent(self, event) -> None:
+    # ---- Pan (middle button) + port drag ----
+    def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.MiddleButton:
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            fake = type(event)(
-                event.type(), event.localPos(), Qt.MouseButton.LeftButton,
-                event.buttons(), event.modifiers()
-            )
-            super().mousePressEvent(fake)
-            return
-
-        # Check if clicking on a port
-        item = self.itemAt(event.pos())
-        if isinstance(item, PortItem) and item.is_output:
-            self._drag_source_port = item
-            self._temp_connection = QGraphicsPathItem()
-            self._temp_connection.setPen(QPen(QColor(_C["connection"]), 2, Qt.PenStyle.DashLine))
-            self._scene.addItem(self._temp_connection)
+            self._pan_start = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
-
+        item = self.itemAt(event.pos())
+        if isinstance(item, PortItem) and item.is_output:
+            self._drag_port = item
+            self._temp = QGraphicsPathItem()
+            self._temp.setPen(QPen(QColor(T.ACCENT), 2, Qt.PenStyle.DashLine))
+            self._scene.addItem(self._temp)
+            event.accept()
+            return
         super().mousePressEvent(event)
+        sel = [i for i in self._scene.selectedItems() if isinstance(i, NodeItem)]
+        self.node_selected.emit(sel[0] if sel else None)
 
-    def mouseMoveEvent(self, event) -> None:
-        if self._drag_source_port and self._temp_connection:
-            p1 = self._drag_source_port.center_scene
+    def mouseMoveEvent(self, event):
+        if self._pan_start is not None:
+            delta = event.position() - self._pan_start
+            self._pan_start = event.position()
+            self.horizontalScrollBar().setValue(int(self.horizontalScrollBar().value() - delta.x()))
+            self.verticalScrollBar().setValue(int(self.verticalScrollBar().value() - delta.y()))
+            event.accept()
+            return
+        if self._drag_port and self._temp:
+            p1 = self._drag_port.center_scene
             p2 = self.mapToScene(event.pos())
-            dx = abs(p2.x() - p1.x()) * 0.5
+            dx = max(abs(p2.x() - p1.x()) * 0.5, 30)
             path = QPainterPath()
             path.moveTo(p1)
             path.cubicTo(p1.x() + dx, p1.y(), p2.x() - dx, p2.y(), p2.x(), p2.y())
-            self._temp_connection.setPath(path)
+            self._temp.setPath(path)
+            event.accept()
             return
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
-
-        if self._drag_source_port and self._temp_connection:
-            # Check if released on an input port
-            item = self.itemAt(event.pos())
-            if isinstance(item, PortItem) and not item.is_output and item.node != self._drag_source_port.node:
-                conn = ConnectionItem(self._drag_source_port, item)
-                self._scene.addItem(conn)
-
-            self._scene.removeItem(self._temp_connection)
-            self._temp_connection = None
-            self._drag_source_port = None
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton and self._pan_start is not None:
+            self._pan_start = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
             return
-
+        if self._drag_port and self._temp:
+            item = self.itemAt(event.pos())
+            if isinstance(item, PortItem) and not item.is_output and item.node != self._drag_port.node:
+                conn = ConnectionItem(self._drag_port, item)
+                self._scene.addItem(conn)
+            self._scene.removeItem(self._temp)
+            self._temp = None
+            self._drag_port = None
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:
-        item = self.itemAt(event.pos())
-        while item and not isinstance(item, NodeItem):
-            item = item.parentItem()
-        if isinstance(item, NodeItem):
-            self.node_double_clicked.emit(item.node_name)
+    def mouseDoubleClickEvent(self, event):
+        items = self.items(event.pos())
+        node = None
+        for it in items:
+            if isinstance(it, NodeItem):
+                node = it
+                break
+            p = it.parentItem()
+            while p:
+                if isinstance(p, NodeItem):
+                    node = p
+                    break
+                p = p.parentItem()
+            if node:
+                break
+        if node:
+            self.node_double_clicked.emit(node)
+            event.accept()
+            return
         super().mouseDoubleClickEvent(event)
 
-    def contextMenuEvent(self, event) -> None:
-        from core.nodes import NODES
+    # ---- Drop from sidebar ----
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(MIME_TYPE):
+            nid = bytes(event.mimeData().data(MIME_TYPE)).decode()
+            pos = self.mapToScene(event.position().toPoint())
+            self.add_node(nid, pos.x(), pos.y())
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    # ---- Context menu ----
+    def contextMenuEvent(self, event):
+        from core.nodes import NODE_REGISTRY
         menu = QMenu(self)
-        for name, node in NODES.items():
-            action = menu.addAction(f"添加: {node.display_name}")
-            pos = self.mapToScene(event.pos())
-            action.triggered.connect(lambda checked, n=name, dn=node.display_name, p=pos:
-                                      self.add_node(n, dn, p.x(), p.y()))
+        cats = {"input": "输入", "processing": "处理", "output": "输出"}
+        for ck, cl in cats.items():
+            sub = menu.addMenu(cl)
+            for nid, spec in NODE_REGISTRY.items():
+                if spec.category == ck:
+                    pos = self.mapToScene(event.pos())
+                    sub.addAction(spec.label, lambda checked=False, n=nid, p=pos: self.add_node(n, p.x(), p.y()))
         menu.addSeparator()
         if self._scene.selectedItems():
             menu.addAction("删除选中", self.remove_selected)
         menu.exec(event.globalPos())
 
-    def keyPressEvent(self, event) -> None:
+    def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
             self.remove_selected()
         else:
             super().keyPressEvent(event)
-
-    # ---- Drag & drop from toolbox ----
-
-    MIME_TYPE = "application/x-dataforge-node"
-
-    def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasFormat(self.MIME_TYPE):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasFormat(self.MIME_TYPE):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event) -> None:
-        if event.mimeData().hasFormat(self.MIME_TYPE):
-            data = bytes(event.mimeData().data(self.MIME_TYPE)).decode()
-            parts = data.split("|", 1)
-            if len(parts) == 2:
-                node_name, display_name = parts
-                pos = self.mapToScene(event.position().toPoint())
-                node = self.add_node(node_name, display_name, pos.x(), pos.y())
-                # Auto-connect to previous node
-                if len(self._nodes) >= 2:
-                    prev = self._nodes[-2]
-                    if prev.outputs and node.inputs:
-                        conn = ConnectionItem(prev.outputs[0], node.inputs[0])
-                        self._scene.addItem(conn)
-            event.acceptProposedAction()
-        else:
-            super().dropEvent(event)

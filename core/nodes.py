@@ -1,162 +1,159 @@
-"""Processing node abstraction — unified interface for all data operations.
+"""Node specification registry — defines all available node types.
 
-Each node wraps an existing core function (quality, dedup, augment, split, export)
-with a standard protocol so that future UIs (node graph, pipeline builder) can
-discover, configure, and execute them uniformly.
+Every tool in the app is a node: data source, processing, output format.
+Each node declares its ports, parameters, and category.
+
+Pure Python — no PyQt imports.
 
 Usage::
 
-    from core.nodes import NODES, StepResult
-
-    node = NODES["quality_check"]
-    result = node.execute(images, {"blur_threshold": 100}, progress_cb=my_cb)
-    print(result.ok_count, result.details)
-
-The existing core functions are NOT modified — nodes are thin wrappers.
+    from core.nodes import NODE_REGISTRY, NodeSpec
+    spec = NODE_REGISTRY["data_source"]
+    print(spec.label, spec.category, spec.parameters)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Protocol, runtime_checkable
 
 
-# ---------- Result type ----------
-
-@dataclass
-class StepResult:
-    """Uniform result returned by every processing node."""
-    ok_count: int = 0
-    fail_count: int = 0
-    output_paths: list[Path] = field(default_factory=list)
-    details: Any = None          # node-specific payload
-
-
-# ---------- Protocol ----------
-
-ProgressCb = Callable[[int, int, str], None]
+@dataclass(frozen=True)
+class Parameter:
+    """One configurable parameter on a node."""
+    name: str
+    label: str
+    param_type: str       # "int" | "float" | "bool" | "str" | "choice" | "path"
+    default: object
+    choices: tuple[str, ...] = ()     # for "choice" type
+    min_val: float | None = None
+    max_val: float | None = None
+    tooltip: str = ""
 
 
-@runtime_checkable
-class ProcessingNode(Protocol):
-    """Interface that every processing node must satisfy."""
-
-    @property
-    def name(self) -> str:
-        """Machine-readable identifier (e.g. 'quality_check')."""
-        ...
-
-    @property
-    def display_name(self) -> str:
-        """Human-readable label for UI (e.g. '质量检查')."""
-        ...
-
-    @property
-    def step_type(self) -> str:
-        """Category: 'clean' | 'augment' | 'transform' | 'split' | 'export'."""
-        ...
-
-    @property
-    def description(self) -> str:
-        """One-line description for tooltips."""
-        ...
-
-    def execute(
-        self,
-        images: list,
-        options: dict[str, Any],
-        progress_cb: ProgressCb | None = None,
-    ) -> StepResult:
-        """Run the processing step. *images* is list[ImageInfo] or list[Path]."""
-        ...
+@dataclass(frozen=True)
+class PortSpec:
+    """Input or output port definition."""
+    name: str
+    data_type: str = "dataset"   # "dataset" | "images" | "split"
 
 
-# ---------- Concrete nodes wrapping existing core functions ----------
-
-class QualityCheckNode:
-    name = "quality_check"
-    display_name = "质量检查"
-    step_type = "clean"
-    description = "检测模糊/空白/过曝/欠曝/损坏图像"
-
-    def execute(self, images, options, progress_cb=None):
-        from .quality import QualityOptions, check_images
-        opts = QualityOptions(blur_threshold=options.get("blur_threshold", 100))
-        issues = check_images(images, opts=opts, progress_cb=progress_cb)
-        return StepResult(
-            ok_count=len(images) - len(issues),
-            fail_count=len(issues),
-            details=issues,
-        )
+@dataclass(frozen=True)
+class NodeSpec:
+    """Complete specification of a node type."""
+    node_id: str
+    label: str
+    category: str             # "input" | "processing" | "output"
+    icon: str = ""            # FluentIcon name hint for GUI
+    inputs: tuple[PortSpec, ...] = ()
+    outputs: tuple[PortSpec, ...] = ()
+    parameters: tuple[Parameter, ...] = ()
 
 
-class DedupNode:
-    name = "dedup"
-    display_name = "重复检测"
-    step_type = "clean"
-    description = "基于感知哈希发现重复或近似图片"
+# =====================================================================
+# Node Registry
+# =====================================================================
 
-    def execute(self, images, options, progress_cb=None):
-        from .dedup import find_duplicates
-        threshold = options.get("threshold", 5)
-        groups = find_duplicates(images, threshold=threshold, progress_cb=progress_cb)
-        dup_count = sum(len(g.duplicates) for g in groups)
-        return StepResult(
-            ok_count=len(images) - dup_count,
-            fail_count=dup_count,
-            details=groups,
-        )
+NODE_REGISTRY: dict[str, NodeSpec] = {}
 
 
-class AugmentNode:
-    name = "augment"
-    display_name = "数据增强"
-    step_type = "augment"
-    description = "生成增强样本"
-
-    def execute(self, images, options, progress_cb=None):
-        from .augment import AugmentOptions, augment_batch
-        out_dir = Path(options.pop("out_dir"))
-        opts = AugmentOptions(**options)
-        result = augment_batch(
-            [img.path if hasattr(img, "path") else img for img in images],
-            out_dir, opts, progress_cb=progress_cb,
-        )
-        return StepResult(
-            ok_count=len(result.written_images),
-            fail_count=len(result.failed),
-            output_paths=result.written_images,
-            details=result,
-        )
+def _reg(spec: NodeSpec) -> None:
+    NODE_REGISTRY[spec.node_id] = spec
 
 
-class SplitNode:
-    name = "split"
-    display_name = "数据集划分"
-    step_type = "split"
-    description = "划分 train/val/test"
+# ---------- Input nodes ----------
 
-    def execute(self, images, options, progress_cb=None):
-        from .splitter import SplitOptions, split_dataset
-        # images here is actually a Dataset
-        dataset = images
-        opts = SplitOptions(
-            train_ratio=options.get("train", 0.8),
-            val_ratio=options.get("val", 0.1),
-            test_ratio=options.get("test", 0.1),
-            stratified=options.get("stratified", True),
-        )
-        result = split_dataset(dataset, opts)
-        total = len(result.train) + len(result.val) + len(result.test)
-        return StepResult(ok_count=total, details=result)
+_reg(NodeSpec(
+    node_id="data_source",
+    label="数据源",
+    category="input",
+    icon="DATABASE",
+    inputs=(),
+    outputs=(PortSpec("输出", "dataset"),),
+    parameters=(
+        Parameter("path", "数据集路径", "path", ""),
+    ),
+))
+
+# ---------- Processing nodes ----------
+
+_reg(NodeSpec(
+    node_id="quality_check",
+    label="质量检查",
+    category="processing",
+    icon="CERTIFICATE",
+    inputs=(PortSpec("输入", "dataset"),),
+    outputs=(PortSpec("输出", "dataset"),),
+    parameters=(
+        Parameter("blur_threshold", "模糊阈值", "float", 100.0,
+                  min_val=1, max_val=5000, tooltip="Laplacian 方差，越小越模糊"),
+        Parameter("check_corrupt", "检测损坏", "bool", True),
+        Parameter("check_blank", "检测空白", "bool", True),
+    ),
+))
+
+_reg(NodeSpec(
+    node_id="dedup",
+    label="重复检测",
+    category="processing",
+    icon="COPY",
+    inputs=(PortSpec("输入", "dataset"),),
+    outputs=(PortSpec("输出", "dataset"),),
+    parameters=(
+        Parameter("threshold", "相似阈值", "int", 5,
+                  min_val=0, max_val=20, tooltip="0=完全相同 5=视觉近似"),
+    ),
+))
+
+_reg(NodeSpec(
+    node_id="augment",
+    label="数据增强",
+    category="processing",
+    icon="ADD",
+    inputs=(PortSpec("输入", "dataset"),),
+    outputs=(PortSpec("输出", "dataset"),),
+    parameters=(
+        Parameter("flip_h", "水平翻转", "bool", True),
+        Parameter("flip_v", "垂直翻转", "bool", False),
+        Parameter("rotate90", "随机旋转", "bool", True),
+        Parameter("brightness", "亮度抖动", "bool", True),
+        Parameter("n_per_image", "每张生成", "int", 3, min_val=1, max_val=50),
+    ),
+))
+
+_reg(NodeSpec(
+    node_id="split",
+    label="数据集划分",
+    category="processing",
+    icon="TILES",
+    inputs=(PortSpec("输入", "dataset"),),
+    outputs=(PortSpec("输出", "split"),),
+    parameters=(
+        Parameter("train", "训练集比例", "float", 0.8, min_val=0, max_val=1),
+        Parameter("val", "验证集比例", "float", 0.1, min_val=0, max_val=1),
+        Parameter("test", "测试集比例", "float", 0.1, min_val=0, max_val=1),
+        Parameter("stratified", "分层采样", "bool", True),
+    ),
+))
+
+# ---------- Output nodes ----------
+
+_reg(NodeSpec(
+    node_id="export",
+    label="导出",
+    category="output",
+    icon="SEND",
+    inputs=(PortSpec("输入", "dataset"),),
+    outputs=(),
+    parameters=(
+        Parameter("format", "导出格式", "choice", "YOLO",
+                  choices=("YOLO", "COCO", "Pascal VOC", "ImageFolder", "MVTec", "CSV", "JSON Lines")),
+        Parameter("out_dir", "输出目录", "path", ""),
+        Parameter("copy_images", "复制图片", "bool", True),
+    ),
+))
 
 
-# ---------- Node registry ----------
+# ---------- Helpers ----------
 
-NODES: dict[str, ProcessingNode] = {
-    "quality_check": QualityCheckNode(),
-    "dedup": DedupNode(),
-    "augment": AugmentNode(),
-    "split": SplitNode(),
-}
-"""All available processing nodes, keyed by name."""
+def nodes_by_category(cat: str) -> list[NodeSpec]:
+    """Return all nodes in a category, ordered by registration."""
+    return [s for s in NODE_REGISTRY.values() if s.category == cat]
