@@ -160,7 +160,7 @@ class PortItem(QGraphicsEllipseItem):
 # ---------------------------------------------------------------------------
 
 class ConnectionItem(QGraphicsPathItem):
-    """Smooth bezier curve between two ports."""
+    """Smooth bezier curve between two ports. Selectable + deletable."""
 
     def __init__(self, source: PortItem, target: PortItem) -> None:
         super().__init__()
@@ -170,16 +170,33 @@ class ConnectionItem(QGraphicsPathItem):
         target.connections.append(self)
         self._hovered = False
         self.setAcceptHoverEvents(True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setZValue(0)
         self.update_path()
 
     def update_path(self) -> None:
         _set_bezier(self, self.source.center_scene, self.target.center_scene)
 
+    def shape(self) -> QPainterPath:
+        """Wide hit area (8px) for easy selection."""
+        from PyQt6.QtGui import QPainterPathStroker
+        stroker = QPainterPathStroker()
+        stroker.setWidth(10)
+        return stroker.createStroke(self.path())
+
+    def boundingRect(self) -> QRectF:
+        return self.shape().boundingRect()
+
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ARG002
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        c = QColor(T.ACCENT) if self._hovered else QColor(T.TEXT_3)
-        pen = QPen(c, CONN_W + (0.5 if self._hovered else 0))
+        selected = self.isSelected()
+        if selected or self._hovered:
+            c = QColor(T.ACCENT)
+            w = CONN_W + 0.5
+        else:
+            c = QColor(T.TEXT_3)
+            w = CONN_W
+        pen = QPen(c, w)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawPath(self.path())
@@ -191,6 +208,11 @@ class ConnectionItem(QGraphicsPathItem):
     def hoverLeaveEvent(self, event) -> None:
         self._hovered = False
         self.update()
+
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu()
+        menu.addAction("删除连线", self.remove)
+        menu.exec(event.screenPos())
 
     def remove(self) -> None:
         if self in self.source.connections:
@@ -456,7 +478,7 @@ class NodeCanvas(QGraphicsView):
     """Zoomable / pannable canvas with dot grid."""
 
     node_selected = pyqtSignal(str, str)
-    node_double_clicked = pyqtSignal(str)
+    node_double_clicked = pyqtSignal(object)  # emits NodeItem directly
 
     MIME_TYPE = "application/x-dataforge-node"
 
@@ -489,6 +511,10 @@ class NodeCanvas(QGraphicsView):
         return node
 
     def remove_selected(self) -> None:
+        """Delete selected connections first, then selected nodes."""
+        for item in list(self._scene.selectedItems()):
+            if isinstance(item, ConnectionItem):
+                item.remove()
         for item in list(self._scene.selectedItems()):
             if isinstance(item, NodeItem):
                 for port in item.inputs + item.outputs:
@@ -504,6 +530,88 @@ class NodeCanvas(QGraphicsView):
     def clear_all(self) -> None:
         self._nodes.clear()
         self._scene.clear()
+
+    # ---- connection validation ----
+
+    def _can_connect(self, src: PortItem, tgt: PortItem) -> bool:
+        """Validate a proposed connection."""
+        if src.node is tgt.node:
+            return False                    # no self-loops
+        if src.data_type != tgt.data_type:
+            return False                    # type mismatch
+        if any(c.source is src for c in tgt.connections):
+            return False                    # duplicate
+        if self._would_cycle(src.node, tgt.node):
+            return False                    # cycle
+        return True
+
+    def _would_cycle(self, from_node: NodeItem, to_node: NodeItem) -> bool:
+        """DFS from to_node's outputs — if we reach from_node, it's a cycle."""
+        visited: set[NodeItem] = set()
+        stack = [to_node]
+        while stack:
+            n = stack.pop()
+            if n is from_node:
+                return True
+            if n in visited:
+                continue
+            visited.add(n)
+            for port in n.outputs:
+                for conn in port.connections:
+                    stack.append(conn.target.node)
+        return False
+
+    def _try_connect(self, src: PortItem, tgt: PortItem) -> bool:
+        """Validate and create a connection. Replace existing if input occupied."""
+        if not self._can_connect(src, tgt):
+            return False
+        # Input port allows max 1 connection — replace old one
+        if tgt.connections:
+            for old in list(tgt.connections):
+                old.remove()
+        conn = ConnectionItem(src, tgt)
+        self._scene.addItem(conn)
+        return True
+
+    # ---- graph serialization ----
+
+    def build_graph(self) -> list[dict]:
+        """Serialize canvas into an executable graph for GraphEngine.
+
+        Returns list of node dicts:
+        {
+            "id": <node object id>,
+            "node_name": str,
+            "display_name": str,
+            "params": dict,
+            "inputs": {port_name: (upstream_id, upstream_port_name)},
+        }
+        """
+        id_map = {id(n): n for n in self._nodes}
+        result = []
+        for node in self._nodes:
+            nid = id(node)
+            inputs: dict[str, tuple[int, str]] = {}
+            for port in node.inputs:
+                if port.connections:
+                    conn = port.connections[0]  # max 1 per input
+                    upstream_node = conn.source.node
+                    inputs[port.port_name] = (id(upstream_node), conn.source.port_name)
+            result.append({
+                "id": nid,
+                "node_name": node.node_name,
+                "display_name": node.display_name,
+                "params": node.get_params(),
+                "inputs": inputs,
+            })
+        return result
+
+    def node_by_id(self, nid: int) -> NodeItem | None:
+        """Find node by python id (used by pipeline_view for status updates)."""
+        for n in self._nodes:
+            if id(n) == nid:
+                return n
+        return None
 
     def zoom_by(self, factor: float) -> None:
         self._zoom *= factor
@@ -630,8 +738,7 @@ class NodeCanvas(QGraphicsView):
                 target = self._find_nearest_port(cursor)
 
             if target:
-                conn = ConnectionItem(self._drag_port, target)
-                self._scene.addItem(conn)
+                self._try_connect(self._drag_port, target)
 
             self._scene.removeItem(self._temp_conn)
             self._temp_conn = None
@@ -644,7 +751,7 @@ class NodeCanvas(QGraphicsView):
         while item and not isinstance(item, NodeItem):
             item = item.parentItem()
         if isinstance(item, NodeItem):
-            self.node_double_clicked.emit(item.node_name)
+            self.node_double_clicked.emit(item)
         super().mouseDoubleClickEvent(event)
 
     def _highlight_ports(self, source: PortItem, on: bool) -> None:

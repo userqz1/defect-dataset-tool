@@ -341,5 +341,32 @@ QFrame#inspectorHeader {{
     border-bottom: 1px solid {BORDER};
 }}
 QLabel#inspectorDesc {{
+    color: {TEXT_2};
+}}
+QLabel#inspectorHint {{
     color: {TEXT_3};
+    font-size: 11px;
+    padding: 2px 0;
+}}
+QLabel#inspectorSectionTitle {{
+    color: {TEXT_3};
+    font-weight: bold;
+    padding: 4px 0 2px 0;
+}}
+QFrame#inspectorSep {{
+    background-color: {BORDER};
+}}
+QLabel#inspectorPortInfo {{
+    color: {ACCENT};
+    padding: 2px 0;
+}}
+QTreeWidget#inspectorDirTree {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+    padding: 4px;
+    font-size: 12px;
+}}
+QTreeWidget#inspectorDirTree::item {{
+    padding: 2px 0;
 }}

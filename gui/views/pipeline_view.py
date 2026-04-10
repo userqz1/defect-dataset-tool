@@ -21,7 +21,6 @@ from core.models import Dataset
 from core.nodes import NODES
 from gui.theme import T
 from gui.widgets.node_editor import NodeCanvas, NodeItem
-from gui.widgets.node_inspector import NodeInspector
 from gui.workers.batch_worker import BatchWorker
 
 
@@ -37,8 +36,6 @@ class PipelineView(QWidget):
         self._dataset: Dataset | None = None
         self._worker: BatchWorker | None = None
         self._target_format = "YOLO"
-        self._selected_node: NodeItem | None = None
-
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -64,23 +61,10 @@ class PipelineView(QWidget):
         top_lay.addWidget(run_btn)
         root.addWidget(topbar)
 
-        # ---- Body: canvas + inspector ----
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-
+        # ---- Canvas (full width) ----
         self._canvas = NodeCanvas()
-        self._canvas.node_double_clicked.connect(self._on_node_clicked)
-        # Also handle single-click selection
-        self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
-        body.addWidget(self._canvas, 1)
-
-        self._inspector = NodeInspector()
-        self._inspector.params_changed.connect(self._on_params_changed)
-        self._inspector.closed.connect(self._on_inspector_closed)
-        body.addWidget(self._inspector)
-
-        root.addLayout(body, 1)
+        self._canvas.node_double_clicked.connect(self._on_node_dblclick)  # receives NodeItem
+        root.addWidget(self._canvas, 1)
 
         # ---- Zoom controls (overlay, top-right of canvas) ----
         self._zoom_frame = QFrame(self._canvas)
@@ -140,35 +124,20 @@ class PipelineView(QWidget):
         y = 60 + (n // 4) * 80
         self._canvas.add_node(node_name, display_name, x, y, step_type)
 
-    def _on_node_clicked(self, node_name: str) -> None:
-        """Double-click a node → open inspector."""
-        for item in self._canvas.get_nodes():
-            if item.node_name == node_name:
-                self._selected_node = item
-                self._inspector.show_node(node_name, item.get_params())
-                return
+    def _on_node_dblclick(self, node_item) -> None:
+        """Double-click a node → open config dialog."""
+        from gui.dialogs.node_config_dialog import NodeConfigDialog
+        from gui.widgets.node_editor import NodeItem
 
-    def _on_selection_changed(self) -> None:
-        """Scene selection changed → update inspector."""
-        selected = [i for i in self._canvas._scene.selectedItems()
-                    if isinstance(i, NodeItem)]
-        if len(selected) == 1:
-            node = selected[0]
-            self._selected_node = node
-            self._inspector.show_node(node.node_name, node.get_params())
-        elif not selected:
-            self._selected_node = None
-            self._inspector.hide_node()
+        if not isinstance(node_item, NodeItem):
+            return
 
-    def _on_params_changed(self, node_name: str, values: dict) -> None:
-        """Inspector value changed → update node."""
-        if self._selected_node and self._selected_node.node_name == node_name:
-            self._selected_node.set_params(values)
-
-    def _on_inspector_closed(self) -> None:
-        self._selected_node = None
-        # Clear selection on canvas
-        self._canvas._scene.clearSelection()
+        dlg = NodeConfigDialog(
+            node_item.node_name, node_item.display_name,
+            node_item.get_params(), parent=self.window(),
+        )
+        if dlg.exec():
+            node_item.set_params(dlg.get_values())
 
     # ---- Grid status ----
 
@@ -185,10 +154,10 @@ class PipelineView(QWidget):
         self._grid_status.style().unpolish(self._grid_status)
         self._grid_status.style().polish(self._grid_status)
 
-    # ---- Pipeline execution ----
+    # ---- Pipeline execution (graph-based) ----
 
     def _on_run(self) -> None:
-        if not self._dataset or self._worker:
+        if self._worker:
             return
         nodes = self._canvas.get_nodes()
         if not nodes:
@@ -196,22 +165,44 @@ class PipelineView(QWidget):
                             duration=2000, position=InfoBarPosition.TOP)
             return
 
-        from core.pipeline import PipelineContext, PipelineEngine
-        from core.task_types import TaskType
+        # Validate: check disconnected required inputs
+        from core.nodes import NODES as NODE_SPECS
+        graph = self._canvas.build_graph()
+        for ndef in graph:
+            spec = NODE_SPECS.get(ndef["node_name"])
+            if not spec:
+                continue
+            for pdef in getattr(spec, "ports", ()):
+                if pdef.direction == "input" and pdef.name not in ndef["inputs"]:
+                    # Mark the node as error
+                    node_item = self._canvas.node_by_id(ndef["id"])
+                    if node_item:
+                        node_item.set_state("error")
+                    InfoBar.warning(
+                        "连接不完整",
+                        f"「{ndef['display_name']}」的输入端口未连接",
+                        parent=self.window(), duration=3000,
+                        position=InfoBarPosition.TOP,
+                    )
+                    return
+
+        # Mark all nodes as running
+        for node_item in nodes:
+            node_item.set_state("running")
+
+        from core.pipeline import GraphEngine
         from gui.dialogs.op_dialogs import ProgressDialog
 
-        task_type = getattr(self, "_task_type", TaskType.DETECTION)
-        ctx = PipelineContext.from_dataset(self._dataset, task_type)
-        engine = PipelineEngine()
-        for node_item in nodes:
-            engine.add_step(node_item.node_name, node_item.get_params())
-
+        self._graph = graph
         self._progress = ProgressDialog("执行处理流程", parent=self.window())
         self._progress.show()
         self._run_btn.setEnabled(False)
 
+        engine = GraphEngine()
+        dataset = self._dataset
+
         def task(progress_cb):
-            return engine.execute(ctx, progress_cb=progress_cb)
+            return engine.execute(graph, dataset, progress_cb=progress_cb)
 
         self._worker = BatchWorker(task)
         self._worker.progress.connect(self._on_progress)
@@ -229,14 +220,22 @@ class PipelineView(QWidget):
             self._progress.close()
             self._progress = None
         self._run_btn.setEnabled(True)
-        for record in result.step_results:
-            for node_item in self._canvas.get_nodes():
-                if node_item.node_name == record.node_name:
-                    node_item.set_status(record.message)
+
+        # Update node states from results
+        for nid, record in result.node_results.items():
+            node_item = self._canvas.node_by_id(nid)
+            if node_item:
+                node_item.set_state("done" if record.success else "error")
+                node_item.set_status(record.message)
+
         if result.success:
             InfoBar.success("完成", f"{result.steps_run} 个节点执行完成",
                             parent=self.window(), duration=3000,
                             position=InfoBarPosition.TOP)
+        elif result.error:
+            InfoBar.error("执行错误", result.error,
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
 
     def _on_failed(self, msg: str) -> None:
         self._worker = None
@@ -244,5 +243,8 @@ class PipelineView(QWidget):
             self._progress.close()
             self._progress = None
         self._run_btn.setEnabled(True)
+        # Reset all nodes to idle
+        for node_item in self._canvas.get_nodes():
+            node_item.set_state("")
         InfoBar.error("失败", msg, parent=self.window(),
                       duration=5000, position=InfoBarPosition.TOP)
