@@ -54,6 +54,9 @@ class Tokens:
     PAD: int = 10
     PAD_LG: int = 16
     PAD_XL: int = 20
+    PAD_2XL: int = 32
+    PAD_3XL: int = 48
+    PAD_HERO: int = 60
 
     # ---- Sizes ----
     SIDEBAR_WIDTH: int = 240

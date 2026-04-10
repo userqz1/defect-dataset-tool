@@ -31,6 +31,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     SpinBox,
+    StrongBodyLabel,
     SubtitleLabel,
 )
 
@@ -58,7 +59,7 @@ class StandardsView(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         container = QWidget()
         root = QVBoxLayout(container)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_XL)
         scroll.setWidget(container)
 
@@ -67,13 +68,9 @@ class StandardsView(QWidget):
         outer.addWidget(scroll)
 
         root.addWidget(SubtitleLabel("数据采集规范"))
-        root.addWidget(CaptionLabel(
-            "配置数据标准 → 生成规范文档发给采集方 → 收到数据后一键校验是否合规"
-        ))
 
         # ============ 区域 1：类别定义 ============
-        self._add_section(root, "① 定义数据类别",
-                          "每个类别代表一种目标类型。添加类别名称和说明，采集方会按此分类拍照。")
+        self._add_section(root, "① 定义数据类别", "")
 
         cat_frame = QFrame()
         cat_frame.setObjectName("chartFrame")
@@ -110,8 +107,7 @@ class StandardsView(QWidget):
         root.addWidget(cat_frame)
 
         # ============ 区域 2：图片要求 ============
-        self._add_section(root, "② 图片采集要求",
-                          "设置图片格式、分辨率等要求，采集方按此标准拍照和存储。")
+        self._add_section(root, "② 图片采集要求", "")
 
         req_frame = QFrame()
         req_frame.setObjectName("chartFrame")
@@ -183,11 +179,8 @@ class StandardsView(QWidget):
         gen_row.addStretch(1)
         action_layout.addLayout(gen_row)
 
-        action_layout.addWidget(CaptionLabel(
-            "\"生成规范文档\"：输出一份 Markdown 文件，包含目录结构、图片要求、类别说明、交付清单。"
-            "直接发给采集方照着做。\n"
-            "\"生成空目录\"：在指定位置创建规范的空文件夹结构，采集方往里放图片即可。"
-        ))
+        self.gen_doc_btn.setToolTip("输出 Markdown 规范文档，发给采集方照着做")
+        self.gen_dirs_btn.setToolTip("创建规范的空文件夹结构，采集方往里放图片即可")
 
         # 校验行
         validate_row = QHBoxLayout()
@@ -212,8 +205,7 @@ class StandardsView(QWidget):
 
     @staticmethod
     def _add_section(layout: QVBoxLayout, title: str, desc: str) -> None:
-        lbl = BodyLabel(title)
-        lbl.setStyleSheet(f"font-weight: bold; color: {T.TEXT};")
+        lbl = StrongBodyLabel(title)
         layout.addWidget(lbl)
         if desc:
             layout.addWidget(CaptionLabel(desc))

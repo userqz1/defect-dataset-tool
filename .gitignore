@@ -28,7 +28,7 @@ dist/
 Thumbs.db
 
 # App runtime/cache
-~/.defect_dataset_tool/
+~/.dataforge/
 *.sqlite
 *.db
 

@@ -1,11 +1,11 @@
-"""User preferences persisted to ~/.defect_dataset_tool/settings.json."""
+"""User preferences persisted to ~/.dataforge/settings.json."""
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SETTINGS_PATH = Path.home() / ".defect_dataset_tool" / "settings.json"
+SETTINGS_PATH = Path.home() / ".dataforge" / "settings.json"
 
 
 @dataclass

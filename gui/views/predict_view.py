@@ -33,14 +33,10 @@ class PredictView(QWidget):
         self._progress = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
-        root.addWidget(SubtitleLabel("AI 预标注 (本地)"))
-        root.addWidget(CaptionLabel(
-            "对未标注图片自动生成 LabelMe JSON 草稿,可在「浏览」/「详情」中复核。"
-            "需要安装 ultralytics(pip install ultralytics)。"
-        ))
+        root.addWidget(SubtitleLabel("AI 预标注"))
 
         # 后端
         backend_row = QHBoxLayout()

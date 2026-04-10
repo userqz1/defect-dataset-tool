@@ -1,10 +1,10 @@
-"""Recent dataset list. JSON file under ~/.defect_dataset_tool/recent.json."""
+"""Recent dataset list. JSON file under ~/.dataforge/recent.json."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-RECENT_PATH = Path.home() / ".defect_dataset_tool" / "recent.json"
+RECENT_PATH = Path.home() / ".dataforge" / "recent.json"
 MAX_RECENT = 10
 
 

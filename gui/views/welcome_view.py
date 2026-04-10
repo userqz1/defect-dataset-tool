@@ -39,8 +39,6 @@ class _ProjectCardDelegate(QStyledItemDelegate):
 
     CARD_HEIGHT = 92
     MARGIN = 6        # gap between card edge and option.rect
-    PAD_H = 20        # horizontal padding inside card
-    PAD_V = 14        # vertical padding inside card
     NAME_H = 22       # name line height
     PATH_H = 20       # path line height
     LINE_GAP = 6      # gap between name and path
@@ -71,9 +69,9 @@ class _ProjectCardDelegate(QStyledItemDelegate):
             return
 
         # Content area well inside the card
-        cx = card.x() + self.PAD_H
-        cy = card.y() + self.PAD_V
-        cw = card.width() - 2 * self.PAD_H
+        cx = card.x() + T.PAD_XL
+        cy = card.y() + T.PAD_LG - 2
+        cw = card.width() - 2 * T.PAD_XL
 
         # Row 1: Name (left) + Date (right)
         name_font = QFont(painter.font())
@@ -139,7 +137,7 @@ class WelcomeView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(60, 48, 60, 32)
+        root.setContentsMargins(T.PAD_HERO, T.PAD_3XL, T.PAD_HERO, T.PAD_2XL)
         root.setSpacing(T.GAP_XL)
 
         # Header
@@ -148,22 +146,26 @@ class WelcomeView(QWidget):
         title = LargeTitleLabel("数据工坊")
         title.setObjectName("welcomeTitle")
         header.addWidget(title)
-        subtitle = CaptionLabel("图像数据集管理工具 — 选择一个项目开始")
+        subtitle = CaptionLabel("图像数据集工程平台")
         header.addWidget(subtitle)
         root.addLayout(header)
 
-        # Action buttons
+        # Action buttons — task-oriented
         btn_row = QHBoxLayout()
         btn_row.setSpacing(T.GAP_LG)
-        open_btn = PrimaryPushButton("打开数据集目录")
+        new_btn = PrimaryPushButton("新建任务")
+        new_btn.setFixedHeight(40)
+        new_btn.clicked.connect(self._on_open_folder)
+        btn_row.addWidget(new_btn)
+        open_btn = PushButton("打开已有任务")
         open_btn.setFixedHeight(40)
         open_btn.clicked.connect(self._on_open_folder)
         btn_row.addWidget(open_btn)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        # Recent projects section
-        section_label = SubtitleLabel("最近项目")
+        # Recent tasks section
+        section_label = SubtitleLabel("最近任务")
         root.addWidget(section_label)
 
         self.project_list = QListWidget()
@@ -171,6 +173,7 @@ class WelcomeView(QWidget):
         self.project_list.setFrameShape(QFrame.Shape.NoFrame)
         self.project_list.setItemDelegate(_ProjectCardDelegate(self))
         self.project_list.setMouseTracking(True)
+        self.project_list.setToolTip("双击打开项目，右键查看更多选项")
         self.project_list.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.project_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.project_list.customContextMenuRequested.connect(self._on_context_menu)

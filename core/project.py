@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .recent import load_recent
+from .task_types import TaskType
 
 PROJECT_DIR = ".dataforge"
 PROJECT_FILE = "project.json"
@@ -55,6 +56,8 @@ class ReviewProgress:
 class Project:
     root_path: Path
     name: str
+    task_type: TaskType = TaskType.DETECTION
+    target_format: str = ""
     created_at: str = ""
     updated_at: str = ""
     notes: str = ""
@@ -95,9 +98,17 @@ def load_project(root: Path) -> Project | None:
     ec = raw.get("export_config") or {}
     rp = raw.get("review_progress") or {}
 
+    # Parse task_type with fallback
+    try:
+        task_type = TaskType(raw.get("task_type", TaskType.DETECTION.value))
+    except ValueError:
+        task_type = TaskType.DETECTION
+
     return Project(
         root_path=root,
         name=raw.get("name", root.name),
+        task_type=task_type,
+        target_format=raw.get("target_format", ""),
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         notes=raw.get("notes", ""),
@@ -137,6 +148,8 @@ def save_project(project: Project) -> None:
 
     payload = {
         "name": project.name,
+        "task_type": project.task_type.value,
+        "target_format": project.target_format,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "notes": project.notes,
@@ -152,11 +165,13 @@ def save_project(project: Project) -> None:
     )
 
 
-def create_project(root: Path, name: str | None = None) -> Project:
+def create_project(root: Path, name: str | None = None,
+                    task_type: TaskType = TaskType.DETECTION) -> Project:
     """Create a new project for a dataset directory."""
     project = Project(
         root_path=root,
         name=name or root.name,
+        task_type=task_type,
         created_at=_now_iso(),
         updated_at=_now_iso(),
     )

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**数据坊 (DataForge)** — A Windows desktop tool (Python 3.11 + PyQt6 + qfluentwidgets) for managing defect-annotation datasets. Users scan a dataset directory, browse images by category, view/edit LabelMe annotations, compute statistics, run quality checks, deduplicate, augment, split, and export to YOLO/COCO/VOC formats.
+**数据坊 (DataForge)** — A Windows desktop tool (Python 3.11 + PyQt6 + qfluentwidgets) for managing image datasets across CV task types (classification, detection, segmentation, anomaly detection). Users scan a dataset directory, browse images by category, view/edit annotations, compute statistics, run quality checks, deduplicate, augment, split, and export to multiple formats.
 
 Primary input: **LabelMe JSON**. Expected disk layout: `<root>/<category>/images/` + `<root>/<category>/labels/` (auto-detected; also handles flat, single-category, and recursive layouts).
 

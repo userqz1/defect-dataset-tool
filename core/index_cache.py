@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .models import Category, Dataset, ImageInfo
 
-DEFAULT_DB = Path.home() / ".defect_dataset_tool" / "index.sqlite"
+DEFAULT_DB = Path.home() / ".dataforge" / "index.sqlite"
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:

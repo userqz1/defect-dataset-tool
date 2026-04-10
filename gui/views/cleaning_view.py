@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -27,6 +28,7 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     SpinBox,
+    StrongBodyLabel,
     SubtitleLabel,
 )
 
@@ -52,11 +54,10 @@ class CleaningView(QWidget):
         self._progress = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("数据清洗"))
-        root.addWidget(CaptionLabel("检测并清理质量问题和重复图片，提升数据集质量"))
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -68,8 +69,7 @@ class CleaningView(QWidget):
         ql.setSpacing(T.GAP)
 
         q_header = QHBoxLayout()
-        q_header.addWidget(BodyLabel("质量检查"))
-        q_header.addWidget(CaptionLabel("检测模糊 / 空白 / 过曝 / 欠曝 / 损坏图像"))
+        q_header.addWidget(StrongBodyLabel("质量检查"))
         q_header.addStretch(1)
 
         q_header.addWidget(CaptionLabel("模糊阈值"))
@@ -77,6 +77,7 @@ class CleaningView(QWidget):
         self.blur_spin.setRange(1, 5000)
         self.blur_spin.setValue(100)
         self.blur_spin.setFixedWidth(100)
+        self.blur_spin.setToolTip("Laplacian 方差，越小越模糊")
         q_header.addWidget(self.blur_spin)
 
         self.quality_btn = PrimaryPushButton("开始检查")
@@ -113,8 +114,7 @@ class CleaningView(QWidget):
         dl.setSpacing(T.GAP)
 
         d_header = QHBoxLayout()
-        d_header.addWidget(BodyLabel("重复检测"))
-        d_header.addWidget(CaptionLabel("基于感知哈希发现重复或近似图片"))
+        d_header.addWidget(StrongBodyLabel("重复检测"))
         d_header.addStretch(1)
 
         d_header.addWidget(CaptionLabel("相似阈值"))
@@ -122,6 +122,7 @@ class CleaningView(QWidget):
         self.threshold_spin.setRange(0, 20)
         self.threshold_spin.setValue(5)
         self.threshold_spin.setFixedWidth(100)
+        self.threshold_spin.setToolTip("0=完全相同  5=视觉近似  越大越宽松")
         d_header.addWidget(self.threshold_spin)
 
         self.dedup_btn = PrimaryPushButton("开始检测")
@@ -151,6 +152,16 @@ class CleaningView(QWidget):
         self.dedup_summary.setText(f"待检测：{n:,} 张图片" if on else "")
         self.quality_list.clear()
         self.dedup_list.clear()
+        if on:
+            self._add_placeholder(self.quality_list, "点击「开始检查」运行质量检测")
+            self._add_placeholder(self.dedup_list, "点击「开始检测」查找重复图片")
+
+    @staticmethod
+    def _add_placeholder(lst: QListWidget, text: str) -> None:
+        item = QListWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        item.setForeground(QColor(T.TEXT_3))
+        lst.addItem(item)
 
     # ---- 质量检查 ----
 

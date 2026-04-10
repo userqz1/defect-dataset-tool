@@ -53,6 +53,7 @@ class BrowserView(QWidget):
     thumb_request = pyqtSignal(object)          # Path
     clear_thumb_queue = pyqtSignal()            # clear pending thumbnail requests
     add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
+    navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
 
     def __init__(self) -> None:
@@ -96,12 +97,18 @@ class BrowserView(QWidget):
         # 右侧主区
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(20, 16, 20, 12)
-        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.GAP_LG)
+        right_layout.setSpacing(T.PAD)
+
+        # 就绪检查条（替代独立概览页 — 核心设计：输出是已知格子，缺什么补什么）
+        self._readiness_bar = QHBoxLayout()
+        self._readiness_bar.setSpacing(T.GAP_LG)
+        self._readiness_items: list[QWidget] = []
+        right_layout.addLayout(self._readiness_bar)
 
         # 筛选栏
         filter_bar = QHBoxLayout()
-        filter_bar.setSpacing(8)
+        filter_bar.setSpacing(T.GAP)
 
         from PyQt6.QtCore import QTimer
         self.search = LineEdit()
@@ -156,7 +163,7 @@ class BrowserView(QWidget):
         # 分页栏
         from qfluentwidgets import SpinBox
         pager = QHBoxLayout()
-        pager.setSpacing(8)
+        pager.setSpacing(T.GAP)
         self.prev_btn = ToolButton(FIF.LEFT_ARROW)
         self.prev_btn.clicked.connect(self._prev_page)
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
@@ -169,7 +176,7 @@ class BrowserView(QWidget):
         self.count_label = CaptionLabel("")
         pager.addStretch(1)
         pager.addWidget(self.count_label)
-        pager.addSpacing(12)
+        pager.addSpacing(T.GAP_LG)
         pager.addWidget(self.prev_btn)
         pager.addWidget(CaptionLabel("第"))
         pager.addWidget(self.page_spin)
@@ -242,7 +249,39 @@ class BrowserView(QWidget):
         self._current_category = ""
         self._page = 0
         self.tree.load_dataset(dataset)
+        self._update_readiness(dataset)
         self._apply_filter_and_show()
+
+    def set_task_type(self, task_type) -> None:
+        """Store task type for compliance checking."""
+        self._task_type = task_type
+
+    def _update_readiness(self, dataset: Dataset) -> None:
+        """Show compliance status — objective facts from compliance checker."""
+        for w in self._readiness_items:
+            self._readiness_bar.removeWidget(w)
+            w.deleteLater()
+        self._readiness_items.clear()
+
+        # Run compliance check
+        from core.compliance import check_compliance
+        task_type = getattr(self, "_task_type", None)
+        if task_type is None:
+            from core.task_types import TaskType
+            task_type = TaskType.DETECTION
+
+        report = check_compliance(dataset, task_type)
+
+        for check in report.checks:
+            text = f"{check.icon} {check.item}: {check.current}"
+            lbl = CaptionLabel(text)
+            lbl.setObjectName("readinessOk" if check.passed else "readinessGap")
+            if not check.passed and check.action:
+                lbl.setToolTip(check.action)
+            self._readiness_bar.addWidget(lbl)
+            self._readiness_items.append(lbl)
+
+        self._readiness_bar.addStretch(1)
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)

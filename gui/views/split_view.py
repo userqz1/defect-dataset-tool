@@ -48,11 +48,10 @@ class SplitView(QWidget):
         self._last_result = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(T.PAD_XL + 12, T.PAD_XL + 8, T.PAD_XL + 12, T.PAD_XL)
+        root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
         root.addWidget(SubtitleLabel("数据集划分"))
-        root.addWidget(CaptionLabel("支持按比例、按数量或手动选择"))
 
         # 模式选择
         mode_row = QHBoxLayout()

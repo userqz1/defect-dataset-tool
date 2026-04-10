@@ -6,7 +6,7 @@ from pathlib import Path
 import diskcache
 from PIL import Image, ImageOps
 
-_DEFAULT_CACHE_DIR = Path.home() / ".defect_dataset_tool" / "thumbnails"
+_DEFAULT_CACHE_DIR = Path.home() / ".dataforge" / "thumbnails"
 
 
 class ThumbnailCache:

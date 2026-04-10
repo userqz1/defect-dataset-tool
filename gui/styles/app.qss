@@ -39,7 +39,7 @@ QLabel#datasetChipPath {{ color: {TEXT_3}; }}
 }}
 
 QWidget#overviewView, QWidget#browserView, QWidget#detailView,
-QWidget#qualityView, QWidget#exportView,
+QWidget#qualityView, QWidget#exportView, QWidget#pipelineView,
 QStackedWidget#browserStack {{
     background-color: {CONTENT};
 }}
@@ -249,4 +249,57 @@ QListWidget#projectList::item {{
     background: transparent;
     padding: 0;
     margin: 2px 0;
+}}
+
+/* ============================================================
+ * 8. 导出格式卡片
+ * ============================================================ */
+
+QFrame#formatCard {{
+    background-color: {CONTENT};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS_LG}px;
+}}
+QFrame#formatCard:hover {{
+    background-color: {HOVER};
+    border-color: {HOVER_STRONG};
+}}
+QFrame#formatCard[selected="true"] {{
+    background-color: {ACCENT_SOFT};
+    border: 2px solid {ACCENT};
+}}
+QLabel#formatCardName[selected="true"] {{
+    color: {ACCENT};
+}}
+
+/* ============================================================
+ * 9. 预览面板
+ * ============================================================ */
+
+QFrame#previewSlot {{
+    background-color: {SURFACE_DIM};
+    border: 1px solid {BORDER};
+    border-radius: {RADIUS}px;
+}}
+
+/* ============================================================
+ * 10. 占位视图
+ * ============================================================ */
+
+QLabel#placeholderStatus {{
+    color: {TEXT_2};
+}}
+
+/* ============================================================
+ * 11. 就绪检查条
+ * ============================================================ */
+
+QLabel#readinessOk {{
+    color: {SUCCESS};
+    padding: 2px 8px;
+}}
+QLabel#readinessGap {{
+    color: {WARNING};
+    padding: 2px 8px;
+    font-weight: bold;
 }}
