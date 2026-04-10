@@ -278,7 +278,6 @@ CATEGORY_META: dict[str, CategoryMeta] = {
 NODES: dict[str, ProcessingNode] = {
     "data_source": DataSourceNode(),
     "quality_check": QualityCheckNode(),
-    "dedup": DedupNode(),
     "augment": AugmentNode(),
     "split": SplitNode(),
     "export": ExportNode(),

@@ -124,7 +124,6 @@ class MainWindow(FluentWindow):
         _tool_icons = {
             "data_source": FIF.FOLDER,
             "quality_check": FIF.CERTIFICATE,
-            "dedup": FIF.COPY,
             "augment": FIF.ADD,
             "split": FIF.TILES,
             "export": FIF.SHARE,

@@ -1,12 +1,18 @@
-"""Pipeline view — node editor canvas + right inspector panel.
+"""Pipeline view — canvas + per-node workspace views.
 
-Central workspace: drag tools from sidebar onto the canvas,
-click a node to configure in the right panel, run the pipeline.
+Double-click a node → full-screen workspace replaces the canvas.
+Back button → return to canvas.
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
@@ -24,8 +30,48 @@ from gui.widgets.node_editor import NodeCanvas, NodeItem
 from gui.workers.batch_worker import BatchWorker
 
 
+# ---------------------------------------------------------------------------
+# Workspace wrapper — header with back button + content
+# ---------------------------------------------------------------------------
+
+class _WorkspaceWrapper(QWidget):
+    """Wraps a node workspace view with a back-button header."""
+
+    back_clicked = pyqtSignal()
+
+    def __init__(self, title: str, content: QWidget, parent=None) -> None:
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        # Header bar
+        header = QFrame()
+        header.setObjectName("detailTopBar")
+        header.setFixedHeight(44)
+        h = QHBoxLayout(header)
+        h.setContentsMargins(T.GAP, 0, T.PAD_LG, 0)
+        h.setSpacing(T.GAP)
+
+        back = TransparentToolButton(FIF.LEFT_ARROW)
+        back.setFixedSize(32, 32)
+        back.clicked.connect(self.back_clicked.emit)
+        h.addWidget(back)
+
+        lbl = StrongBodyLabel(title)
+        h.addWidget(lbl)
+        h.addStretch()
+
+        lay.addWidget(header)
+        lay.addWidget(content, 1)
+
+
+# ---------------------------------------------------------------------------
+# PipelineView
+# ---------------------------------------------------------------------------
+
 class PipelineView(QWidget):
-    """Node-based pipeline editor with right-side inspector."""
+    """Node canvas + stacked workspace views."""
 
     dataset_changed = pyqtSignal()
 
@@ -36,61 +82,67 @@ class PipelineView(QWidget):
         self._dataset: Dataset | None = None
         self._worker: BatchWorker | None = None
         self._target_format = "YOLO"
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- Top bar ----
+        # Stacked: page 0 = canvas view, page 1+ = workspaces
+        self._stack = QStackedWidget()
+        root.addWidget(self._stack)
+
+        # Page 0: Canvas with top bar
+        canvas_page = QWidget()
+        cp_lay = QVBoxLayout(canvas_page)
+        cp_lay.setContentsMargins(0, 0, 0, 0)
+        cp_lay.setSpacing(0)
+
+        # Top bar
         topbar = QFrame()
         topbar.setObjectName("detailTopBar")
         topbar.setFixedHeight(44)
         top_lay = QHBoxLayout(topbar)
         top_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
         top_lay.setSpacing(T.GAP_LG)
-
         self._format_label = StrongBodyLabel("目标: YOLO")
         top_lay.addWidget(self._format_label)
         self._grid_status = CaptionLabel("")
         top_lay.addWidget(self._grid_status)
         top_lay.addStretch(1)
-
         run_btn = PrimaryPushButton("执行流程")
         run_btn.setIcon(FIF.PLAY)
         run_btn.clicked.connect(self._on_run)
         self._run_btn = run_btn
         top_lay.addWidget(run_btn)
-        root.addWidget(topbar)
+        cp_lay.addWidget(topbar)
 
-        # ---- Canvas (full width) ----
+        # Canvas
         self._canvas = NodeCanvas()
-        self._canvas.node_double_clicked.connect(self._on_node_dblclick)  # receives NodeItem
-        root.addWidget(self._canvas, 1)
+        self._canvas.node_double_clicked.connect(self._on_node_dblclick)
+        cp_lay.addWidget(self._canvas, 1)
 
-        # ---- Zoom controls (overlay, top-right of canvas) ----
+        # Zoom overlay
         self._zoom_frame = QFrame(self._canvas)
         self._zoom_frame.setObjectName("zoomOverlay")
         self._zoom_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         z_lay = QVBoxLayout(self._zoom_frame)
         z_lay.setContentsMargins(4, 4, 4, 4)
         z_lay.setSpacing(2)
+        for icon, tip, fn in [
+            (FIF.ZOOM_IN, "放大", lambda: self._canvas.zoom_by(1.25)),
+            (FIF.ZOOM_OUT, "缩小", lambda: self._canvas.zoom_by(1 / 1.25)),
+            (FIF.FIT_PAGE, "适应", self._canvas.zoom_fit),
+        ]:
+            b = TransparentToolButton(icon)
+            b.setFixedSize(28, 28)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            z_lay.addWidget(b)
 
-        zi = TransparentToolButton(FIF.ZOOM_IN)
-        zi.setFixedSize(28, 28)
-        zi.setToolTip("放大")
-        zi.clicked.connect(lambda: self._canvas.zoom_by(1.25))
-        z_lay.addWidget(zi)
+        self._stack.addWidget(canvas_page)  # index 0
 
-        zo = TransparentToolButton(FIF.ZOOM_OUT)
-        zo.setFixedSize(28, 28)
-        zo.setToolTip("缩小")
-        zo.clicked.connect(lambda: self._canvas.zoom_by(1 / 1.25))
-        z_lay.addWidget(zo)
-
-        zf = TransparentToolButton(FIF.FIT_PAGE)
-        zf.setFixedSize(28, 28)
-        zf.setToolTip("适应窗口")
-        zf.clicked.connect(self._canvas.zoom_fit)
-        z_lay.addWidget(zf)
+        # Workspace cache: node_name → (wrapper_widget, stack_index)
+        self._workspaces: dict[str, tuple[_WorkspaceWrapper, int]] = {}
 
     # ---- API ----
 
@@ -116,7 +168,6 @@ class PipelineView(QWidget):
     # ---- Node interaction ----
 
     def _add_node(self, node_name: str, display_name: str) -> None:
-        """Add a node to the canvas (sidebar click)."""
         node = NODES.get(node_name)
         step_type = node.step_type if node else ""
         n = len(self._canvas.get_nodes())
@@ -125,19 +176,128 @@ class PipelineView(QWidget):
         self._canvas.add_node(node_name, display_name, x, y, step_type)
 
     def _on_node_dblclick(self, node_item) -> None:
-        """Double-click a node → open config dialog."""
-        from gui.dialogs.node_config_dialog import NodeConfigDialog
-        from gui.widgets.node_editor import NodeItem
-
+        """Double-click → open workspace for this node type."""
         if not isinstance(node_item, NodeItem):
             return
+        self._open_workspace(node_item)
 
+    def _open_workspace(self, node_item: NodeItem) -> None:
+        """Switch to the workspace view for this node."""
+        name = node_item.node_name
+
+        if name not in self._workspaces:
+            content = self._create_workspace(name, node_item)
+            if content is None:
+                # No workspace — use fallback dialog
+                self._open_dialog(node_item)
+                return
+            spec = NODES.get(name)
+            title = spec.display_name if spec else name
+            wrapper = _WorkspaceWrapper(title, content)
+            wrapper.back_clicked.connect(self._back_to_canvas)
+            idx = self._stack.addWidget(wrapper)
+            self._workspaces[name] = (wrapper, idx)
+
+        # Update workspace with current node data
+        self._update_workspace(name, node_item)
+
+        _, idx = self._workspaces[name]
+        self._stack.setCurrentIndex(idx)
+
+    def _create_workspace(self, name: str, node_item: NodeItem) -> QWidget | None:
+        """Create the workspace content widget for a node type."""
+        if name == "data_source":
+            return self._make_datasource_ws()
+        if name == "quality_check":
+            from gui.views.cleaning_view import CleaningView
+            view = CleaningView()
+            if self._dataset:
+                view.set_dataset(self._dataset)
+            return view
+        if name == "augment":
+            from gui.views.augment_view import AugmentView
+            view = AugmentView()
+            if self._dataset:
+                view.set_dataset(self._dataset)
+            return view
+        if name == "split":
+            from gui.views.split_view import SplitView
+            view = SplitView()
+            if self._dataset:
+                view.set_dataset(self._dataset)
+            return view
+        if name == "export":
+            from gui.views.export_view import ExportView
+            view = ExportView()
+            if self._dataset:
+                view.set_dataset(self._dataset)
+            return view
+        # Fallback: dialog
+        return None
+
+    def _update_workspace(self, name: str, node_item: NodeItem) -> None:
+        """Push current data into the workspace."""
+        wrapper, _ = self._workspaces[name]
+        content = wrapper.findChild(QWidget)
+        if self._dataset and hasattr(content, "set_dataset"):
+            content.set_dataset(self._dataset)
+
+    def _back_to_canvas(self) -> None:
+        self._stack.setCurrentIndex(0)
+
+    def _open_dialog(self, node_item: NodeItem) -> None:
+        """Fallback: open config dialog for nodes without a workspace."""
+        from gui.dialogs.node_config_dialog import NodeConfigDialog
         dlg = NodeConfigDialog(
             node_item.node_name, node_item.display_name,
             node_item.get_params(), parent=self.window(),
         )
         if dlg.exec():
             node_item.set_params(dlg.get_values())
+
+    # ---- Data source workspace ----
+
+    def _make_datasource_ws(self) -> QWidget:
+        """Data source workspace — browse dataset with thumbnails."""
+        from gui.views.browser_view import BrowserView
+        from gui.views.detail_view import DetailView
+        from gui.workers.thumbnail_worker import ThumbnailWorker
+
+        container = QWidget()
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        browser_stack = QStackedWidget()
+
+        browser = BrowserView()
+        detail = DetailView()
+
+        # Thumbnail worker for this workspace
+        thumb = ThumbnailWorker(size=170, parent=container)
+        thumb.start()
+        browser.thumb_request.connect(thumb.request)
+        browser.clear_thumb_queue.connect(thumb.clear_queue)
+        thumb.thumb_ready.connect(browser.on_thumb_ready)
+
+        browser.image_activated.connect(
+            lambda img, imgs: (detail.show_image(img, imgs),
+                               browser_stack.setCurrentWidget(detail))
+        )
+        detail.back_requested.connect(lambda: browser_stack.setCurrentWidget(browser))
+
+        browser_stack.addWidget(browser)
+        browser_stack.addWidget(detail)
+        lay.addWidget(browser_stack)
+
+        if self._dataset:
+            browser.load_dataset(self._dataset)
+
+        # Store references for later updates
+        container._browser = browser
+        container._thumb = thumb
+
+        return container
 
     # ---- Grid status ----
 
@@ -165,7 +325,6 @@ class PipelineView(QWidget):
                             duration=2000, position=InfoBarPosition.TOP)
             return
 
-        # Validate: check disconnected required inputs
         from core.nodes import NODES as NODE_SPECS
         graph = self._canvas.build_graph()
         for ndef in graph:
@@ -174,19 +333,17 @@ class PipelineView(QWidget):
                 continue
             for pdef in getattr(spec, "ports", ()):
                 if pdef.direction == "input" and pdef.name not in ndef["inputs"]:
-                    # Mark the node as error
                     node_item = self._canvas.node_by_id(ndef["id"])
                     if node_item:
                         node_item.set_state("error")
                     InfoBar.warning(
                         "连接不完整",
-                        f"「{ndef['display_name']}」的输入端口未连接",
+                        f"「{ndef['display_name']}」的输入未连接",
                         parent=self.window(), duration=3000,
                         position=InfoBarPosition.TOP,
                     )
                     return
 
-        # Mark all nodes as running
         for node_item in nodes:
             node_item.set_state("running")
 
@@ -221,7 +378,6 @@ class PipelineView(QWidget):
             self._progress = None
         self._run_btn.setEnabled(True)
 
-        # Update node states from results
         for nid, record in result.node_results.items():
             node_item = self._canvas.node_by_id(nid)
             if node_item:
@@ -243,7 +399,6 @@ class PipelineView(QWidget):
             self._progress.close()
             self._progress = None
         self._run_btn.setEnabled(True)
-        # Reset all nodes to idle
         for node_item in self._canvas.get_nodes():
             node_item.set_state("")
         InfoBar.error("失败", msg, parent=self.window(),
