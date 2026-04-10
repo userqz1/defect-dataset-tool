@@ -76,13 +76,14 @@ class PipelineView(QWidget):
 
     def add_node(self, node_id: str) -> None:
         """Add a node to the canvas from the sidebar."""
-        from gui.widgets.node_editor import NODE_CLASSES
-        cls = NODE_CLASSES.get(node_id)
-        if cls is None:
+        from gui.widgets.node_editor import NODE_ID_TO_TYPE
+        type_str = NODE_ID_TO_TYPE.get(node_id)
+        if not type_str:
             return
-        node = self._graph.create_node(
-            f"dataforge.{cls.NODE_NAME}",
-            pos=[200 + len(self._graph.all_nodes()) * 250, 200],
+        n = len(self._graph.all_nodes())
+        self._graph.create_node(
+            type_str,
+            pos=[150 + n * 260, 200],
         )
 
     def clear(self) -> None:
