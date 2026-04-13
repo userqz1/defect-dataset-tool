@@ -512,8 +512,12 @@ class PipelineView(QWidget):
 
         def _set_params(params):
             root = params.get("root_dir", "")
-            if root and Path(root).is_dir():
-                _scan_dir(Path(root))
+            if not root or not Path(root).is_dir():
+                return
+            # Skip re-scan if same directory already loaded
+            if container._root_dir and str(container._root_dir) == root and self._dataset:
+                return
+            _scan_dir(Path(root))
 
         container.get_params = _get_params
         container.set_params = _set_params
