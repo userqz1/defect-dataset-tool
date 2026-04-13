@@ -15,7 +15,7 @@ class ParseResult:
 
     @property
     def ok(self) -> bool:
-        return self.annotation is not None
+        return self.annotation is not None and self.error is None
 
 
 def parse_labelme(json_path: Path, image_path: Path | None = None) -> ParseResult:

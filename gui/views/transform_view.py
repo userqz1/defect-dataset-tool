@@ -204,11 +204,18 @@ class TransformView(QWidget):
         from gui.workers.batch_worker import BatchWorker
         from PIL import Image
 
+        import io
+
         def _task(cb):
             with Image.open(path) as src:
                 im = src.copy()
             after = apply_in_memory(im, kind, opts)
-            return (im, after)
+            # Convert to PNG bytes to avoid PIL cross-thread GC crash
+            buf_before = io.BytesIO()
+            im.save(buf_before, "PNG")
+            buf_after = io.BytesIO()
+            after.save(buf_after, "PNG")
+            return (buf_before.getvalue(), buf_after.getvalue())
 
         self._preview_worker = BatchWorker(_task)
         self._preview_worker.finished_ok.connect(self._on_preview_done)
@@ -218,7 +225,10 @@ class TransformView(QWidget):
     def _on_preview_done(self, result) -> None:
         self.preview_btn.setEnabled(True)
         self.preview_btn.setText("预览效果")
-        im, after = result
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(result[0]))
+        after = Image.open(io.BytesIO(result[1]))
         self.preview.set_before_after(im, after)
 
     def _on_preview_failed(self, msg: str) -> None:

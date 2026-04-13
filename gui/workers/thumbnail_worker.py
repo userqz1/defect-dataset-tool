@@ -43,6 +43,11 @@ class ThumbnailWorker(QThread):
         self._running = False
         self._queue.put(None)  # 唤醒
         self.wait(2000)
+        # Close the diskcache to release SQLite connection
+        try:
+            self._cache.close()
+        except Exception:
+            pass
 
     def run(self) -> None:
         while self._running:
