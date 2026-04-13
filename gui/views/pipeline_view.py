@@ -365,176 +365,78 @@ class PipelineView(QWidget):
     # ---- Data source workspace ----
 
     def _make_datasource_ws(self) -> QWidget:
-        """Data source workspace — select directory, scan, browse."""
-        from PyQt6.QtWidgets import QFileDialog
+        """Data source workspace — shows current dataset info.
+
+        The full browser is now a top-level view (DatasetBrowserView).
+        This workspace just displays the dataset path/stats and a button
+        to switch to the browser or pick a new directory.
+        """
         from pathlib import Path
-        from gui.views.browser_view import BrowserView
-        from gui.views.detail_view import DetailView
-        from gui.workers.scan_worker import ScanWorker
-        from gui.workers.thumbnail_worker import ThumbnailWorker
+        from PyQt6.QtWidgets import QFileDialog
+        from qfluentwidgets import BodyLabel
 
         container = QWidget()
         lay = QVBoxLayout(container)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        lay.setContentsMargins(T.PAD_2XL, T.PAD_2XL, T.PAD_2XL, T.PAD_2XL)
+        lay.setSpacing(T.PAD_LG)
 
-        # Top bar: directory picker + stats
-        topbar = QFrame()
-        topbar.setObjectName("detailTopBar")
-        topbar.setFixedHeight(44)
-        tb_lay = QHBoxLayout(topbar)
-        tb_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
-        tb_lay.setSpacing(T.GAP)
-
-        path_label = CaptionLabel("未选择目录")
-        tb_lay.addWidget(path_label, 1)
+        path_label = StrongBodyLabel("未选择目录")
+        lay.addWidget(path_label)
 
         stats_label = CaptionLabel("")
-        tb_lay.addWidget(stats_label)
+        lay.addWidget(stats_label)
 
         open_btn = PrimaryPushButton("选择目录")
         open_btn.setIcon(FIF.FOLDER)
-        open_btn.setFixedWidth(120)
-        tb_lay.addWidget(open_btn)
+        open_btn.setFixedWidth(140)
+        open_btn.clicked.connect(lambda: self._datasource_pick_dir(container))
+        lay.addWidget(open_btn)
 
-        lay.addWidget(topbar)
+        lay.addStretch()
 
-        # Browser + Detail stack
-        browser_stack = QStackedWidget()
-        browser = BrowserView()
-        detail = DetailView()
-
-        thumb = ThumbnailWorker(size=170, parent=container)
-        thumb.start()
-        browser.thumb_request.connect(thumb.request)
-        browser.clear_thumb_queue.connect(thumb.clear_queue)
-        thumb.thumb_ready.connect(browser.on_thumb_ready)
-
-        browser.image_activated.connect(
-            lambda img, imgs: (detail.show_image(img, imgs),
-                               browser_stack.setCurrentWidget(detail))
-        )
-        detail.back_requested.connect(lambda: browser_stack.setCurrentWidget(browser))
-
-        browser_stack.addWidget(browser)
-        browser_stack.addWidget(detail)
-        lay.addWidget(browser_stack, 1)
-
-        # Store refs
-        container._browser = browser
-        container._thumb = thumb
-        container._scan_worker = None
-        container._root_dir = None  # persisted to scheme params
-
-        def _scan_dir(root: Path):
-            """Scan a directory and load into browser."""
-            container._root_dir = root
-            # Write root_dir back to NodeItem immediately
-            if container._node_item is not None:
-                container._node_item.set_params({"root_dir": str(root)})
-            path_label.setText(str(root))
-            open_btn.setEnabled(False)
-            stats_label.setText("扫描中…")
-
-            from gui.dialogs.op_dialogs import ProgressDialog
-            progress = ProgressDialog("扫描数据集", parent=self.window())
-            progress.show()
-
-            worker = ScanWorker(root, parent=container)
-            container._scan_worker = worker
-
-            def on_progress(done, total, name):
-                progress.set_progress(done, total, name)
-
-            def on_done(result):
-                container._scan_worker = None
-                progress.accept()
-                open_btn.setEnabled(True)
-
-                from gui.workers.scan_worker import ScanResult
-                ds = result.dataset if isinstance(result, ScanResult) else result
-                self._dataset = ds
-                browser.load_dataset(ds)
-                stats_label.setText(f"{ds.total_images} 图片 · {len(ds.categories)} 类")
-
-                # Push dataset to all existing workspaces
-                for name_key, (wrapper, _) in self._workspaces.items():
-                    if name_key != "data_source":
-                        for child in wrapper.findChildren(QWidget):
-                            if hasattr(child, "set_dataset"):
-                                child.set_dataset(ds)
-
-            def on_fail(msg):
-                container._scan_worker = None
-                progress.accept()
-                open_btn.setEnabled(True)
-                stats_label.setText(f"失败: {msg}")
-
-            worker.progress.connect(on_progress)
-            worker.finished_ok.connect(on_done)
-            worker.failed.connect(on_fail)
-            worker.start()
-
-        def _on_open():
-            d = QFileDialog.getExistingDirectory(container, "选择数据集目录", str(Path.home()))
-            if not d:
-                return
-            _scan_dir(Path(d))
-
-        open_btn.clicked.connect(_on_open)
-
-        # bind_node: read root_dir from NodeItem, write back on scan
+        container._path_label = path_label
+        container._stats_label = stats_label
         container._node_item = None
 
         def _bind_node(node_item):
             container._node_item = node_item
             params = node_item.get_params() if node_item else {}
             root = params.get("root_dir", "")
-            if not root or not Path(root).is_dir():
-                return
-            # Skip re-scan if same directory already loaded
-            if container._root_dir and str(container._root_dir) == root and self._dataset:
-                return
-            _scan_dir(Path(root))
+            if root and Path(root).is_dir():
+                path_label.setText(str(root))
+            if self._dataset:
+                ds = self._dataset
+                path_label.setText(str(ds.root_path))
+                stats_label.setText(
+                    f"{ds.total_images} 图片 · {len(ds.categories)} 类"
+                )
 
         container.bind_node = _bind_node
 
-        def _rescan():
-            """Re-scan the current directory after file ops (delete/rename/move)."""
-            if not self._dataset:
-                return
-            root = self._dataset.root_path
-            worker = ScanWorker(root, parent=container)
-            container._scan_worker = worker
-
-            def _done(result):
-                container._scan_worker = None
-                from gui.workers.scan_worker import ScanResult
-                ds = result.dataset if isinstance(result, ScanResult) else result
-                self._dataset = ds
-                browser.load_dataset(ds)
-                stats_label.setText(f"{ds.total_images} 图片 · {len(ds.categories)} 类")
-                for name_key, (wrapper, _) in self._workspaces.items():
-                    if name_key != "data_source":
-                        for child in wrapper.findChildren(QWidget):
-                            if hasattr(child, "set_dataset"):
-                                child.set_dataset(ds)
-
-            def _fail(msg):
-                container._scan_worker = None
-
-            worker.finished_ok.connect(_done)
-            worker.failed.connect(_fail)
-            worker.start()
-
-        browser.dataset_changed.connect(_rescan)
-
+        # Show current dataset if already loaded
         if self._dataset:
-            browser.load_dataset(self._dataset)
             path_label.setText(str(self._dataset.root_path))
-            stats_label.setText(f"{self._dataset.total_images} 图片 · {len(self._dataset.categories)} 类")
+            stats_label.setText(
+                f"{self._dataset.total_images} 图片 · "
+                f"{len(self._dataset.categories)} 类"
+            )
 
         return container
+
+    def _datasource_pick_dir(self, container) -> None:
+        """Pick a directory for data source node — delegates scan to main browser."""
+        from pathlib import Path
+        from PyQt6.QtWidgets import QFileDialog
+        d = QFileDialog.getExistingDirectory(
+            container, "选择数据集目录", str(Path.home()),
+        )
+        if not d:
+            return
+        root = Path(d)
+        if container._node_item is not None:
+            container._node_item.set_params({"root_dir": str(root)})
+        container._path_label.setText(str(root))
+        container._stats_label.setText("请在浏览器中查看数据集")
 
     # ---- Pipeline execution (graph-based) ----
 

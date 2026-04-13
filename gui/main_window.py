@@ -1,9 +1,10 @@
-"""Main window — n8n-style scheme management.
+"""Main window — dataset-browser-first layout.
 
-- Home page = scheme manager (list/create/delete/open)
-- Editor page = canvas (persists until different scheme opened)
-- Tools work from any page: auto-create scheme if needed
-- Scheme is a persistent document, not transient state
+Navigation:
+  TOP    — 首页 (DatasetWelcome)  |  浏览器 (DatasetBrowserView)
+  BOTTOM — 管线编辑器 (PipelineView)  |  设置 (SettingsView)
+
+AppState owns the shared Dataset/Project. All views react to its signals.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from qfluentwidgets import (
     Theme,
 )
 
+from gui.app_state import AppState
 from gui.theme import T, load_qss, set_theme as set_app_theme
 from gui.views.settings_view import SettingsView
 
@@ -72,8 +74,11 @@ class MainWindow(FluentWindow):
         self.setWindowTitle("数据工坊")
         self.resize(1280, 800)
 
-        # Scheme state
-        self._scheme_path: Path | None = None  # None = unsaved new scheme
+        # Shared state
+        self._state = AppState(parent=self)
+
+        # Scheme state (kept for pipeline compat)
+        self._scheme_path: Path | None = None
         self._scheme_active = False
         self._nav_collapse_threshold = 1100
 
@@ -90,68 +95,85 @@ class MainWindow(FluentWindow):
     # ---------- Build ----------
 
     def _build_views(self) -> None:
+        from gui.views.dataset_browser_view import DatasetBrowserView
+        from gui.views.dataset_welcome import DatasetWelcome
         from gui.views.pipeline_view import PipelineView
-        from gui.views.scheme_welcome import SchemeWelcome
 
-        self.home = SchemeWelcome()
-        self.home.new_scheme.connect(self._new_scheme)
-        self.home.open_scheme.connect(self._open_scheme)
-        self.home.use_template.connect(self._use_template)
+        # Home — dataset list
+        self.home = DatasetWelcome()
+        self.home.open_dataset.connect(self._open_dataset)
+        self.home.open_pipeline_template.connect(self._use_template)
 
+        # Browser — top-level dataset browser
+        self.browser = DatasetBrowserView(self._state)
+
+        # Pipeline editor
         self.editor = PipelineView()
         self.editor.save_requested.connect(self._save_scheme)
 
+        # Settings
         self.settings_view = SettingsView()
         self.settings_view.theme_changed.connect(self._on_theme_changed)
 
-        # Nav
+        # Wire AppState → PipelineView
+        self._state.dataset_changed.connect(self._on_dataset_to_pipeline)
+
+        # Nav — TOP
         self.addSubInterface(self.home, FIF.HOME_FILL, "首页",
                              position=NavigationItemPosition.TOP)
-        self.addSubInterface(self.editor, FIF.DEVELOPER_TOOLS, "工作台",
+        self.addSubInterface(self.browser, FIF.PHOTO, "浏览器",
                              position=NavigationItemPosition.TOP)
 
-        # Tools
-        self.navigationInterface.addItem(
-            routeKey="toolsGroup", icon=FIF.ALBUM, text="工具",
-            onClick=lambda: None, selectable=False, tooltip="拖拽或点击添加到画布",
-        )
-        _icons = {
-            "data_source": FIF.FOLDER, "quality_check": FIF.CERTIFICATE,
-            "augment": FIF.ADD, "split": FIF.TILES, "export": FIF.SHARE,
-        }
-        from core.nodes import NODES
-        from gui.widgets.toolbox_panel import NodeDragFilter
-        self._drag_filters: list = []
-        for name, node in NODES.items():
-            w = self.navigationInterface.addItem(
-                routeKey=f"tool_{name}", icon=_icons.get(name, FIF.TAG),
-                text=node.display_name,
-                onClick=lambda checked=False, n=name, dn=node.display_name: self._tool_click(n, dn),
-                selectable=False, tooltip=node.description, parentRouteKey="toolsGroup",
-            )
-            if hasattr(w, "itemWidget"):
-                filt = NodeDragFilter(name, node.display_name, node.step_type, w.itemWidget)
-                w.itemWidget.installEventFilter(filt)
-                self._drag_filters.append(filt)
-
+        # Nav — BOTTOM
+        self.addSubInterface(self.editor, FIF.DEVELOPER_TOOLS, "管线编辑器",
+                             position=NavigationItemPosition.BOTTOM)
         self.addSubInterface(self.settings_view, FIF.SETTING, "设置",
                              position=NavigationItemPosition.BOTTOM)
 
-    # ---------- Scheme operations ----------
+    # ---------- Dataset operations ----------
+
+    def _open_dataset(self, path_str: str) -> None:
+        """Open a dataset directory — show task type dialog if new."""
+        root = Path(path_str)
+        if not root.is_dir():
+            InfoBar.warning("", "目录不存在", parent=self,
+                            duration=2000, position=InfoBarPosition.TOP)
+            return
+
+        from core.project import load_project
+
+        project = load_project(root)
+        if project:
+            task_type = project.task_type
+        else:
+            from gui.dialogs.task_type_dialog import TaskTypeDialog
+            dlg = TaskTypeDialog(self)
+            if not dlg.exec():
+                return
+            task_type = dlg.selected_task_type()
+            if task_type is None:
+                return
+
+        self._state.open_dataset(root, task_type)
+        self.browser.open_directory(root)
+        self.switchTo(self.browser)
+
+    def _on_dataset_to_pipeline(self, ds) -> None:
+        """Push dataset to pipeline workspaces when available."""
+        if ds is None:
+            return
+        self.editor._dataset = ds
+        for name_key, (wrapper, _) in self.editor._workspaces.items():
+            if name_key != "data_source":
+                for child in wrapper.findChildren(QWidget):
+                    if hasattr(child, "set_dataset"):
+                        child.set_dataset(ds)
+
+    # ---------- Scheme / pipeline operations ----------
 
     def _new_scheme(self) -> None:
         """Create a blank scheme and enter editor."""
         self._enter_editor("未命名方案", clear=True)
-
-    def _open_scheme(self, path_str: str) -> None:
-        """Open a saved scheme."""
-        from core.scheme import load_scheme
-        scheme = load_scheme(Path(path_str))
-        if not scheme:
-            return
-        self._enter_editor(scheme.name, clear=True)
-        self.editor._canvas.load_scheme(scheme)
-        self._scheme_path = Path(path_str)
 
     def _use_template(self, idx: int) -> None:
         """Create scheme from template."""
@@ -183,17 +205,6 @@ class MainWindow(FluentWindow):
         InfoBar.success("已保存", self._scheme_path.name, parent=self,
                         duration=2000, position=InfoBarPosition.TOP)
 
-    # ---------- Tool click ----------
-
-    def _tool_click(self, node_name: str, display_name: str) -> None:
-        """Click tool in sidebar. Only works when a scheme is active."""
-        if not self._scheme_active:
-            InfoBar.info("", "请先创建或打开方案", parent=self,
-                         duration=2000, position=InfoBarPosition.TOP)
-            return
-        self.switchTo(self.editor)
-        self.editor._add_node(node_name, display_name)
-
     # ---------- Navigation ----------
 
     def switchTo(self, interface):
@@ -220,6 +231,11 @@ class MainWindow(FluentWindow):
         save_settings(UserSettings(theme=name))
 
     def closeEvent(self, e):
+        # Save project state
+        self._state.close_dataset()
+        # Cleanup browser workers
+        self.browser.cleanup()
+        # Save scheme if active
         if self._scheme_active and self.editor._canvas.get_nodes():
             from qfluentwidgets import MessageBox
             box = MessageBox("保存方案？", "退出前是否保存当前方案？", self)

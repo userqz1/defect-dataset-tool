@@ -40,6 +40,7 @@ QLabel#datasetChipPath { color: $TEXT_3; }
 
 QWidget#overviewView, QWidget#browserView, QWidget#detailView,
 QWidget#qualityView, QWidget#exportView, QWidget#pipelineView,
+QWidget#datasetBrowserView, QWidget#datasetWelcome,
 QStackedWidget#browserStack {
     background-color: $CONTENT;
 }
