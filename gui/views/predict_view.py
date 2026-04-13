@@ -29,6 +29,7 @@ class PredictView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
+        self._node_item = None
         self._worker: BatchWorker | None = None
         self._progress = None
 
@@ -85,22 +86,34 @@ class PredictView(QWidget):
         root.addWidget(self.result_label)
         root.addStretch(1)
 
+        # Wire controls → immediate write-back
+        self.model_edit.textChanged.connect(self._push_params)
+        self.conf_spin.valueChanged.connect(self._push_params)
+        self.overwrite_chk.stateChanged.connect(self._push_params)
+
     # ---------- 接口 ----------
 
-    def get_params(self) -> dict:
-        return {
+    def bind_node(self, node_item) -> None:
+        self._node_item = node_item
+        params = node_item.get_params() if node_item else {}
+        self.model_edit.blockSignals(True)
+        self.model_edit.setText(str(params.get("model", "yolov8n.pt")))
+        self.model_edit.blockSignals(False)
+        self.conf_spin.blockSignals(True)
+        self.conf_spin.setValue(float(params.get("confidence", 0.25)))
+        self.conf_spin.blockSignals(False)
+        self.overwrite_chk.blockSignals(True)
+        self.overwrite_chk.setChecked(bool(params.get("overwrite", False)))
+        self.overwrite_chk.blockSignals(False)
+
+    def _push_params(self) -> None:
+        if self._node_item is None:
+            return
+        self._node_item.set_params({
             "model": self.model_edit.text(),
             "confidence": self.conf_spin.value(),
             "overwrite": self.overwrite_chk.isChecked(),
-        }
-
-    def set_params(self, params: dict) -> None:
-        if "model" in params:
-            self.model_edit.setText(str(params["model"]))
-        if "confidence" in params:
-            self.conf_spin.setValue(float(params["confidence"]))
-        if "overwrite" in params:
-            self.overwrite_chk.setChecked(bool(params["overwrite"]))
+        })
 
     def set_results(self, input_data, step_result) -> None:
         if step_result is None:

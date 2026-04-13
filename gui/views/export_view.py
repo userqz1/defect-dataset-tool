@@ -159,6 +159,7 @@ class ExportView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
+        self._node_item = None
         self._worker: BatchWorker | None = None
         self._progress = None
         self._selected_fmt = "YOLO"
@@ -261,6 +262,12 @@ class ExportView(QWidget):
         # 初始选中（所有控件已创建）
         self._select_format("YOLO")
 
+        # Wire controls → immediate write-back
+        self.train_spin.valueChanged.connect(self._push_params)
+        self.val_spin.valueChanged.connect(self._push_params)
+        self.test_spin.valueChanged.connect(self._push_params)
+        self.copy_chk.stateChanged.connect(self._push_params)
+
     # ---------- 格式选择 ----------
 
     def _select_format(self, key: str) -> None:
@@ -268,6 +275,7 @@ class ExportView(QWidget):
         for k, card in self._format_cards.items():
             card.set_selected(k == key)
         self._update_structure_preview()
+        self._push_params()  # format changed → write back
 
     def _toggle_preview(self) -> None:
         visible = not self._preview_frame.isVisible()
@@ -300,26 +308,30 @@ class ExportView(QWidget):
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
 
-    def get_params(self) -> dict:
-        return {
+    def bind_node(self, node_item) -> None:
+        self._node_item = node_item
+        params = node_item.get_params() if node_item else {}
+        if params.get("format") and params["format"] in self._format_cards:
+            self._select_format(params["format"])
+        for name, default in [("train_ratio", 0.8), ("val_ratio", 0.1), ("test_ratio", 0.1)]:
+            spin = getattr(self, f"{name.split('_')[0]}_spin")
+            spin.blockSignals(True)
+            spin.setValue(float(params.get(name, default)))
+            spin.blockSignals(False)
+        self.copy_chk.blockSignals(True)
+        self.copy_chk.setChecked(bool(params.get("copy_images", True)))
+        self.copy_chk.blockSignals(False)
+
+    def _push_params(self) -> None:
+        if self._node_item is None:
+            return
+        self._node_item.set_params({
             "format": self._selected_fmt,
             "train_ratio": self.train_spin.value(),
             "val_ratio": self.val_spin.value(),
             "test_ratio": self.test_spin.value(),
             "copy_images": self.copy_chk.isChecked(),
-        }
-
-    def set_params(self, params: dict) -> None:
-        if params.get("format") and params["format"] in self._format_cards:
-            self._select_format(params["format"])
-        if "train_ratio" in params:
-            self.train_spin.setValue(float(params["train_ratio"]))
-        if "val_ratio" in params:
-            self.val_spin.setValue(float(params["val_ratio"]))
-        if "test_ratio" in params:
-            self.test_spin.setValue(float(params["test_ratio"]))
-        if "copy_images" in params:
-            self.copy_chk.setChecked(bool(params["copy_images"]))
+        })
 
     def set_results(self, input_data, step_result) -> None:
         """Display pipeline execution results."""

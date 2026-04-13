@@ -39,6 +39,7 @@ class AugmentView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
+        self._node_item = None  # NodeItem reference
         self._worker: BatchWorker | None = None
         self._progress = None
         self._out_dir: Path | None = None
@@ -177,6 +178,14 @@ class AugmentView(QWidget):
         self.result_label = CaptionLabel("")
         root.addWidget(self.result_label)
 
+        # Wire all param controls → immediate write-back
+        for chk in (self.flip_h_chk, self.flip_v_chk, self.rot_chk, self.crop_chk,
+                     self.copy_paste_chk, self.bright_chk, self.contrast_chk,
+                     self.color_chk, self.blur_chk, self.noise_chk):
+            chk.stateChanged.connect(self._push_params)
+        self.n_spin.valueChanged.connect(self._push_params)
+        self.seed_spin.valueChanged.connect(self._push_params)
+
     def _on_mode_changed(self, idx: int) -> None:
         is_augment = idx == 0
         # 增强模式：显示数量/种子/输出目录，隐藏缩放
@@ -189,8 +198,34 @@ class AugmentView(QWidget):
 
     # ---------- 接口 ----------
 
-    def get_params(self) -> dict:
-        return {
+    def bind_node(self, node_item) -> None:
+        """Bind to NodeItem — load params into UI, future edits write back."""
+        self._node_item = node_item
+        params = node_item.get_params() if node_item else {}
+        _CHECKBOXES = [
+            ("flip_h", self.flip_h_chk), ("flip_v", self.flip_v_chk),
+            ("rotate", self.rot_chk), ("brightness", self.bright_chk),
+            ("contrast", self.contrast_chk), ("color_jitter", self.color_chk),
+            ("random_crop", self.crop_chk), ("copy_paste", self.copy_paste_chk),
+        ]
+        for key, chk in _CHECKBOXES:
+            chk.blockSignals(True)
+            chk.setChecked(bool(params.get(key, chk.isChecked())))
+            chk.blockSignals(False)
+        self.n_spin.blockSignals(True)
+        self.n_spin.setValue(int(params.get("n_each", 3)))
+        self.n_spin.blockSignals(False)
+        self.seed_spin.blockSignals(True)
+        self.seed_spin.setValue(int(params.get("seed", 42)))
+        self.seed_spin.blockSignals(False)
+        if params.get("out_dir"):
+            self._out_dir = Path(params["out_dir"])
+            self.out_label.setText(f"输出目录: {self._out_dir}")
+
+    def _push_params(self) -> None:
+        if self._node_item is None:
+            return
+        self._node_item.set_params({
             "flip_h": self.flip_h_chk.isChecked(),
             "flip_v": self.flip_v_chk.isChecked(),
             "rotate": self.rot_chk.isChecked(),
@@ -202,24 +237,7 @@ class AugmentView(QWidget):
             "n_each": self.n_spin.value(),
             "seed": self.seed_spin.value(),
             "out_dir": str(self._out_dir) if self._out_dir else "",
-        }
-
-    def set_params(self, params: dict) -> None:
-        for key, chk in [
-            ("flip_h", self.flip_h_chk), ("flip_v", self.flip_v_chk),
-            ("rotate", self.rot_chk), ("brightness", self.bright_chk),
-            ("contrast", self.contrast_chk), ("color_jitter", self.color_chk),
-            ("random_crop", self.crop_chk), ("copy_paste", self.copy_paste_chk),
-        ]:
-            if key in params:
-                chk.setChecked(bool(params[key]))
-        if "n_each" in params:
-            self.n_spin.setValue(int(params["n_each"]))
-        if "seed" in params:
-            self.seed_spin.setValue(int(params["seed"]))
-        if params.get("out_dir"):
-            self._out_dir = Path(params["out_dir"])
-            self.out_label.setText(f"输出目录: {self._out_dir}")
+        })
 
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
@@ -245,6 +263,7 @@ class AugmentView(QWidget):
         if d:
             self._out_dir = Path(d)
             self.out_label.setText(f"输出目录:{d}")
+            self._push_params()  # out_dir changed → write back immediately
             self._refresh_start()
 
     def _refresh_start(self) -> None:

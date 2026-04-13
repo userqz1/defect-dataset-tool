@@ -49,6 +49,7 @@ class CleaningView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
+        self._node_item = None  # NodeItem reference — single source of truth
         self._quality_worker: BatchWorker | None = None
         self._dedup_worker: BatchWorker | None = None
         self._progress = None
@@ -142,15 +143,28 @@ class CleaningView(QWidget):
 
         root.addWidget(splitter, 1)
 
-    def get_params(self) -> dict:
-        return {"blur_threshold": self.blur_spin.value(),
-                "threshold": self.threshold_spin.value()}
+        # Wire controls → immediate write-back to NodeItem
+        self.blur_spin.valueChanged.connect(self._push_params)
+        self.threshold_spin.valueChanged.connect(self._push_params)
 
-    def set_params(self, params: dict) -> None:
-        if "blur_threshold" in params:
-            self.blur_spin.setValue(float(params["blur_threshold"]))
-        if "threshold" in params:
-            self.threshold_spin.setValue(int(params["threshold"]))
+    def bind_node(self, node_item) -> None:
+        """Bind to a NodeItem — read its params into UI, future edits write back."""
+        self._node_item = node_item
+        params = node_item.get_params() if node_item else {}
+        self.blur_spin.blockSignals(True)
+        self.blur_spin.setValue(float(params.get("blur_threshold", 100)))
+        self.blur_spin.blockSignals(False)
+        self.threshold_spin.blockSignals(True)
+        self.threshold_spin.setValue(int(params.get("threshold", 5)))
+        self.threshold_spin.blockSignals(False)
+
+    def _push_params(self) -> None:
+        if self._node_item is None:
+            return
+        self._node_item.set_params({
+            "blur_threshold": self.blur_spin.value(),
+            "threshold": self.threshold_spin.value(),
+        })
 
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset

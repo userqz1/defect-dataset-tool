@@ -221,19 +221,9 @@ class PipelineView(QWidget):
         self._node_results.clear()
 
     def _on_save_clicked(self) -> None:
-        # Sync all workspace params back to NodeItems before saving
-        self._sync_all_workspace_params()
+        # Params already live in NodeItem (written on every UI change).
+        # No sync needed.
         self.save_requested.emit()
-
-    def _sync_all_workspace_params(self) -> None:
-        """Push params from all open workspace views back to their NodeItems."""
-        for name, node_item in self._workspace_node_items.items():
-            if name not in self._workspaces:
-                continue
-            wrapper, _ = self._workspaces[name]
-            content = wrapper.content
-            if hasattr(content, "get_params"):
-                node_item.set_params(content.get_params())
 
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
@@ -357,14 +347,13 @@ class PipelineView(QWidget):
         return None
 
     def _update_workspace(self, name: str, node_item: NodeItem) -> None:
-        """Push current data + execution results into the workspace."""
+        """Bind workspace to NodeItem + push dataset/results."""
         wrapper, _ = self._workspaces[name]
         content = wrapper.content
 
-        # Restore params from NodeItem into workspace UI controls
-        params = node_item.get_params()
-        if params and hasattr(content, "set_params"):
-            content.set_params(params)
+        # Bind: sets NodeItem reference + loads params into UI controls
+        if hasattr(content, "bind_node"):
+            content.bind_node(node_item)
 
         if self._dataset and hasattr(content, "set_dataset"):
             content.set_dataset(self._dataset)
@@ -376,16 +365,7 @@ class PipelineView(QWidget):
             content.set_results(node_result.input_data, node_result.step_result)
 
     def _back_to_canvas(self) -> None:
-        # Sync current workspace params back to NodeItem
-        for name, node_item in self._workspace_node_items.items():
-            if name not in self._workspaces:
-                continue
-            wrapper, idx = self._workspaces[name]
-            if self._stack.currentIndex() == idx:
-                content = wrapper.content
-                if hasattr(content, "get_params"):
-                    node_item.set_params(content.get_params())
-                break
+        # Params already in NodeItem (written on every UI change). Just switch.
         self._stack.setCurrentIndex(0)
 
     def _open_dialog(self, node_item: NodeItem) -> None:
@@ -465,6 +445,9 @@ class PipelineView(QWidget):
         def _scan_dir(root: Path):
             """Scan a directory and load into browser."""
             container._root_dir = root
+            # Write root_dir back to NodeItem immediately
+            if container._node_item is not None:
+                container._node_item.set_params({"root_dir": str(root)})
             path_label.setText(str(root))
             open_btn.setEnabled(False)
             stats_label.setText("扫描中…")
@@ -516,11 +499,12 @@ class PipelineView(QWidget):
 
         open_btn.clicked.connect(_on_open)
 
-        # get_params / set_params for scheme persistence
-        def _get_params():
-            return {"root_dir": str(container._root_dir) if container._root_dir else ""}
+        # bind_node: read root_dir from NodeItem, write back on scan
+        container._node_item = None
 
-        def _set_params(params):
+        def _bind_node(node_item):
+            container._node_item = node_item
+            params = node_item.get_params() if node_item else {}
             root = params.get("root_dir", "")
             if not root or not Path(root).is_dir():
                 return
@@ -529,8 +513,7 @@ class PipelineView(QWidget):
                 return
             _scan_dir(Path(root))
 
-        container.get_params = _get_params
-        container.set_params = _set_params
+        container.bind_node = _bind_node
 
         def _rescan():
             """Re-scan the current directory after file ops (delete/rename/move)."""
@@ -579,9 +562,6 @@ class PipelineView(QWidget):
             InfoBar.warning("", "画布上没有节点", parent=self.window(),
                             duration=2000, position=InfoBarPosition.TOP)
             return
-
-        # Sync workspace params before validation
-        self._sync_all_workspace_params()
 
         if not self._dataset:
             InfoBar.warning("", "请先在数据源节点中选择数据集目录",

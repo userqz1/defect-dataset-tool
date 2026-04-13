@@ -45,6 +45,7 @@ class SplitView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
+        self._node_item = None
         self._last_result = None
 
         root = QVBoxLayout(self)
@@ -99,6 +100,12 @@ class SplitView(QWidget):
         self.detail_label = CaptionLabel("")
         root.addWidget(self.detail_label)
         root.addStretch(1)
+
+        # Wire controls → immediate write-back
+        self.train_spin.valueChanged.connect(self._push_params)
+        self.val_spin.valueChanged.connect(self._push_params)
+        self.test_spin.valueChanged.connect(self._push_params)
+        self.stratified_chk.stateChanged.connect(self._push_params)
 
     # ---------- 子页 ----------
 
@@ -244,23 +251,27 @@ class SplitView(QWidget):
         for n in ("train", "val", "test"):
             getattr(self, f"manual_{n}_list").clear()
 
-    def get_params(self) -> dict:
-        return {
+    def bind_node(self, node_item) -> None:
+        self._node_item = node_item
+        params = node_item.get_params() if node_item else {}
+        for name, default in [("train_ratio", 0.8), ("val_ratio", 0.1), ("test_ratio", 0.1)]:
+            spin = getattr(self, f"{name.split('_')[0]}_spin")
+            spin.blockSignals(True)
+            spin.setValue(float(params.get(name, default)))
+            spin.blockSignals(False)
+        self.stratified_chk.blockSignals(True)
+        self.stratified_chk.setChecked(bool(params.get("stratified", True)))
+        self.stratified_chk.blockSignals(False)
+
+    def _push_params(self) -> None:
+        if self._node_item is None:
+            return
+        self._node_item.set_params({
             "train_ratio": self.train_spin.value(),
             "val_ratio": self.val_spin.value(),
             "test_ratio": self.test_spin.value(),
             "stratified": self.stratified_chk.isChecked(),
-        }
-
-    def set_params(self, params: dict) -> None:
-        if "train_ratio" in params:
-            self.train_spin.setValue(float(params["train_ratio"]))
-        if "val_ratio" in params:
-            self.val_spin.setValue(float(params["val_ratio"]))
-        if "test_ratio" in params:
-            self.test_spin.setValue(float(params["test_ratio"]))
-        if "stratified" in params:
-            self.stratified_chk.setChecked(bool(params["stratified"]))
+        })
 
     def set_results(self, input_data, step_result) -> None:
         """Display pipeline execution results (split distribution)."""
