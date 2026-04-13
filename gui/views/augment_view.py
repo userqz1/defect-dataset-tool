@@ -39,9 +39,7 @@ class AugmentView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
-        self._node_item = None  # NodeItem reference
-        self._worker: BatchWorker | None = None
-        self._progress = None
+        self._node_item = None
         self._out_dir: Path | None = None
         self._selection_provider = None  # () -> list[ImageInfo]
 
@@ -169,10 +167,6 @@ class AugmentView(QWidget):
         self.preview_btn = PushButton("预览效果")
         self.preview_btn.clicked.connect(self._on_preview)
         ctrl.addWidget(self.preview_btn)
-        self.start_btn = PrimaryPushButton("开始增强")
-        self.start_btn.clicked.connect(self._on_start)
-        self.start_btn.setEnabled(False)
-        ctrl.addWidget(self.start_btn)
         root.addLayout(ctrl)
 
         self.result_label = CaptionLabel("")
@@ -193,8 +187,7 @@ class AugmentView(QWidget):
         self.out_row_widget.setVisible(is_augment)
         self.resize_frame.setVisible(not is_augment)
         # 更新按钮文字
-        self.start_btn.setText("开始增强" if is_augment else "开始变换")
-        self._refresh_start()
+        pass  # mode switch only affects UI visibility
 
     # ---------- 接口 ----------
 
@@ -243,11 +236,9 @@ class AugmentView(QWidget):
         self._dataset = dataset
         if dataset is None:
             self.summary_label.setText("请先加载数据集。")
-            self.start_btn.setEnabled(False)
             return
         n = sum(c.image_count for c in dataset.categories)
         self.summary_label.setText(f"待增强:{n:,} 张图片")
-        self._refresh_start()
 
     def set_results(self, input_data, step_result) -> None:
         """Display pipeline execution results."""
@@ -264,18 +255,6 @@ class AugmentView(QWidget):
             self._out_dir = Path(d)
             self.out_label.setText(f"输出目录:{d}")
             self._push_params()  # out_dir changed → write back immediately
-            self._refresh_start()
-
-    def _refresh_start(self) -> None:
-        if self._dataset is None:
-            self.start_btn.setEnabled(False)
-            return
-        if self.mode_combo.currentIndex() == 0:
-            # 增强模式需要输出目录
-            self.start_btn.setEnabled(self._out_dir is not None)
-        else:
-            # 变换模式不需要输出目录
-            self.start_btn.setEnabled(True)
 
     def _build_opts(self) -> AugmentOptions:
         return AugmentOptions(
@@ -363,67 +342,3 @@ class AugmentView(QWidget):
         self.preview_btn.setText("预览效果")
         self.result_label.setText(f"预览失败: {msg}")
 
-    def _on_start(self) -> None:
-        if self._dataset is None or self._worker is not None:
-            return
-        paths = self._collect_paths()
-        if not paths:
-            InfoBar.warning(
-                title="无图片", content="请先选择来源",
-                isClosable=True, position=InfoBarPosition.TOP,
-                duration=2500, parent=self.window(),
-            )
-            return
-
-        from gui.dialogs.op_dialogs import ProgressDialog
-
-        if self.mode_combo.currentIndex() == 1:
-            # 变换模式：原地修改
-            from core.transform import ResizeOptions, batch_apply, resize_one
-            opts = ResizeOptions(
-                width=self.w_spin.value(),
-                height=self.h_spin.value(),
-                keep_ratio=self.keep_ratio_chk.isChecked(),
-            )
-            self._progress = ProgressDialog("批量变换", parent=self.window())
-
-            def task(progress_cb):
-                return batch_apply(paths, resize_one, opts, progress_cb=progress_cb)
-        else:
-            # 增强模式
-            if self._out_dir is None:
-                return
-            opts = self._build_opts()
-            out_dir = self._out_dir
-            self._progress = ProgressDialog("数据增强", parent=self.window())
-
-            def task(progress_cb):
-                return augment_batch(paths, out_dir, opts, progress_cb=progress_cb)
-
-        self._worker = BatchWorker(task)
-        self._worker.progress.connect(
-            lambda d, t, n: self._progress and self._progress.set_progress(d, t, n)
-        )
-        self._worker.finished_ok.connect(self._on_done)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.start()
-        self._progress.show()
-        self.start_btn.setEnabled(False)
-
-    def _on_done(self, result) -> None:
-        if self._progress is not None:
-            self._progress.accept()
-            self._progress = None
-        self._worker = None
-        self.start_btn.setEnabled(True)
-        self.result_label.setText(
-            f"完成:生成 {result.count} 张新图片,标注 {len(result.written_labels)} 个,失败 {len(result.failed)}"
-        )
-
-    def _on_failed(self, msg: str) -> None:
-        if self._progress is not None:
-            self._progress.accept()
-            self._progress = None
-        self._worker = None
-        self.start_btn.setEnabled(True)
-        self.result_label.setText(f"失败:{msg}")

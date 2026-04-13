@@ -45,8 +45,6 @@ class TransformView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
-        self._worker: BatchWorker | None = None
-        self._progress = None
         self._selection_provider = None  # () -> list[ImageInfo]
 
         root = QVBoxLayout(self)
@@ -124,10 +122,7 @@ class TransformView(QWidget):
         self.preview_btn = PushButton("预览效果")
         self.preview_btn.clicked.connect(self._on_preview)
         ctrl.addWidget(self.preview_btn)
-        self.start_btn = PrimaryPushButton("开始变换")
-        self.start_btn.clicked.connect(self._on_start)
-        self.start_btn.setEnabled(False)
-        ctrl.addWidget(self.start_btn)
+        # Execution via pipeline "执行流程" only
         root.addLayout(ctrl)
 
         self.result_label = CaptionLabel("")
@@ -140,11 +135,9 @@ class TransformView(QWidget):
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         if dataset is None:
-            self.start_btn.setEnabled(False)
             self.summary_label.setText("请先加载数据集。")
             return
         n = sum(c.image_count for c in dataset.categories)
-        self.start_btn.setEnabled(n > 0)
         self.summary_label.setText(f"将处理 {n:,} 张图片")
 
     # ---------- 内部 ----------
@@ -236,49 +229,4 @@ class TransformView(QWidget):
         self.preview_btn.setText("预览效果")
         self.result_label.setText(f"预览失败: {msg}")
 
-    def _on_start(self) -> None:
-        if self._dataset is None or self._worker is not None:
-            return
-        op_fn, opts = self._build_op()
-        paths = self._collect_paths()
-        if not paths:
-            InfoBar.warning(
-                title="无图片", content="请先选择来源",
-                isClosable=True, position=InfoBarPosition.TOP,
-                duration=2500, parent=self.window(),
-            )
-            return
-
-        from gui.dialogs.op_dialogs import ProgressDialog
-        self._progress = ProgressDialog("批量变换", parent=self.window())
-
-        def task(progress_cb):
-            return batch_apply(paths, op_fn, opts, progress_cb=progress_cb)
-
-        self._worker = BatchWorker(task)
-        self._worker.progress.connect(
-            lambda d, t, n: self._progress and self._progress.set_progress(d, t, n)
-        )
-        self._worker.finished_ok.connect(self._on_done)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.start()
-        self._progress.show()
-        self.start_btn.setEnabled(False)
-
-    def _on_done(self, result) -> None:
-        if self._progress is not None:
-            self._progress.accept()
-            self._progress = None
-        self._worker = None
-        self.start_btn.setEnabled(True)
-        self.result_label.setText(
-            f"完成：成功 {result.ok_count}  ·  失败 {result.fail_count}"
-        )
-
-    def _on_failed(self, msg: str) -> None:
-        if self._progress is not None:
-            self._progress.accept()
-            self._progress = None
-        self._worker = None
-        self.start_btn.setEnabled(True)
-        self.result_label.setText(f"失败：{msg}")
+    # Execution via pipeline "执行流程" only — no independent execution.

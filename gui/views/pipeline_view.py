@@ -195,25 +195,14 @@ class PipelineView(QWidget):
         for _name, (wrapper, idx) in list(self._workspaces.items()):
             content = wrapper.content if hasattr(wrapper, "content") else None
             if content is not None:
-                # Generic cleanup protocol — stop any running workers
-                if hasattr(content, "cleanup"):
-                    content.cleanup()
-                # Data source workspace stores refs directly on container
-                for attr in ("_thumb", "_scan_worker"):
-                    w = getattr(content, attr, None)
-                    if w is None:
-                        continue
-                    if hasattr(w, "stop"):
-                        w.stop()
-                    elif hasattr(w, "quit"):
-                        w.quit()
-                        w.wait(1000)
-                # Stop any BatchWorker on standard views
-                for attr in ("_worker", "_quality_worker", "_dedup_worker", "_preview_worker"):
-                    w = getattr(content, attr, None)
-                    if w is not None and w.isRunning():
-                        w.quit()
-                        w.wait(1000)
+                # Data source workspace: stop ThumbnailWorker + ScanWorker
+                thumb = getattr(content, "_thumb", None)
+                if thumb is not None:
+                    thumb.stop()
+                scan_w = getattr(content, "_scan_worker", None)
+                if scan_w is not None:
+                    scan_w.quit()
+                    scan_w.wait(1000)
             self._stack.removeWidget(wrapper)
             wrapper.deleteLater()
         self._workspaces.clear()

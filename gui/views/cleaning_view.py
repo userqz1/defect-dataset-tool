@@ -1,8 +1,10 @@
-"""数据清洗 — 质量检查 + 重复检测 合并为一个紧凑页面。
+"""数据清洗 — 质量检查 + 重复检测 参数配置 + 结果展示。
 
-上半区：质量检查（模糊/空白/过曝/损坏）
-下半区：重复检测（pHash 相似度）
+上半区：质量检查（模糊/空白/过曝/损坏）— 参数 + 结果列表
+下半区：重复检测（pHash 相似度）— 参数 + 结果列表
 共享操作：选中结果 → 删除到回收站
+
+执行通过画布「执行流程」触发，不在此 view 内独立运行。
 """
 from __future__ import annotations
 
@@ -13,19 +15,16 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QListWidget,
     QListWidgetItem,
-    QScrollArea,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     DoubleSpinBox,
     InfoBar,
     InfoBarPosition,
     MessageBox,
-    PrimaryPushButton,
     PushButton,
     SpinBox,
     StrongBodyLabel,
@@ -33,11 +32,8 @@ from qfluentwidgets import (
 )
 
 from core import fileops
-from core.dedup import DuplicateGroup, find_duplicates
 from core.models import Dataset
-from core.quality import QualityIssue, QualityOptions, check_images
 from gui.theme import T
-from gui.workers.batch_worker import BatchWorker
 
 KIND_LABEL = {"corrupt": "损坏", "blank": "空白", "blur": "模糊", "over": "过曝", "under": "欠曝"}
 
@@ -49,10 +45,7 @@ class CleaningView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._dataset: Dataset | None = None
-        self._node_item = None  # NodeItem reference — single source of truth
-        self._quality_worker: BatchWorker | None = None
-        self._dedup_worker: BatchWorker | None = None
-        self._progress = None
+        self._node_item = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
@@ -72,7 +65,6 @@ class CleaningView(QWidget):
         q_header = QHBoxLayout()
         q_header.addWidget(StrongBodyLabel("质量检查"))
         q_header.addStretch(1)
-
         q_header.addWidget(CaptionLabel("模糊阈值"))
         self.blur_spin = DoubleSpinBox()
         self.blur_spin.setRange(1, 5000)
@@ -80,12 +72,6 @@ class CleaningView(QWidget):
         self.blur_spin.setFixedWidth(100)
         self.blur_spin.setToolTip("Laplacian 方差，越小越模糊")
         q_header.addWidget(self.blur_spin)
-
-        self.quality_btn = PrimaryPushButton("开始检查")
-        self.quality_btn.setFixedWidth(100)
-        self.quality_btn.clicked.connect(self._on_quality_start)
-        self.quality_btn.setEnabled(False)
-        q_header.addWidget(self.quality_btn)
         ql.addLayout(q_header)
 
         self.quality_summary = CaptionLabel("")
@@ -117,7 +103,6 @@ class CleaningView(QWidget):
         d_header = QHBoxLayout()
         d_header.addWidget(StrongBodyLabel("重复检测"))
         d_header.addStretch(1)
-
         d_header.addWidget(CaptionLabel("相似阈值"))
         self.threshold_spin = SpinBox()
         self.threshold_spin.setRange(0, 20)
@@ -125,12 +110,6 @@ class CleaningView(QWidget):
         self.threshold_spin.setFixedWidth(100)
         self.threshold_spin.setToolTip("0=完全相同  5=视觉近似  越大越宽松")
         d_header.addWidget(self.threshold_spin)
-
-        self.dedup_btn = PrimaryPushButton("开始检测")
-        self.dedup_btn.setFixedWidth(100)
-        self.dedup_btn.clicked.connect(self._on_dedup_start)
-        self.dedup_btn.setEnabled(False)
-        d_header.addWidget(self.dedup_btn)
         dl.addLayout(d_header)
 
         self.dedup_summary = CaptionLabel("")
@@ -147,8 +126,9 @@ class CleaningView(QWidget):
         self.blur_spin.valueChanged.connect(self._push_params)
         self.threshold_spin.valueChanged.connect(self._push_params)
 
+    # ---- NodeItem binding ----
+
     def bind_node(self, node_item) -> None:
-        """Bind to a NodeItem — read its params into UI, future edits write back."""
         self._node_item = node_item
         params = node_item.get_params() if node_item else {}
         self.blur_spin.blockSignals(True)
@@ -166,62 +146,28 @@ class CleaningView(QWidget):
             "threshold": self.threshold_spin.value(),
         })
 
+    # ---- Dataset / Results ----
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         n = sum(c.image_count for c in dataset.categories) if dataset else 0
-        on = n > 0
-        self.quality_btn.setEnabled(on)
-        self.dedup_btn.setEnabled(on)
-        self.quality_summary.setText(f"待检查：{n:,} 张图片" if on else "")
-        self.dedup_summary.setText(f"待检测：{n:,} 张图片" if on else "")
+        self.quality_summary.setText(f"待检查：{n:,} 张图片" if n else "")
+        self.dedup_summary.setText(f"待检测：{n:,} 张图片" if n else "")
         self.quality_list.clear()
         self.dedup_list.clear()
-        if on:
-            self._add_placeholder(self.quality_list, "点击「执行流程」运行质量检测")
-            self._add_placeholder(self.dedup_list, "点击「执行流程」查找重复图片")
+        if n:
+            self._add_placeholder(self.quality_list, "执行流程后查看结果")
+            self._add_placeholder(self.dedup_list, "执行流程后查看结果")
 
     def set_results(self, input_data, step_result) -> None:
-        """Display pipeline execution results (called after pipeline Run)."""
+        """Display pipeline execution results."""
         if step_result is None:
             return
         issues = step_result.details
-        if isinstance(issues, list) and all(hasattr(i, "kinds") for i in issues[:1]):
-            # Quality check results
-            self._on_quality_done(issues)
+        if isinstance(issues, list) and issues and hasattr(issues[0], "kinds"):
+            self._show_quality_results(issues)
 
-    @staticmethod
-    def _add_placeholder(lst: QListWidget, text: str) -> None:
-        item = QListWidgetItem(text)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-        item.setForeground(QColor(T.TEXT_3))
-        lst.addItem(item)
-
-    # ---- 质量检查 ----
-
-    def _on_quality_start(self) -> None:
-        if self._dataset is None or self._quality_worker is not None:
-            return
-        all_images = [img for c in self._dataset.categories for img in c.images]
-        opts = QualityOptions(blur_threshold=self.blur_spin.value())
-
-        from gui.dialogs.op_dialogs import ProgressDialog
-        self._progress = ProgressDialog("质量检查", parent=self.window())
-
-        def task(cb):
-            return check_images(all_images, opts=opts, progress_cb=cb)
-
-        self._quality_worker = BatchWorker(task)
-        self._quality_worker.progress.connect(self._on_progress)
-        self._quality_worker.finished_ok.connect(self._on_quality_done)
-        self._quality_worker.failed.connect(self._on_quality_failed)
-        self._quality_worker.start()
-        self._progress.show()
-        self.quality_btn.setEnabled(False)
-
-    def _on_quality_done(self, issues: list[QualityIssue]) -> None:
-        self._close_progress()
-        self._quality_worker = None
-        self.quality_btn.setEnabled(True)
+    def _show_quality_results(self, issues) -> None:
         self.quality_list.clear()
         if not issues:
             self.quality_summary.setText("未发现质量问题 ✓")
@@ -234,70 +180,14 @@ class CleaningView(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, issue.image)
             self.quality_list.addItem(item)
 
-    def _on_quality_failed(self, msg: str) -> None:
-        self._close_progress()
-        self._quality_worker = None
-        self.quality_btn.setEnabled(True)
-        self.quality_summary.setText(f"检查失败：{msg}")
+    # ---- Helpers ----
 
-    # ---- 重复检测 ----
-
-    def _on_dedup_start(self) -> None:
-        if self._dataset is None or self._dedup_worker is not None:
-            return
-        all_images = [img for c in self._dataset.categories for img in c.images]
-        threshold = self.threshold_spin.value()
-
-        from gui.dialogs.op_dialogs import ProgressDialog
-        self._progress = ProgressDialog("重复检测", parent=self.window())
-
-        def task(cb):
-            return find_duplicates(all_images, threshold=threshold, progress_cb=cb)
-
-        self._dedup_worker = BatchWorker(task)
-        self._dedup_worker.progress.connect(self._on_progress)
-        self._dedup_worker.finished_ok.connect(self._on_dedup_done)
-        self._dedup_worker.failed.connect(self._on_dedup_failed)
-        self._dedup_worker.start()
-        self._progress.show()
-        self.dedup_btn.setEnabled(False)
-
-    def _on_dedup_done(self, groups: list[DuplicateGroup]) -> None:
-        self._close_progress()
-        self._dedup_worker = None
-        self.dedup_btn.setEnabled(True)
-        self.dedup_list.clear()
-        if not groups:
-            self.dedup_summary.setText("未发现重复图片 ✓")
-            return
-        total = sum(g.size for g in groups)
-        self.dedup_summary.setText(f"发现 {len(groups)} 组相似图片，共 {total} 张")
-        for i, g in enumerate(groups, 1):
-            head = QListWidgetItem(f"组 {i}  ·  {g.size} 张")
-            head.setFlags(head.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            f = head.font()
-            f.setBold(True)
-            head.setFont(f)
-            self.dedup_list.addItem(head)
-            for img in g.images:
-                self.dedup_list.addItem(f"    {img.category} / {img.path.name}")
-
-    def _on_dedup_failed(self, msg: str) -> None:
-        self._close_progress()
-        self._dedup_worker = None
-        self.dedup_btn.setEnabled(True)
-        self.dedup_summary.setText(f"检测失败：{msg}")
-
-    # ---- 共享 ----
-
-    def _on_progress(self, done: int, total: int, name: str) -> None:
-        if self._progress:
-            self._progress.set_progress(done, total, name)
-
-    def _close_progress(self) -> None:
-        if self._progress is not None:
-            self._progress.accept()
-            self._progress = None
+    @staticmethod
+    def _add_placeholder(lst: QListWidget, text: str) -> None:
+        item = QListWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        item.setForeground(QColor(T.TEXT_3))
+        lst.addItem(item)
 
     def _delete_selected(self, list_widget: QListWidget) -> None:
         items = list_widget.selectedItems()
