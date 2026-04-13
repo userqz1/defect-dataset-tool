@@ -19,6 +19,7 @@ class BatchWorker(QThread):
     def __init__(self, fn: Callable[[Callable[[int, int, str], None]], Any]) -> None:
         super().__init__()
         self._fn = fn
+        self.finished.connect(self.deleteLater)
 
     def run(self) -> None:  # noqa: D401
         try:

@@ -37,6 +37,7 @@ class ScanWorker(QThread):
     def __init__(self, root: Path, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._root = root
+        self.finished.connect(self.deleteLater)
 
     def run(self) -> None:
         # Phase 0: try cache

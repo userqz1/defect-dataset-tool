@@ -33,8 +33,12 @@ from gui.widgets.image_viewer import ImageViewer, color_for_label
 
 
 class _ImageLoader(QThread):
-    """Load image + parse annotation off the main thread."""
-    done = pyqtSignal(object, object, object)  # (QPixmap, Annotation|None, ImageInfo)
+    """Load image + parse annotation off the main thread.
+
+    Emits QImage (thread-safe), NOT QPixmap. The main-thread slot
+    must do QPixmap.fromImage() itself.
+    """
+    done = pyqtSignal(object, object, object)  # (QImage, Annotation|None, ImageInfo)
 
     def __init__(self, img: ImageInfo, parent=None):
         super().__init__(parent)
@@ -50,7 +54,6 @@ class _ImageLoader(QThread):
         image = QImage(str(self._img.path))
         if self._cancelled:
             return
-        pix = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
 
         annotation = None
         if not self._cancelled and self._img.has_label and self._img.label_path:
@@ -62,7 +65,7 @@ class _ImageLoader(QThread):
                 annotation = result.annotation
 
         if not self._cancelled:
-            self.done.emit(pix, annotation, self._img)
+            self.done.emit(image, annotation, self._img)
 
 
 class DetailView(QWidget):
@@ -293,10 +296,10 @@ class DetailView(QWidget):
         self._loader.done.connect(self._on_image_loaded)
         self._loader.start()
 
-    def _on_image_loaded(self, pix: QPixmap, annotation, img: ImageInfo) -> None:
-        """Worker 完成后在主线程设置 viewer（轻量操作）。"""
-        if not pix.isNull():
-            self.viewer.load_pixmap(pix)
+    def _on_image_loaded(self, qimage: QImage, annotation, img: ImageInfo) -> None:
+        """Worker 完成后在主线程设置 viewer。QImage→QPixmap 必须在主线程。"""
+        if not qimage.isNull():
+            self.viewer.load_pixmap(QPixmap.fromImage(qimage))
         self._annotation = annotation
         self.viewer.set_annotation(self._annotation)
         try:
