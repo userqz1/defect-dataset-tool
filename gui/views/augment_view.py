@@ -96,8 +96,10 @@ class AugmentView(QWidget):
         photo_grid.addWidget(self.noise_chk, 0, 4)
         root.addLayout(photo_grid)
 
-        # 数量
-        n_row = QHBoxLayout()
+        # 数量（wrapped in QWidget for visibility toggle）
+        self.n_row_widget = QWidget()
+        n_row = QHBoxLayout(self.n_row_widget)
+        n_row.setContentsMargins(0, 0, 0, 0)
         n_row.addWidget(BodyLabel("每张原图生成"))
         self.n_spin = SpinBox()
         self.n_spin.setRange(1, 50)
@@ -111,7 +113,7 @@ class AugmentView(QWidget):
         self.seed_spin.setValue(42)
         n_row.addWidget(self.seed_spin)
         n_row.addStretch(1)
-        root.addLayout(n_row)
+        root.addWidget(self.n_row_widget)
 
         # 图片来源
         src_row = QHBoxLayout()
@@ -178,7 +180,7 @@ class AugmentView(QWidget):
     def _on_mode_changed(self, idx: int) -> None:
         is_augment = idx == 0
         # 增强模式：显示数量/种子/输出目录，隐藏缩放
-        self.n_spin.parent().setVisible(is_augment) if self.n_spin.parent() else None
+        self.n_row_widget.setVisible(is_augment)
         self.out_row_widget.setVisible(is_augment)
         self.resize_frame.setVisible(not is_augment)
         # 更新按钮文字

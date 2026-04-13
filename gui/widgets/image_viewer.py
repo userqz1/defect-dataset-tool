@@ -294,6 +294,16 @@ class ImageViewer(QGraphicsView):
         factor = 1.18 if event.angleDelta().y() > 0 else 1 / 1.18
         self._apply_zoom(factor)
 
+    def leaveEvent(self, event) -> None:
+        """Cancel in-progress drawing when mouse leaves the viewport."""
+        if self._drawing:
+            self._drawing = False
+            if self._temp_rect_item is not None:
+                self._scene.removeItem(self._temp_rect_item)
+                self._temp_rect_item = None
+            self._draw_start = None
+        super().leaveEvent(event)
+
     # ---------- 编辑事件 ----------
 
     def mousePressEvent(self, event):  # type: ignore[override]

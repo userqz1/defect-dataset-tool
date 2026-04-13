@@ -203,7 +203,7 @@ def _apply_copy_paste(
     x2 = min(sw, int(x2)); y2 = min(sh, int(y2))
     if x2 - x1 < 4 or y2 - y1 < 4:
         return im
-    patch = src_im.crop((x1, y1, x2, y2))
+    patch = src_im.crop((x1, y1, x2, y2)).copy()  # .copy() to materialize lazy crop
     pw, ph = patch.size
 
     # 多边形 → 按 mask 抠图,只留形状内部的像素;矩形 → 整块

@@ -54,15 +54,27 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def compute_fingerprint(root: Path) -> str:
-    """Cheap signature: sha1 over each subdir's mtime."""
+    """Signature: sha1 over two-level subdir mtimes (root → cat → images/labels).
+
+    Covers the common case where files are added/removed in
+    ``<root>/<cat>/images/`` or ``<root>/<cat>/labels/``.
+    """
     h = hashlib.sha1()
     try:
         for p in sorted(root.iterdir()):
-            if p.is_dir():
-                try:
-                    h.update(f"{p.name}|{p.stat().st_mtime_ns}".encode())
-                except OSError:
-                    continue
+            if not p.is_dir():
+                continue
+            try:
+                h.update(f"{p.name}|{p.stat().st_mtime_ns}".encode())
+                # Second level: images/ and labels/ subdirs
+                for child in sorted(p.iterdir()):
+                    if child.is_dir():
+                        try:
+                            h.update(f"{p.name}/{child.name}|{child.stat().st_mtime_ns}".encode())
+                        except OSError:
+                            continue
+            except OSError:
+                continue
     except OSError:
         pass
     return h.hexdigest()

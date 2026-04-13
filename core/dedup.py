@@ -64,6 +64,9 @@ def find_duplicates(
     if progress_cb:
         progress_cb(total, total, "")
 
+    # Stable sort so "representative image" (group[0]) is deterministic
+    hashes.sort(key=lambda x: str(x[0].path))
+
     # Group by hamming distance (O(n²) but fast for <10k hashed images)
     groups: list[DuplicateGroup] = []
     visited = [False] * len(hashes)
