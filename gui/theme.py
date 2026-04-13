@@ -5,7 +5,7 @@
 1. **tokens (本文件)**            原子常量 + 主题集合 (Light / Dark)
 2. **semantic widgets**           qfluentwidgets 的 BodyLabel/CaptionLabel/...
                                   + 本项目封装的 widgets (FilterChip, GhostButton, ...)
-3. **gui/styles/app.qss**         一份 QSS, 用 {TOKEN} 占位由 dataclass 注入
+3. **gui/styles/app.qss**         一份 QSS, 用 $TOKEN 占位由 dataclass 注入
                                   只放 "无法靠组件 API 解决" 的容器/复合选择器
 
 任何视图都不应再 `setStyleSheet(f"color:#xxx")`. 写颜色字面量违反 layer 1.
@@ -145,10 +145,13 @@ T: Tokens = _TokenProxy()  # type: ignore[assignment]
 # ---------- Public API ----------
 
 def load_qss() -> str:
-    """Read styles/app.qss and substitute the active theme tokens."""
+    """Read styles/app.qss and substitute $TOKEN placeholders with active theme values."""
+    from string import Template
     qss_path = Path(__file__).parent / "styles" / "app.qss"
     raw = qss_path.read_text(encoding="utf-8")
-    return raw.format(**{f.name: getattr(_active, f.name) for f in fields(Tokens)})
+    return Template(raw).substitute(
+        **{f.name: getattr(_active, f.name) for f in fields(Tokens)}
+    )
 
 
 def set_theme(name: str, window: QWidget | None = None) -> None:
