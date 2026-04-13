@@ -197,6 +197,13 @@ class AugmentView(QWidget):
         self.summary_label.setText(f"待增强:{n:,} 张图片")
         self._refresh_start()
 
+    def set_results(self, input_data, step_result) -> None:
+        """Display pipeline execution results."""
+        if step_result is None:
+            return
+        self.summary_label.setText(
+            f"增强完成: {step_result.ok_count} 张生成 · {step_result.fail_count} 张失败")
+
     # ---------- 内部 ----------
 
     def _choose_dir(self) -> None:

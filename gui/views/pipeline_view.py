@@ -41,6 +41,7 @@ class _WorkspaceWrapper(QWidget):
 
     def __init__(self, title: str, content: QWidget, parent=None) -> None:
         super().__init__(parent)
+        self.content = content  # direct reference for _update_workspace
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -85,6 +86,10 @@ class PipelineView(QWidget):
         self._target_format = "YOLO"
         self._task_type = None
         self._progress = None
+        # Pipeline execution results: node python id() → NodeResult
+        self._node_results: dict[int, object] = {}
+        # Track which NodeItem is associated with each workspace
+        self._workspace_node_items: dict[str, NodeItem] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -243,7 +248,9 @@ class PipelineView(QWidget):
             idx = self._stack.addWidget(wrapper)
             self._workspaces[name] = (wrapper, idx)
 
-        # Update workspace with current node data
+        # Track which node_item is shown in this workspace
+        self._workspace_node_items[name] = node_item
+        # Update workspace with current node data + results
         self._update_workspace(name, node_item)
 
         _, idx = self._workspaces[name]
@@ -281,11 +288,18 @@ class PipelineView(QWidget):
         return None
 
     def _update_workspace(self, name: str, node_item: NodeItem) -> None:
-        """Push current data into the workspace."""
+        """Push current data + execution results into the workspace."""
         wrapper, _ = self._workspaces[name]
-        content = wrapper.findChild(QWidget)
+        content = wrapper.content
+
         if self._dataset and hasattr(content, "set_dataset"):
             content.set_dataset(self._dataset)
+
+        # Inject pipeline execution results if available
+        nid = id(node_item)
+        node_result = self._node_results.get(nid)
+        if node_result and hasattr(content, "set_results"):
+            content.set_results(node_result.input_data, node_result.step_result)
 
     def _back_to_canvas(self) -> None:
         self._stack.setCurrentIndex(0)
@@ -413,6 +427,36 @@ class PipelineView(QWidget):
 
         open_btn.clicked.connect(_on_open)
 
+        def _rescan():
+            """Re-scan the current directory after file ops (delete/rename/move)."""
+            if not self._dataset:
+                return
+            root = self._dataset.root_path
+            worker = ScanWorker(root, parent=container)
+            container._scan_worker = worker
+
+            def _done(result):
+                container._scan_worker = None
+                from gui.workers.scan_worker import ScanResult
+                ds = result.dataset if isinstance(result, ScanResult) else result
+                self._dataset = ds
+                browser.load_dataset(ds)
+                stats_label.setText(f"{ds.total_images} 图片 · {len(ds.categories)} 类")
+                for name_key, (wrapper, _) in self._workspaces.items():
+                    if name_key != "data_source":
+                        for child in wrapper.findChildren(QWidget):
+                            if hasattr(child, "set_dataset"):
+                                child.set_dataset(ds)
+
+            def _fail(msg):
+                container._scan_worker = None
+
+            worker.finished_ok.connect(_done)
+            worker.failed.connect(_fail)
+            worker.start()
+
+        browser.dataset_changed.connect(_rescan)
+
         if self._dataset:
             browser.load_dataset(self._dataset)
             path_label.setText(str(self._dataset.root_path))
@@ -484,11 +528,24 @@ class PipelineView(QWidget):
             self._progress = None
         self._run_btn.setEnabled(True)
 
+        # Cache results for workspace views
+        self._node_results = result.node_results
+
         for nid, record in result.node_results.items():
             node_item = self._canvas.node_by_id(nid)
             if node_item:
                 node_item.set_state("done" if record.success else "error")
-                node_item.set_status(record.message)
+                # Show concise result on the node
+                sr = record.step_result
+                if sr and record.success:
+                    parts = []
+                    if sr.ok_count:
+                        parts.append(f"{sr.ok_count} 通过")
+                    if sr.fail_count:
+                        parts.append(f"{sr.fail_count} 问题")
+                    node_item.set_status(" · ".join(parts) if parts else record.message)
+                else:
+                    node_item.set_status(record.message)
 
         if result.success:
             InfoBar.success("完成", f"{result.steps_run} 个节点执行完成",

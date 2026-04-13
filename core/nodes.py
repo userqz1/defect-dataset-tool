@@ -161,12 +161,15 @@ class AugmentNode:
         ParamDef("flip_v", "垂直翻转", "bool", False),
         ParamDef("rotate", "随机旋转", "bool", True),
         ParamDef("brightness", "亮度调整", "bool", True),
+        ParamDef("out_dir", "输出目录", "path", ""),
     )
 
     def execute(self, images, options, progress_cb=None):
         from .augment import AugmentOptions, augment_batch
-        out_dir = Path(options.pop("out_dir"))
-        opts = AugmentOptions(**options)
+        opts_dict = dict(options)  # don't mutate caller's dict
+        out_dir = Path(opts_dict.pop("out_dir", "."))
+        opts = AugmentOptions(**{k: v for k, v in opts_dict.items()
+                                 if hasattr(AugmentOptions, k)})
         result = augment_batch(
             [img.path if hasattr(img, "path") else img for img in images],
             out_dir, opts, progress_cb=progress_cb,
@@ -186,9 +189,7 @@ class SplitNode:
     description = "划分 train/val/test"
     ports = (
         PortDef("input", "输入", "input", "dataset"),
-        PortDef("train", "训练集", "output", "dataset"),
-        PortDef("val", "验证集", "output", "dataset"),
-        PortDef("test", "测试集", "output", "dataset"),
+        PortDef("output", "划分结果", "output", "dataset"),
     )
     parameters = (
         ParamDef("train_ratio", "训练集比例", "float", 0.8, min_val=0.1, max_val=0.95),
@@ -198,13 +199,28 @@ class SplitNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        from .models import Category, Dataset
         from .splitter import SplitOptions, split_dataset
-        # images here is actually a Dataset
-        dataset = images
+
+        # Accept both Dataset and list[ImageInfo]
+        if isinstance(images, Dataset):
+            dataset = images
+        else:
+            # Build synthetic Dataset from image list for split_dataset()
+            by_cat: dict[str, list] = {}
+            for img in images:
+                by_cat.setdefault(getattr(img, "category", "default"), []).append(img)
+            cats = [Category(name=name, image_count=len(imgs), images=imgs)
+                    for name, imgs in by_cat.items()]
+            dataset = Dataset(
+                name="pipeline", root_path=Path("."),
+                categories=cats, total_images=len(images),
+            )
+
         opts = SplitOptions(
-            train_ratio=options.get("train_ratio", 0.8),
-            val_ratio=options.get("val_ratio", 0.1),
-            test_ratio=options.get("test_ratio", 0.1),
+            train=options.get("train_ratio", 0.8),
+            val=options.get("val_ratio", 0.1),
+            test=options.get("test_ratio", 0.1),
             stratified=options.get("stratified", True),
         )
         result = split_dataset(dataset, opts)
@@ -243,15 +259,37 @@ class ExportNode:
     )
 
     def execute(self, images, options, progress_cb=None):
-        fmt = options.get("format", "yolo")
+        from .splitter import SplitResult
+        fmt = options.get("format", "YOLO").upper()
         out_dir = Path(options.get("out_dir", "."))
-        from .exporter import export_dataset
-        result = export_dataset(images, fmt, out_dir, progress_cb=progress_cb)
-        return StepResult(
-            ok_count=result.get("count", 0),
-            output_paths=result.get("paths", []),
-            details=result,
-        )
+
+        # Accept SplitResult (from split node) or plain image list
+        if isinstance(images, SplitResult):
+            split = images
+        else:
+            # No upstream split → all images as train
+            split = SplitResult(train=list(images), val=[], test=[])
+
+        if fmt == "YOLO":
+            from .exporter.yolo import YoloExportOptions, export_yolo
+            report = export_yolo(split, YoloExportOptions(out_dir=out_dir),
+                                 progress_cb=progress_cb)
+        elif fmt == "COCO":
+            from .exporter.coco import CocoExportOptions, export_coco
+            report = export_coco(split, CocoExportOptions(out_dir=out_dir),
+                                 progress_cb=progress_cb)
+        elif fmt == "VOC":
+            from .exporter.voc import VocExportOptions, export_voc
+            report = export_voc(split, VocExportOptions(out_dir=out_dir),
+                                progress_cb=progress_cb)
+        elif fmt == "CSV":
+            from .exporter.csv_export import export_csv_dataset
+            report = export_csv_dataset(split, out_dir, progress_cb=progress_cb)
+        else:
+            return StepResult(fail_count=1, details=f"不支持的格式: {fmt}")
+
+        count = getattr(report, "written_images", 0)
+        return StepResult(ok_count=count, details=report)
 
 
 # ---------- Category visual metadata (pure Python — no Qt) ----------
@@ -278,6 +316,7 @@ CATEGORY_META: dict[str, CategoryMeta] = {
 NODES: dict[str, ProcessingNode] = {
     "data_source": DataSourceNode(),
     "quality_check": QualityCheckNode(),
+    "dedup": DedupNode(),
     "augment": AugmentNode(),
     "split": SplitNode(),
     "export": ExportNode(),

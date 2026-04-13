@@ -1,21 +1,14 @@
-"""Pipeline execution engine — runs processing nodes in sequence.
-
-The core of v2 architecture: PipelineContext carries data through nodes,
-each node reads from and writes to the context.
+"""Pipeline execution engine — graph-based node execution with port routing.
 
 Pure Python — no PyQt imports.
 
 Usage::
 
-    from core.pipeline import PipelineContext, PipelineEngine
+    from core.pipeline import GraphEngine
 
-    ctx = PipelineContext.from_dataset(dataset, task_type)
-    engine = PipelineEngine()
-    engine.add_step("quality_check", {"blur_threshold": 100})
-    engine.add_step("split", {"train": 0.8, "val": 0.1, "test": 0.1})
-
-    result = engine.execute(ctx, progress_cb=my_cb)
-    print(result.success, result.step_results)
+    engine = GraphEngine()
+    result = engine.execute(graph, dataset, progress_cb=my_cb)
+    # result.node_results[node_id] has per-node StepResult + input/output data
 """
 from __future__ import annotations
 
@@ -24,82 +17,23 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .models import Dataset, ImageInfo
-from .task_types import TaskType
 
 
-# ---------- Pipeline Context ----------
-
-@dataclass
-class PipelineContext:
-    """Mutable context that flows through the pipeline.
-
-    Each node reads from this, modifies it, and passes it on.
-    """
-    dataset: Dataset
-    task_type: TaskType
-
-    # Active image list — nodes filter/expand this
-    images: list[ImageInfo] = field(default_factory=list)
-
-    # Accumulated results from each step
-    step_results: dict[str, Any] = field(default_factory=dict)
-
-    # Images flagged by quality/dedup checks (path → reason)
-    flagged: dict[str, str] = field(default_factory=dict)
-
-    # Split result (populated by split node)
-    split: Any = None  # SplitResult
-
-    # Export output path
-    export_path: Path | None = None
-
-    @classmethod
-    def from_dataset(cls, dataset: Dataset, task_type: TaskType) -> PipelineContext:
-        all_images = [img for cat in dataset.categories for img in cat.images]
-        return cls(
-            dataset=dataset,
-            task_type=task_type,
-            images=all_images,
-        )
-
-
-# ---------- Step Result ----------
-
-@dataclass
-class StepResultRecord:
-    node_name: str
-    display_name: str
-    success: bool
-    message: str
-    details: Any = None
-
-
-# ---------- Pipeline Result ----------
-
-@dataclass
-class PipelineResult:
-    success: bool
-    steps_run: int
-    steps_total: int
-    step_results: list[StepResultRecord] = field(default_factory=list)
-    error: str = ""
-
-
-# ---------- Engine ----------
+# ---------- Result types ----------
 
 ProgressCb = Callable[[int, int, str], None]
 
 
-# ---------- Graph-based Engine (v3) ----------
-
 @dataclass
-class GraphNodeDef:
-    """A node in the execution graph."""
-    id: int
+class NodeResult:
+    """Per-node execution result with input/output data for workspace display."""
     node_name: str
     display_name: str
-    params: dict[str, Any]
-    inputs: dict[str, tuple[int, str]]  # port_name → (upstream_id, upstream_port)
+    success: bool
+    message: str
+    input_data: Any = None       # data the node received
+    output_data: dict[str, Any] = field(default_factory=dict)  # port → data
+    step_result: Any = None      # raw StepResult from the node
 
 
 @dataclass
@@ -108,17 +42,17 @@ class GraphResult:
     success: bool
     steps_run: int
     steps_total: int
-    node_results: dict[int, StepResultRecord] = field(default_factory=dict)
+    node_results: dict[int, NodeResult] = field(default_factory=dict)
     error: str = ""
 
+
+# ---------- Engine ----------
 
 class GraphEngine:
     """Graph-aware pipeline executor with topological sort and port routing.
 
-    Unlike PipelineEngine which runs nodes sequentially, GraphEngine:
-    - Reads the connection graph from the canvas
-    - Topologically sorts nodes by dependencies
-    - Routes data between connected ports
+    Reads the connection graph from the canvas, topologically sorts nodes,
+    and routes data between connected ports.
     """
 
     def execute(
@@ -129,8 +63,8 @@ class GraphEngine:
     ) -> GraphResult:
         from .nodes import NODES
 
-        # Parse graph into GraphNodeDefs
-        nodes = {g["id"]: GraphNodeDef(**g) for g in graph}
+        # Parse graph into _GraphNodeDefs
+        nodes = {g["id"]: _GraphNodeDef(**g) for g in graph}
         total = len(nodes)
 
         # Topological sort (Kahn's algorithm)
@@ -141,14 +75,15 @@ class GraphEngine:
 
         # Port data: node_id → {port_name → data}
         port_data: dict[int, dict[str, Any]] = {}
-        results: dict[int, StepResultRecord] = {}
+        results: dict[int, NodeResult] = {}
 
         for i, nid in enumerate(order):
             ndef = nodes[nid]
             spec = NODES.get(ndef.node_name)
             if spec is None:
-                results[nid] = StepResultRecord(
-                    ndef.node_name, ndef.display_name, False, f"未知节点: {ndef.node_name}")
+                results[nid] = NodeResult(
+                    ndef.node_name, ndef.display_name, False,
+                    f"未知节点: {ndef.node_name}")
                 continue
 
             if progress_cb:
@@ -156,22 +91,25 @@ class GraphEngine:
 
             try:
                 # Collect input data from upstream ports
-                images = self._collect_input(ndef, port_data, dataset)
+                input_data = self._collect_input(ndef, port_data, dataset)
 
                 # Execute the node
-                step_result = spec.execute(images, ndef.params, progress_cb=None)
+                step_result = spec.execute(input_data, dict(ndef.params), progress_cb=None)
 
-                # Store per-output data
-                port_data[nid] = self._route_outputs(ndef.node_name, spec, step_result, images)
+                # Route outputs to downstream ports
+                outputs = self._route_outputs(ndef.node_name, spec, step_result, input_data)
+                port_data[nid] = outputs
 
-                results[nid] = StepResultRecord(
+                results[nid] = NodeResult(
                     ndef.node_name, spec.display_name, True,
                     f"完成: {step_result.ok_count} 通过",
-                    details=step_result.details,
+                    input_data=input_data,
+                    output_data=outputs,
+                    step_result=step_result,
                 )
 
             except Exception as e:
-                results[nid] = StepResultRecord(
+                results[nid] = NodeResult(
                     ndef.node_name, spec.display_name, False, str(e))
                 return GraphResult(
                     success=False, steps_run=i + 1, steps_total=total,
@@ -187,10 +125,10 @@ class GraphEngine:
 
     def _collect_input(
         self,
-        ndef: GraphNodeDef,
+        ndef: _GraphNodeDef,
         port_data: dict[int, dict[str, Any]],
         dataset: Dataset | None,
-    ) -> list:
+    ) -> Any:
         """Gather input data for a node from upstream connections."""
         if not ndef.inputs:
             # Source node — use dataset images
@@ -206,45 +144,55 @@ class GraphEngine:
         return []
 
     @staticmethod
-    def _route_outputs(node_name: str, spec, result, input_images: list) -> dict[str, Any]:
+    def _route_outputs(node_name: str, spec, result, input_data) -> dict[str, Any]:
         """Map a StepResult to per-output-port data."""
         ports = getattr(spec, "ports", ())
         out_ports = [p for p in ports if p.direction == "output"]
 
-        if len(out_ports) <= 1:
-            # Single output — pass through (possibly filtered)
-            port_name = out_ports[0].name if out_ports else "output"
-            return {port_name: input_images}
-
-        # Multi-output: route based on node semantics
+        # -- Quality check: split into passed / rejected --
         if node_name == "quality_check":
             bad_paths = set()
             if result.details:
                 for issue in result.details:
                     bad_paths.add(str(getattr(issue, "path", "")))
-            passed = [img for img in input_images if str(getattr(img, "path", img)) not in bad_paths]
-            rejected = [img for img in input_images if str(getattr(img, "path", img)) in bad_paths]
+            passed = [img for img in input_data if str(getattr(img, "path", img)) not in bad_paths]
+            rejected = [img for img in input_data if str(getattr(img, "path", img)) in bad_paths]
             return {"passed": passed, "rejected": rejected}
 
+        # -- Dedup: split into unique / duplicates --
         if node_name == "dedup":
             dup_paths = set()
             if result.details:
                 for group in result.details:
+                    # First image in group is kept; rest are duplicates
                     for img in group.images[1:]:
-                        dup_paths.add(str(img))
-            unique = [img for img in input_images if str(getattr(img, "path", img)) not in dup_paths]
-            dups = [img for img in input_images if str(getattr(img, "path", img)) in dup_paths]
+                        dup_paths.add(str(getattr(img, "path", img)))
+            unique = [img for img in input_data if str(getattr(img, "path", img)) not in dup_paths]
+            dups = [img for img in input_data if str(getattr(img, "path", img)) in dup_paths]
             return {"unique": unique, "duplicates": dups}
 
+        # -- Augment: output new image paths (not originals) --
+        if node_name == "augment" and result.output_paths:
+            new_infos = [
+                ImageInfo(path=p, category="augmented")
+                for p in result.output_paths
+            ]
+            return {"output": new_infos}
+
+        # -- Split: output the SplitResult directly for export to consume --
         if node_name == "split" and result.details:
-            sr = result.details
-            return {"train": sr.train, "val": sr.val, "test": sr.test}
+            return {"output": result.details}
+
+        # -- Default: single output passes through input --
+        if len(out_ports) <= 1:
+            port_name = out_ports[0].name if out_ports else "output"
+            return {port_name: input_data}
 
         # Fallback: all outputs get the same data
-        return {p.name: input_images for p in out_ports}
+        return {p.name: input_data for p in out_ports}
 
     @staticmethod
-    def _topo_sort(nodes: dict[int, GraphNodeDef]) -> list[int]:
+    def _topo_sort(nodes: dict[int, _GraphNodeDef]) -> list[int]:
         """Kahn's algorithm. Raises ValueError on cycle."""
         in_degree: dict[int, int] = {nid: 0 for nid in nodes}
         adj: dict[int, list[int]] = {nid: [] for nid in nodes}
@@ -270,3 +218,15 @@ class GraphEngine:
             raise ValueError("管线中存在循环依赖")
 
         return order
+
+
+# ---------- Internal ----------
+
+@dataclass
+class _GraphNodeDef:
+    """A node in the execution graph."""
+    id: int
+    node_name: str
+    display_name: str
+    params: dict[str, Any]
+    inputs: dict[str, tuple[int, str]]  # port_name → (upstream_id, upstream_port)

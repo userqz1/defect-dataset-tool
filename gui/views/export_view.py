@@ -300,6 +300,14 @@ class ExportView(QWidget):
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
 
+    def set_results(self, input_data, step_result) -> None:
+        """Display pipeline execution results."""
+        if step_result is None:
+            return
+        report = step_result.details
+        count = getattr(report, "written_images", 0)
+        self.summary_label.setText(f"导出完成: {count} 张图片已写入")
+
     def set_task_type(self, task_type) -> None:
         """Show/hide format cards based on the project's task type."""
         from core.task_types import TASK_REGISTRY

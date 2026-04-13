@@ -244,6 +244,16 @@ class SplitView(QWidget):
         for n in ("train", "val", "test"):
             getattr(self, f"manual_{n}_list").clear()
 
+    def set_results(self, input_data, step_result) -> None:
+        """Display pipeline execution results (split distribution)."""
+        if step_result is None or step_result.details is None:
+            return
+        sr = step_result.details  # SplitResult
+        n_tr, n_va, n_te = len(sr.train), len(sr.val), len(sr.test)
+        total = n_tr + n_va + n_te
+        self.summary_label.setText(
+            f"划分完成: train {n_tr} · val {n_va} · test {n_te} (共 {total})")
+
     def add_to_manual_bucket(self, bucket: str, images: list[ImageInfo]) -> None:
         """供 BrowserView 右键菜单调用,把多选图片塞进 manual 桶。"""
         if bucket not in ("train", "val", "test"):

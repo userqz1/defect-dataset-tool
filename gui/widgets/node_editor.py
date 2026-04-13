@@ -253,6 +253,7 @@ class NodeItem(QGraphicsRectItem):
         self.outputs: list[PortItem] = []
         self._params: dict[str, Any] = {}
         self._state: str = STATE_IDLE
+        self._status_text: str = ""
 
         # Build ports from spec
         from core.nodes import NODES
@@ -261,10 +262,10 @@ class NodeItem(QGraphicsRectItem):
         in_defs = [p for p in port_defs if p.direction == "input"]
         out_defs = [p for p in port_defs if p.direction == "output"]
 
-        # Calculate height
+        # Calculate height (extra 18px for status text area)
         n_rows = max(len(in_defs), len(out_defs), 1)
         port_area = n_rows * PORT_SPACING + PORT_PAD * 2
-        total_h = NODE_PAD_TOP + port_area
+        total_h = NODE_PAD_TOP + port_area + 18
 
         super().__init__(0, 0, NODE_W, total_h)
         self.setPos(x, y)
@@ -307,18 +308,13 @@ class NodeItem(QGraphicsRectItem):
         return dict(self._params)
 
     def set_status(self, text: str) -> None:
-        if "完成" in text or "成功" in text:
-            self._state = STATE_DONE
-        elif "失败" in text or "错误" in text:
-            self._state = STATE_ERROR
-        elif text:
-            self._state = STATE_RUNNING
-        else:
-            self._state = STATE_IDLE
+        self._status_text = text
         self.update()
 
     def set_state(self, state: str) -> None:
         self._state = state
+        if not state or state == STATE_IDLE:
+            self._status_text = ""
         self.update()
 
     # -- paint --
@@ -413,6 +409,19 @@ class NodeItem(QGraphicsRectItem):
             painter.setBrush(QBrush(sc))
             painter.setPen(QPen(QColor(T.NODE_BG), 1.5))
             painter.drawEllipse(QPointF(ix + ICON_SIZE - 1, iy + ICON_SIZE - 1), 4, 4)
+
+        # 7. Status text (below ports, in the bottom margin)
+        if self._status_text:
+            sf = QFont()
+            sf.setPointSize(7)
+            painter.setFont(sf)
+            painter.setPen(QPen(QColor(T.TEXT_2)))
+            status_rect = QRectF(6, rect.height() - 16, rect.width() - 12, 14)
+            painter.drawText(
+                status_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                self._status_text,
+            )
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:

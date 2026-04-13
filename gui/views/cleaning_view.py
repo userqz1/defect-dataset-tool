@@ -153,8 +153,17 @@ class CleaningView(QWidget):
         self.quality_list.clear()
         self.dedup_list.clear()
         if on:
-            self._add_placeholder(self.quality_list, "点击「开始检查」运行质量检测")
-            self._add_placeholder(self.dedup_list, "点击「开始检测」查找重复图片")
+            self._add_placeholder(self.quality_list, "点击「执行流程」运行质量检测")
+            self._add_placeholder(self.dedup_list, "点击「执行流程」查找重复图片")
+
+    def set_results(self, input_data, step_result) -> None:
+        """Display pipeline execution results (called after pipeline Run)."""
+        if step_result is None:
+            return
+        issues = step_result.details
+        if isinstance(issues, list) and all(hasattr(i, "kinds") for i in issues[:1]):
+            # Quality check results
+            self._on_quality_done(issues)
 
     @staticmethod
     def _add_placeholder(lst: QListWidget, text: str) -> None:
