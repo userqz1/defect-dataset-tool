@@ -422,12 +422,11 @@ class PipelineView(QWidget):
         container._browser = browser
         container._thumb = thumb
         container._scan_worker = None
+        container._root_dir = None  # persisted to scheme params
 
-        def _on_open():
-            d = QFileDialog.getExistingDirectory(container, "选择数据集目录", str(Path.home()))
-            if not d:
-                return
-            root = Path(d)
+        def _scan_dir(root: Path):
+            """Scan a directory and load into browser."""
+            container._root_dir = root
             path_label.setText(str(root))
             open_btn.setEnabled(False)
             stats_label.setText("扫描中…")
@@ -471,7 +470,25 @@ class PipelineView(QWidget):
             worker.failed.connect(on_fail)
             worker.start()
 
+        def _on_open():
+            d = QFileDialog.getExistingDirectory(container, "选择数据集目录", str(Path.home()))
+            if not d:
+                return
+            _scan_dir(Path(d))
+
         open_btn.clicked.connect(_on_open)
+
+        # get_params / set_params for scheme persistence
+        def _get_params():
+            return {"root_dir": str(container._root_dir) if container._root_dir else ""}
+
+        def _set_params(params):
+            root = params.get("root_dir", "")
+            if root and Path(root).is_dir():
+                _scan_dir(Path(root))
+
+        container.get_params = _get_params
+        container.set_params = _set_params
 
         def _rescan():
             """Re-scan the current directory after file ops (delete/rename/move)."""
