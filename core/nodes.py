@@ -111,8 +111,13 @@ class QualityCheckNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        if not images:
+            raise ValueError("质量检查节点没有收到图片，请检查上游连接")
         from .quality import QualityOptions, check_images
-        opts = QualityOptions(blur_threshold=options.get("blur_threshold", 100))
+        threshold = options.get("blur_threshold", 100)
+        if not (10 <= threshold <= 5000):
+            raise ValueError(f"模糊阈值 {threshold} 超出范围 (10-5000)")
+        opts = QualityOptions(blur_threshold=threshold)
         issues = check_images(images, opts=opts, progress_cb=progress_cb)
         return StepResult(
             ok_count=len(images) - len(issues),
@@ -136,8 +141,12 @@ class DedupNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        if not images:
+            raise ValueError("重复检测节点没有收到图片，请检查上游连接")
         from .dedup import find_duplicates
         threshold = options.get("threshold", 5)
+        if not (0 <= threshold <= 64):
+            raise ValueError(f"相似阈值 {threshold} 超出范围 (0-64)")
         groups = find_duplicates(images, threshold=threshold, progress_cb=progress_cb)
         dup_count = sum(len(g.duplicates) for g in groups)
         return StepResult(
@@ -165,11 +174,13 @@ class AugmentNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        if not images:
+            raise ValueError("数据增强节点没有收到图片，请检查上游连接")
         from .augment import AugmentOptions, augment_batch
         opts_dict = dict(options)  # don't mutate caller's dict
         out_dir = Path(opts_dict.pop("out_dir", ""))
         if not str(out_dir) or str(out_dir) == ".":
-            raise ValueError("数据增强节点需要配置输出目录")
+            raise ValueError("数据增强节点需要配置输出目录（双击节点设置）")
         out_dir.mkdir(parents=True, exist_ok=True)
         opts = AugmentOptions(**{k: v for k, v in opts_dict.items()
                                  if hasattr(AugmentOptions, k)})
@@ -202,8 +213,17 @@ class SplitNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        if not images:
+            raise ValueError("划分节点没有收到图片，请检查上游连接")
         from .models import Category, Dataset
         from .splitter import SplitOptions, split_dataset
+
+        train_r = options.get("train_ratio", 0.8)
+        val_r = options.get("val_ratio", 0.1)
+        test_r = options.get("test_ratio", 0.1)
+        total_r = train_r + val_r + test_r
+        if total_r <= 0:
+            raise ValueError("划分比例之和必须大于 0")
 
         # Accept both Dataset and list[ImageInfo]
         if isinstance(images, Dataset):
@@ -244,7 +264,9 @@ class DataSourceNode:
     )
 
     def execute(self, images, options, progress_cb=None):
-        return StepResult(ok_count=len(images) if images else 0)
+        if not images:
+            raise ValueError("数据源未加载数据集，请双击节点选择目录")
+        return StepResult(ok_count=len(images))
 
 
 class ExportNode:
@@ -262,11 +284,15 @@ class ExportNode:
     )
 
     def execute(self, images, options, progress_cb=None):
+        if not images:
+            raise ValueError("导出节点没有收到数据，请检查上游连接")
         from .splitter import SplitResult
         fmt = options.get("format", "YOLO").upper()
+        if fmt not in ("YOLO", "COCO", "VOC", "CSV"):
+            raise ValueError(f"不支持的导出格式: {fmt}")
         out_dir_str = options.get("out_dir", "")
         if not out_dir_str or out_dir_str == ".":
-            raise ValueError("导出节点需要配置输出目录")
+            raise ValueError("导出节点需要配置输出目录（双击节点设置）")
         out_dir = Path(out_dir_str)
 
         # Accept SplitResult (from split node) or plain image list

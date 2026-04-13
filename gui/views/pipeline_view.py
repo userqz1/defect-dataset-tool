@@ -570,6 +570,15 @@ class PipelineView(QWidget):
                             duration=2000, position=InfoBarPosition.TOP)
             return
 
+        # Sync workspace params before validation
+        self._sync_all_workspace_params()
+
+        if not self._dataset:
+            InfoBar.warning("", "请先在数据源节点中选择数据集目录",
+                            parent=self.window(), duration=3000,
+                            position=InfoBarPosition.TOP)
+            return
+
         from core.nodes import NODES as NODE_SPECS
         graph = self._canvas.build_graph()
         for ndef in graph:
