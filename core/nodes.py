@@ -167,7 +167,10 @@ class AugmentNode:
     def execute(self, images, options, progress_cb=None):
         from .augment import AugmentOptions, augment_batch
         opts_dict = dict(options)  # don't mutate caller's dict
-        out_dir = Path(opts_dict.pop("out_dir", "."))
+        out_dir = Path(opts_dict.pop("out_dir", ""))
+        if not str(out_dir) or str(out_dir) == ".":
+            raise ValueError("数据增强节点需要配置输出目录")
+        out_dir.mkdir(parents=True, exist_ok=True)
         opts = AugmentOptions(**{k: v for k, v in opts_dict.items()
                                  if hasattr(AugmentOptions, k)})
         result = augment_batch(
@@ -261,7 +264,10 @@ class ExportNode:
     def execute(self, images, options, progress_cb=None):
         from .splitter import SplitResult
         fmt = options.get("format", "YOLO").upper()
-        out_dir = Path(options.get("out_dir", "."))
+        out_dir_str = options.get("out_dir", "")
+        if not out_dir_str or out_dir_str == ".":
+            raise ValueError("导出节点需要配置输出目录")
+        out_dir = Path(out_dir_str)
 
         # Accept SplitResult (from split node) or plain image list
         if isinstance(images, SplitResult):
@@ -313,6 +319,8 @@ class PredictNode:
         conf = options.get("confidence", 0.25)
         overwrite = options.get("overwrite", False)
         predictor = YoloPredictor(model_name=model, conf=conf)
+        if not predictor.is_available():
+            raise ValueError("YOLOv8 不可用，请先安装 ultralytics: pip install ultralytics")
         paths = [img.path if hasattr(img, "path") else img for img in images]
         result = predict_batch(paths, predictor, overwrite=overwrite,
                                progress_cb=progress_cb)
