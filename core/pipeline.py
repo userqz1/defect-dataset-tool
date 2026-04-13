@@ -145,51 +145,15 @@ class GraphEngine:
 
     @staticmethod
     def _route_outputs(node_name: str, spec, result, input_data) -> dict[str, Any]:
-        """Map a StepResult to per-output-port data."""
-        ports = getattr(spec, "ports", ())
-        out_ports = [p for p in ports if p.direction == "output"]
-
-        # -- Quality check: split into passed / rejected --
-        if node_name == "quality_check":
-            bad_paths = set()
-            if result.details:
-                for issue in result.details:
-                    bad_paths.add(str(getattr(issue, "path", "")))
-            passed = [img for img in input_data if str(getattr(img, "path", img)) not in bad_paths]
-            rejected = [img for img in input_data if str(getattr(img, "path", img)) in bad_paths]
-            return {"passed": passed, "rejected": rejected}
-
-        # -- Dedup: split into unique / duplicates --
-        if node_name == "dedup":
-            dup_paths = set()
-            if result.details:
-                for group in result.details:
-                    # First image in group is kept; rest are duplicates
-                    for img in group.images[1:]:
-                        dup_paths.add(str(getattr(img, "path", img)))
-            unique = [img for img in input_data if str(getattr(img, "path", img)) not in dup_paths]
-            dups = [img for img in input_data if str(getattr(img, "path", img)) in dup_paths]
-            return {"unique": unique, "duplicates": dups}
-
-        # -- Augment: output new image paths (not originals) --
-        if node_name == "augment" and result.output_paths:
-            new_infos = [
-                ImageInfo(path=p, category="augmented")
-                for p in result.output_paths
-            ]
-            return {"output": new_infos}
-
-        # -- Split: output the SplitResult directly for export to consume --
-        if node_name == "split" and result.details:
-            return {"output": result.details}
-
-        # -- Default: single output passes through input --
-        if len(out_ports) <= 1:
-            port_name = out_ports[0].name if out_ports else "output"
-            return {port_name: input_data}
-
-        # Fallback: all outputs get the same data
-        return {p.name: input_data for p in out_ports}
+        """Delegate routing to the node's own route() method."""
+        if hasattr(spec, "route"):
+            try:
+                return spec.route(input_data, result)
+            except Exception:
+                pass
+        # Fallback for nodes without route(): single-output passthrough
+        from .nodes import _default_route
+        return _default_route(spec, input_data, result)
 
     @staticmethod
     def _topo_sort(nodes: dict[int, _GraphNodeDef]) -> list[int]:

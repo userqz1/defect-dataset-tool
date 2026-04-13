@@ -35,6 +35,7 @@ class YoloPredictor:
     def is_available(self) -> bool:
         try:
             import ultralytics  # noqa: F401
+            self._error = None
             return True
         except Exception as e:  # noqa: BLE001
             self._error = str(e)

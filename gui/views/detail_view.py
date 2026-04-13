@@ -39,15 +39,21 @@ class _ImageLoader(QThread):
     def __init__(self, img: ImageInfo, parent=None):
         super().__init__(parent)
         self._img = img
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
-        # Load image
+        if self._cancelled:
+            return
         image = QImage(str(self._img.path))
+        if self._cancelled:
+            return
         pix = QPixmap.fromImage(image) if not image.isNull() else QPixmap()
 
-        # Parse annotation
         annotation = None
-        if self._img.has_label and self._img.label_path:
+        if not self._cancelled and self._img.has_label and self._img.label_path:
             classes = None
             if self._img.label_path.suffix.lower() == ".txt":
                 classes = load_yolo_classes(self._img.label_path.parent) or None
@@ -55,7 +61,8 @@ class _ImageLoader(QThread):
             if result.ok:
                 annotation = result.annotation
 
-        self.done.emit(pix, annotation, self._img)
+        if not self._cancelled:
+            self.done.emit(pix, annotation, self._img)
 
 
 class DetailView(QWidget):
@@ -280,7 +287,8 @@ class DetailView(QWidget):
 
         # 图片 + 标注异步加载
         if hasattr(self, "_loader") and self._loader and self._loader.isRunning():
-            self._loader.terminate()
+            self._loader.cancel()
+            self._loader.wait(500)
         self._loader = _ImageLoader(img, parent=self)
         self._loader.done.connect(self._on_image_loaded)
         self._loader.start()

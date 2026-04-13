@@ -53,7 +53,7 @@ def check_one(image_path: Path, opts: QualityOptions) -> tuple[list[str], dict[s
             stddev = float(stat.stddev[0])
             lap_var = _laplacian_variance(im)
     except Exception as e:  # noqa: BLE001
-        return ["corrupt"], {"error": 0.0, "_msg": 0.0}
+        return ["corrupt"], {"error": str(e)}
 
     kinds: list[str] = []
     if stddev < opts.blank_std_max:

@@ -195,9 +195,10 @@ class SchemeWelcome(QWidget):
         box.cancelButton.setText("取消")
         if box.exec():
             try:
-                Path(path_str).unlink()
+                from send2trash import send2trash
+                send2trash(str(Path(path_str)))
             except Exception:
-                pass
+                Path(path_str).unlink(missing_ok=True)
             self._load()
 
     def _on_duplicate(self, path_str: str) -> None:

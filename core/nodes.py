@@ -93,6 +93,26 @@ class ProcessingNode(Protocol):
         """Run the processing step. *images* is list[ImageInfo] or list[Path]."""
         ...
 
+    def route(
+        self,
+        input_data: list,
+        result: StepResult,
+    ) -> dict[str, Any]:
+        """Map execution result to per-output-port data.
+
+        Default: single-output passthrough. Override for multi-output
+        or transformed-output nodes.
+        """
+        ...
+
+
+def _default_route(spec, input_data: list, result: StepResult) -> dict[str, Any]:
+    """Fallback route: single output port passes through input data."""
+    ports = getattr(spec, "ports", ())
+    out_ports = [p for p in ports if p.direction == "output"]
+    port_name = out_ports[0].name if out_ports else "output"
+    return {port_name: input_data}
+
 
 # ---------- Concrete nodes wrapping existing core functions ----------
 
@@ -125,6 +145,15 @@ class QualityCheckNode:
             details=issues,
         )
 
+    def route(self, input_data, result):
+        bad_paths = set()
+        if result.details:
+            for issue in result.details:
+                bad_paths.add(str(getattr(issue, "path", "")))
+        passed = [img for img in input_data if str(getattr(img, "path", img)) not in bad_paths]
+        rejected = [img for img in input_data if str(getattr(img, "path", img)) in bad_paths]
+        return {"passed": passed, "rejected": rejected}
+
 
 class DedupNode:
     name = "dedup"
@@ -148,12 +177,22 @@ class DedupNode:
         if not (0 <= threshold <= 64):
             raise ValueError(f"相似阈值 {threshold} 超出范围 (0-64)")
         groups = find_duplicates(images, threshold=threshold, progress_cb=progress_cb)
-        dup_count = sum(len(g.duplicates) for g in groups)
+        dup_count = sum(len(g.images) - 1 for g in groups if len(g.images) > 1)
         return StepResult(
             ok_count=len(images) - dup_count,
             fail_count=dup_count,
             details=groups,
         )
+
+    def route(self, input_data, result):
+        dup_paths = set()
+        if result.details:
+            for group in result.details:
+                for img in group.images[1:]:
+                    dup_paths.add(str(getattr(img, "path", img)))
+        unique = [img for img in input_data if str(getattr(img, "path", img)) not in dup_paths]
+        dups = [img for img in input_data if str(getattr(img, "path", img)) in dup_paths]
+        return {"unique": unique, "duplicates": dups}
 
 
 class AugmentNode:
@@ -194,6 +233,13 @@ class AugmentNode:
             output_paths=result.written_images,
             details=result,
         )
+
+    def route(self, input_data, result):
+        from .models import ImageInfo
+        if result.output_paths:
+            return {"output": [ImageInfo(path=p, category="augmented")
+                               for p in result.output_paths]}
+        return {"output": input_data}
 
 
 class SplitNode:
@@ -250,6 +296,10 @@ class SplitNode:
         total = len(result.train) + len(result.val) + len(result.test)
         return StepResult(ok_count=total, details=result)
 
+    def route(self, input_data, result):
+        """Output the SplitResult itself, not the input images."""
+        return {"output": result.details} if result.details else {"output": input_data}
+
 
 class DataSourceNode:
     name = "data_source"
@@ -264,8 +314,10 @@ class DataSourceNode:
     )
 
     def execute(self, images, options, progress_cb=None):
-        if not images:
+        if images is None:
             raise ValueError("数据源未加载数据集，请双击节点选择目录")
+        if not images:
+            raise ValueError("数据集目录中没有找到图片")
         return StepResult(ok_count=len(images))
 
 

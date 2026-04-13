@@ -577,7 +577,7 @@ class NodeCanvas(QGraphicsView):
                 self._nodes[-1].set_params(sn.params)
         # Create connections
         for sc in scheme.connections:
-            if sc.src_idx >= len(self._nodes) or sc.tgt_idx >= len(self._nodes):
+            if not (0 <= sc.src_idx < len(self._nodes)) or not (0 <= sc.tgt_idx < len(self._nodes)):
                 continue
             src_node = self._nodes[sc.src_idx]
             tgt_node = self._nodes[sc.tgt_idx]

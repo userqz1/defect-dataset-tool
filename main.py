@@ -15,11 +15,20 @@ APP_NAME = "数据工坊"  # DataForge
 
 
 def _migrate_cache_dir() -> None:
-    """One-time migration: rename ~/.defect_dataset_tool → ~/.dataforge."""
+    """One-time migration: copy ~/.defect_dataset_tool → ~/.dataforge.
+
+    Uses shutil.copytree (not rename) so the old dir survives if
+    the user downgrades. Writes a marker so it only runs once.
+    """
     old = Path.home() / ".defect_dataset_tool"
     new = Path.home() / ".dataforge"
+    marker = new / ".migrated"
     if old.is_dir() and not new.exists():
-        old.rename(new)
+        import shutil
+        shutil.copytree(old, new, dirs_exist_ok=True)
+        marker.touch()
+    elif new.is_dir() and not marker.exists():
+        marker.touch()  # mark existing installs as migrated
 
 
 def main() -> int:
