@@ -169,6 +169,7 @@ class ConnectionItem(QGraphicsPathItem):
         source.connections.append(self)
         target.connections.append(self)
         self._hovered = False
+        self._data_count: int | None = None  # shown on connection after execution
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setZValue(0)
@@ -200,6 +201,27 @@ class ConnectionItem(QGraphicsPathItem):
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawPath(self.path())
+
+        # Data count label at midpoint of bezier
+        if self._data_count is not None:
+            mid = self.path().pointAtPercent(0.5)
+            text = str(self._data_count)
+            font = QFont()
+            font.setPointSize(7)
+            painter.setFont(font)
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(text) + 8
+            th = fm.height() + 4
+            badge = QRectF(mid.x() - tw / 2, mid.y() - th / 2, tw, th)
+            painter.setBrush(QBrush(QColor(T.SURFACE_DIM)))
+            painter.setPen(QPen(QColor(T.BORDER), 0.5))
+            painter.drawRoundedRect(badge, 4, 4)
+            painter.setPen(QPen(QColor(T.TEXT_2)))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
+
+    def set_data_count(self, count: int | None) -> None:
+        self._data_count = count
+        self.update()
 
     def hoverEnterEvent(self, event) -> None:
         self._hovered = True
@@ -486,8 +508,9 @@ class GhostNodeItem(QGraphicsRectItem):
 class NodeCanvas(QGraphicsView):
     """Zoomable / pannable canvas with dot grid."""
 
-    node_selected = pyqtSignal(str, str)
-    node_double_clicked = pyqtSignal(object)  # emits NodeItem directly
+    node_selected = pyqtSignal(object)         # emits NodeItem on single-click
+    node_deselected = pyqtSignal()             # emits when clicking empty area
+    node_double_clicked = pyqtSignal(object)   # emits NodeItem directly
 
     MIME_TYPE = "application/x-dataforge-node"
 
@@ -806,6 +829,14 @@ class NodeCanvas(QGraphicsView):
             self._drag_port = None
             return
         super().mouseReleaseEvent(event)
+
+        # Emit node selection signal after Qt processes selection
+        if event.button() == Qt.MouseButton.LeftButton:
+            selected = [it for it in self._scene.selectedItems() if isinstance(it, NodeItem)]
+            if len(selected) == 1:
+                self.node_selected.emit(selected[0])
+            elif not selected:
+                self.node_deselected.emit()
 
     def mouseDoubleClickEvent(self, event) -> None:
         item = self.itemAt(event.pos())

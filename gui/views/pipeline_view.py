@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -99,7 +100,7 @@ class PipelineView(QWidget):
         self._stack = QStackedWidget()
         root.addWidget(self._stack)
 
-        # Page 0: Canvas with top bar
+        # Page 0: Canvas + preview panel
         canvas_page = QWidget()
         cp_lay = QVBoxLayout(canvas_page)
         cp_lay.setContentsMargins(0, 0, 0, 0)
@@ -137,10 +138,26 @@ class PipelineView(QWidget):
         top_lay.addWidget(run_btn)
         cp_lay.addWidget(topbar)
 
+        # Horizontal splitter: canvas (left) + preview panel (right)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(1)
+
         # Canvas
         self._canvas = NodeCanvas()
         self._canvas.node_double_clicked.connect(self._on_node_dblclick)
-        cp_lay.addWidget(self._canvas, 1)
+        self._canvas.node_selected.connect(self._on_node_selected)
+        self._canvas.node_deselected.connect(self._on_node_deselected)
+        splitter.addWidget(self._canvas)
+
+        # Preview panel
+        from gui.widgets.node_preview_panel import NodePreviewPanel
+        self._preview = NodePreviewPanel()
+        splitter.addWidget(self._preview)
+
+        splitter.setStretchFactor(0, 1)   # canvas stretches
+        splitter.setStretchFactor(1, 0)   # preview stays fixed
+        splitter.setSizes([800, T.DETAIL_SIDEBAR_WIDTH])
+        cp_lay.addWidget(splitter, 1)
 
         # Zoom overlay
         self._zoom_frame = QFrame(self._canvas)
@@ -213,6 +230,17 @@ class PipelineView(QWidget):
 
     def set_task_type(self, task_type) -> None:
         self._task_type = task_type
+
+    # ---- Node selection (preview panel) ----
+
+    def _on_node_selected(self, node_item) -> None:
+        """Single-click on a node → show its data in the preview panel."""
+        nid = id(node_item)
+        result = self._node_results.get(nid)
+        self._preview.show_node(node_item, result, self._dataset)
+
+    def _on_node_deselected(self) -> None:
+        self._preview.show_empty()
 
     # ---- Layout ----
 
@@ -610,6 +638,15 @@ class PipelineView(QWidget):
                 else:
                     node_item.set_status(record.message)
 
+        # Update connection data counts
+        self._update_connection_counts(result)
+
+        # Refresh preview panel for currently selected node
+        selected = [it for it in self._canvas._scene.selectedItems()
+                    if isinstance(it, NodeItem)]
+        if len(selected) == 1:
+            self._on_node_selected(selected[0])
+
         if result.success:
             InfoBar.success("完成", f"{result.steps_run} 个节点执行完成",
                             parent=self.window(), duration=3000,
@@ -618,6 +655,25 @@ class PipelineView(QWidget):
             InfoBar.error("执行错误", result.error,
                           parent=self.window(), duration=5000,
                           position=InfoBarPosition.TOP)
+
+    def _update_connection_counts(self, result) -> None:
+        """Set data count labels on connections after execution."""
+        from gui.widgets.node_editor import ConnectionItem
+        for item in self._canvas._scene.items():
+            if not isinstance(item, ConnectionItem):
+                continue
+            # Find the source node and its output data for this port
+            src_node = item.source.node if hasattr(item.source, "node") else None
+            if src_node is None:
+                continue
+            nid = id(src_node)
+            nr = result.node_results.get(nid)
+            if nr and nr.output_data:
+                port_name = item.source.port_name
+                data = nr.output_data.get(port_name)
+                if data is not None:
+                    count = len(data) if isinstance(data, list) else None
+                    item.set_data_count(count)
 
     def _on_failed(self, msg: str) -> None:
         self._worker = None
