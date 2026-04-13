@@ -176,6 +176,17 @@ class PipelineView(QWidget):
     def clear_workspaces(self) -> None:
         """Remove cached workspaces (called when switching schemes)."""
         for _name, (wrapper, idx) in list(self._workspaces.items()):
+            # Stop background workers before deletion to avoid segfault
+            content = wrapper.content if hasattr(wrapper, "content") else None
+            if content is not None:
+                # Data source workspace stores refs on the container
+                thumb = getattr(content, "_thumb", None)
+                if thumb is not None:
+                    thumb.stop()
+                scan_w = getattr(content, "_scan_worker", None)
+                if scan_w is not None:
+                    scan_w.quit()
+                    scan_w.wait(1000)
             self._stack.removeWidget(wrapper)
             wrapper.deleteLater()
         self._workspaces.clear()
