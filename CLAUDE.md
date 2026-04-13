@@ -80,7 +80,7 @@ Each processing step implements the `ProcessingNode` protocol:
 - `PortDef` (name, label, direction, data_type) — defines input/output ports.
 - `ParamDef` (name, label, type, default, choices, min/max) — defines configurable parameters.
 - `StepResult` (ok_count, fail_count, output_paths, details) — execution result.
-- Concrete nodes: `QualityCheckNode`, `DedupNode`, `AugmentNode`, `SplitNode`, `TransformNode`, `ConvertNode`, `PredictNode`, plus multiple export nodes.
+- Concrete nodes: `DataSourceNode`, `QualityCheckNode`, `DedupNode`, `AugmentNode`, `PredictNode`, `SplitNode`, `ExportNode`.
 - All registered in global `NODES: dict[str, ProcessingNode]`.
 
 ### Scheme persistence (`core/scheme.py`)
@@ -105,6 +105,12 @@ Schemes serialize the canvas state (nodes + connections + positions) to JSON in 
 **Dataset scan**: Two phases — (1) `scan_dataset()` enumerates files via `os.scandir` without parsing JSON, (2) `count_annotations()` optionally parses annotations. Results cached to SQLite via `index_cache.py`.
 
 **Thumbnails**: Lazy-loaded via `ThumbnailWorker` with on-disk cache (`diskcache`).
+
+**Pipeline-first execution**: Only the canvas "执行流程" button runs processing. Workspace views are for config + result display, not independent execution. `GraphEngine` topologically sorts nodes, executes each, routes data between ports.
+
+**Workspace param sync**: Each workspace view implements `get_params() → dict` and `set_params(dict)`. Params sync to `NodeItem._params` when returning to canvas (`_back_to_canvas`) and before saving (`_on_save_clicked`). When opening a workspace, `NodeItem.params` are pushed into the UI via `set_params()`.
+
+**Worker cleanup**: `clear_workspaces()` must stop `ThumbnailWorker` and `ScanWorker` before `deleteLater()` to avoid segfaults from dangling thread references.
 
 ### Adding a new processing node
 
