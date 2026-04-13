@@ -187,6 +187,38 @@ class AugmentView(QWidget):
 
     # ---------- 接口 ----------
 
+    def get_params(self) -> dict:
+        return {
+            "flip_h": self.flip_h_chk.isChecked(),
+            "flip_v": self.flip_v_chk.isChecked(),
+            "rotate": self.rot_chk.isChecked(),
+            "brightness": self.bright_chk.isChecked(),
+            "contrast": self.contrast_chk.isChecked(),
+            "color_jitter": self.color_chk.isChecked(),
+            "random_crop": self.crop_chk.isChecked(),
+            "copy_paste": self.copy_paste_chk.isChecked(),
+            "n_each": self.n_spin.value(),
+            "seed": self.seed_spin.value(),
+            "out_dir": str(self._out_dir) if self._out_dir else "",
+        }
+
+    def set_params(self, params: dict) -> None:
+        for key, chk in [
+            ("flip_h", self.flip_h_chk), ("flip_v", self.flip_v_chk),
+            ("rotate", self.rot_chk), ("brightness", self.bright_chk),
+            ("contrast", self.contrast_chk), ("color_jitter", self.color_chk),
+            ("random_crop", self.crop_chk), ("copy_paste", self.copy_paste_chk),
+        ]:
+            if key in params:
+                chk.setChecked(bool(params[key]))
+        if "n_each" in params:
+            self.n_spin.setValue(int(params["n_each"]))
+        if "seed" in params:
+            self.seed_spin.setValue(int(params["seed"]))
+        if params.get("out_dir"):
+            self._out_dir = Path(params["out_dir"])
+            self.out_label.setText(f"输出目录: {self._out_dir}")
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         if dataset is None:

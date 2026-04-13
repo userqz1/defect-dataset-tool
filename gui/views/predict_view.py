@@ -87,6 +87,27 @@ class PredictView(QWidget):
 
     # ---------- 接口 ----------
 
+    def get_params(self) -> dict:
+        return {
+            "model": self.model_edit.text(),
+            "confidence": self.conf_spin.value(),
+            "overwrite": self.overwrite_chk.isChecked(),
+        }
+
+    def set_params(self, params: dict) -> None:
+        if "model" in params:
+            self.model_edit.setText(str(params["model"]))
+        if "confidence" in params:
+            self.conf_spin.setValue(float(params["confidence"]))
+        if "overwrite" in params:
+            self.overwrite_chk.setChecked(bool(params["overwrite"]))
+
+    def set_results(self, input_data, step_result) -> None:
+        if step_result is None:
+            return
+        self.summary_label.setText(
+            f"预标注完成: {step_result.ok_count} 张写入 · {step_result.fail_count} 张失败")
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         if dataset is None:

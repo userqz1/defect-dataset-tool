@@ -300,6 +300,27 @@ class ExportView(QWidget):
             n = sum(c.image_count for c in dataset.categories)
             self.summary_label.setText(f"将导出 {n:,} 张图片")
 
+    def get_params(self) -> dict:
+        return {
+            "format": self._selected_fmt,
+            "train_ratio": self.train_spin.value(),
+            "val_ratio": self.val_spin.value(),
+            "test_ratio": self.test_spin.value(),
+            "copy_images": self.copy_chk.isChecked(),
+        }
+
+    def set_params(self, params: dict) -> None:
+        if params.get("format") and params["format"] in self._format_cards:
+            self._select_format(params["format"])
+        if "train_ratio" in params:
+            self.train_spin.setValue(float(params["train_ratio"]))
+        if "val_ratio" in params:
+            self.val_spin.setValue(float(params["val_ratio"]))
+        if "test_ratio" in params:
+            self.test_spin.setValue(float(params["test_ratio"]))
+        if "copy_images" in params:
+            self.copy_chk.setChecked(bool(params["copy_images"]))
+
     def set_results(self, input_data, step_result) -> None:
         """Display pipeline execution results."""
         if step_result is None:

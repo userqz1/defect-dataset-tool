@@ -181,7 +181,19 @@ class PipelineView(QWidget):
         self._workspaces.clear()
 
     def _on_save_clicked(self) -> None:
+        # Sync all workspace params back to NodeItems before saving
+        self._sync_all_workspace_params()
         self.save_requested.emit()
+
+    def _sync_all_workspace_params(self) -> None:
+        """Push params from all open workspace views back to their NodeItems."""
+        for name, node_item in self._workspace_node_items.items():
+            if name not in self._workspaces:
+                continue
+            wrapper, _ = self._workspaces[name]
+            content = wrapper.content
+            if hasattr(content, "get_params"):
+                node_item.set_params(content.get_params())
 
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
@@ -272,6 +284,12 @@ class PipelineView(QWidget):
             if self._dataset:
                 view.set_dataset(self._dataset)
             return view
+        if name == "predict":
+            from gui.views.predict_view import PredictView
+            view = PredictView()
+            if self._dataset:
+                view.set_dataset(self._dataset)
+            return view
         if name == "split":
             from gui.views.split_view import SplitView
             view = SplitView()
@@ -292,6 +310,11 @@ class PipelineView(QWidget):
         wrapper, _ = self._workspaces[name]
         content = wrapper.content
 
+        # Restore params from NodeItem into workspace UI controls
+        params = node_item.get_params()
+        if params and hasattr(content, "set_params"):
+            content.set_params(params)
+
         if self._dataset and hasattr(content, "set_dataset"):
             content.set_dataset(self._dataset)
 
@@ -302,6 +325,16 @@ class PipelineView(QWidget):
             content.set_results(node_result.input_data, node_result.step_result)
 
     def _back_to_canvas(self) -> None:
+        # Sync current workspace params back to NodeItem
+        for name, node_item in self._workspace_node_items.items():
+            if name not in self._workspaces:
+                continue
+            wrapper, idx = self._workspaces[name]
+            if self._stack.currentIndex() == idx:
+                content = wrapper.content
+                if hasattr(content, "get_params"):
+                    node_item.set_params(content.get_params())
+                break
         self._stack.setCurrentIndex(0)
 
     def _open_dialog(self, node_item: NodeItem) -> None:

@@ -292,6 +292,37 @@ class ExportNode:
         return StepResult(ok_count=count, details=report)
 
 
+class PredictNode:
+    name = "predict"
+    display_name = "AI 预标注"
+    step_type = "augment"
+    description = "使用 YOLOv8 自动生成标注"
+    ports = (
+        PortDef("input", "输入", "input", "dataset"),
+        PortDef("output", "已标注", "output", "dataset"),
+    )
+    parameters = (
+        ParamDef("model", "模型", "str", "yolov8n.pt"),
+        ParamDef("confidence", "置信度", "float", 0.25, min_val=0.05, max_val=0.95),
+        ParamDef("overwrite", "覆盖已有标注", "bool", False),
+    )
+
+    def execute(self, images, options, progress_cb=None):
+        from .predictor import YoloPredictor, predict_batch
+        model = options.get("model", "yolov8n.pt")
+        conf = options.get("confidence", 0.25)
+        overwrite = options.get("overwrite", False)
+        predictor = YoloPredictor(model_name=model, conf=conf)
+        paths = [img.path if hasattr(img, "path") else img for img in images]
+        result = predict_batch(paths, predictor, overwrite=overwrite,
+                               progress_cb=progress_cb)
+        return StepResult(
+            ok_count=len(result.written),
+            fail_count=len(result.failed),
+            details=result,
+        )
+
+
 # ---------- Category visual metadata (pure Python — no Qt) ----------
 
 @dataclass(frozen=True)
@@ -318,6 +349,7 @@ NODES: dict[str, ProcessingNode] = {
     "quality_check": QualityCheckNode(),
     "dedup": DedupNode(),
     "augment": AugmentNode(),
+    "predict": PredictNode(),
     "split": SplitNode(),
     "export": ExportNode(),
 }

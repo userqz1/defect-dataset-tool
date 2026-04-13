@@ -244,6 +244,24 @@ class SplitView(QWidget):
         for n in ("train", "val", "test"):
             getattr(self, f"manual_{n}_list").clear()
 
+    def get_params(self) -> dict:
+        return {
+            "train_ratio": self.train_spin.value(),
+            "val_ratio": self.val_spin.value(),
+            "test_ratio": self.test_spin.value(),
+            "stratified": self.stratified_chk.isChecked(),
+        }
+
+    def set_params(self, params: dict) -> None:
+        if "train_ratio" in params:
+            self.train_spin.setValue(float(params["train_ratio"]))
+        if "val_ratio" in params:
+            self.val_spin.setValue(float(params["val_ratio"]))
+        if "test_ratio" in params:
+            self.test_spin.setValue(float(params["test_ratio"]))
+        if "stratified" in params:
+            self.stratified_chk.setChecked(bool(params["stratified"]))
+
     def set_results(self, input_data, step_result) -> None:
         """Display pipeline execution results (split distribution)."""
         if step_result is None or step_result.details is None:

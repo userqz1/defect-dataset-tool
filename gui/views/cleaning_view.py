@@ -142,6 +142,16 @@ class CleaningView(QWidget):
 
         root.addWidget(splitter, 1)
 
+    def get_params(self) -> dict:
+        return {"blur_threshold": self.blur_spin.value(),
+                "threshold": self.threshold_spin.value()}
+
+    def set_params(self, params: dict) -> None:
+        if "blur_threshold" in params:
+            self.blur_spin.setValue(float(params["blur_threshold"]))
+        if "threshold" in params:
+            self.threshold_spin.setValue(int(params["threshold"]))
+
     def set_dataset(self, dataset: Dataset | None) -> None:
         self._dataset = dataset
         n = sum(c.image_count for c in dataset.categories) if dataset else 0
