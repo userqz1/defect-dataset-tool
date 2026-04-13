@@ -336,7 +336,7 @@ class PipelineView(QWidget):
         return None
 
     def _update_workspace(self, name: str, node_item: NodeItem) -> None:
-        """Bind workspace to NodeItem + push dataset/results."""
+        """Bind workspace to NodeItem + push dataset."""
         wrapper, _ = self._workspaces[name]
         content = wrapper.content
 
@@ -346,12 +346,7 @@ class PipelineView(QWidget):
 
         if self._dataset and hasattr(content, "set_dataset"):
             content.set_dataset(self._dataset)
-
-        # Inject pipeline execution results if available
-        nid = id(node_item)
-        node_result = self._node_results.get(nid)
-        if node_result and hasattr(content, "set_results"):
-            content.set_results(node_result.input_data, node_result.step_result)
+        # Results shown in preview panel (right side), not in workspace.
 
     def _back_to_canvas(self) -> None:
         # Params already in NodeItem (written on every UI change). Just switch.

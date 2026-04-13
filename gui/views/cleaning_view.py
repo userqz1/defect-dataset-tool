@@ -32,20 +32,16 @@ from qfluentwidgets import (
 )
 
 from core import fileops
-from core.models import Dataset
 from gui.theme import T
+from gui.widgets.node_workspace import NodeWorkspace
 
 KIND_LABEL = {"corrupt": "损坏", "blank": "空白", "blur": "模糊", "over": "过曝", "under": "欠曝"}
 
 
-class CleaningView(QWidget):
+class CleaningView(NodeWorkspace):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("cleaningView")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self._dataset: Dataset | None = None
-        self._node_item = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
@@ -158,27 +154,6 @@ class CleaningView(QWidget):
         if n:
             self._add_placeholder(self.quality_list, "执行流程后查看结果")
             self._add_placeholder(self.dedup_list, "执行流程后查看结果")
-
-    def set_results(self, input_data, step_result) -> None:
-        """Display pipeline execution results."""
-        if step_result is None:
-            return
-        issues = step_result.details
-        if isinstance(issues, list) and issues and hasattr(issues[0], "kinds"):
-            self._show_quality_results(issues)
-
-    def _show_quality_results(self, issues) -> None:
-        self.quality_list.clear()
-        if not issues:
-            self.quality_summary.setText("未发现质量问题 ✓")
-            return
-        self.quality_summary.setText(f"发现 {len(issues)} 张问题图片")
-        for issue in issues:
-            tags = " · ".join(KIND_LABEL.get(k, k) for k in issue.kinds)
-            text = f"[{tags}]  {issue.image.category} / {issue.image.path.name}"
-            item = QListWidgetItem(text)
-            item.setData(Qt.ItemDataRole.UserRole, issue.image)
-            self.quality_list.addItem(item)
 
     # ---- Helpers ----
 

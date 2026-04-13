@@ -28,18 +28,14 @@ from qfluentwidgets import (
 from core.augment import AugmentOptions, augment_batch, augment_in_memory
 from core.models import Dataset
 from gui.theme import T
+from gui.widgets.node_workspace import NodeWorkspace
 from gui.widgets.preview_pane import PreviewPane
-from gui.workers.batch_worker import BatchWorker
 
 
-class AugmentView(QWidget):
+class AugmentView(NodeWorkspace):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("augmentView")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self._dataset: Dataset | None = None
-        self._node_item = None
         self._out_dir: Path | None = None
         self._selection_provider = None  # () -> list[ImageInfo]
 
@@ -240,12 +236,6 @@ class AugmentView(QWidget):
         n = sum(c.image_count for c in dataset.categories)
         self.summary_label.setText(f"待增强:{n:,} 张图片")
 
-    def set_results(self, input_data, step_result) -> None:
-        """Display pipeline execution results."""
-        if step_result is None:
-            return
-        self.summary_label.setText(
-            f"增强完成: {step_result.ok_count} 张生成 · {step_result.fail_count} 张失败")
 
     # ---------- 内部 ----------
 

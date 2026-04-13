@@ -34,17 +34,15 @@ from core.splitter import (
     write_split_lists,
 )
 from gui.theme import T
+from gui.widgets.node_workspace import NodeWorkspace
 
 
-class SplitView(QWidget):
-    go_export = pyqtSignal()  # 划分完成后跳转到导出
+class SplitView(NodeWorkspace):
+    go_export = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("splitView")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self._dataset: Dataset | None = None
         self._node_item = None
         self._last_result = None
 
@@ -273,15 +271,6 @@ class SplitView(QWidget):
             "stratified": self.stratified_chk.isChecked(),
         })
 
-    def set_results(self, input_data, step_result) -> None:
-        """Display pipeline execution results (split distribution)."""
-        if step_result is None or step_result.details is None:
-            return
-        sr = step_result.details  # SplitResult
-        n_tr, n_va, n_te = len(sr.train), len(sr.val), len(sr.test)
-        total = n_tr + n_va + n_te
-        self.summary_label.setText(
-            f"划分完成: train {n_tr} · val {n_va} · test {n_te} (共 {total})")
 
     def add_to_manual_bucket(self, bucket: str, images: list[ImageInfo]) -> None:
         """供 BrowserView 右键菜单调用,把多选图片塞进 manual 桶。"""

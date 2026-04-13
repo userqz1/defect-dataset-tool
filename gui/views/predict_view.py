@@ -16,18 +16,14 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from core.models import Dataset
 from gui.theme import T
+from gui.widgets.node_workspace import NodeWorkspace
 
 
-class PredictView(QWidget):
+class PredictView(NodeWorkspace):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("predictView")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self._dataset: Dataset | None = None
-        self._node_item = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(T.PAD_2XL, T.PAD_2XL - 4, T.PAD_2XL, T.PAD_XL)
@@ -109,8 +105,3 @@ class PredictView(QWidget):
         n_un = sum(1 for c in dataset.categories for img in c.images if not img.has_label)
         self.summary_label.setText(f"未标注 {n_un:,} / 总计 {n:,}")
 
-    def set_results(self, input_data, step_result) -> None:
-        if step_result is None:
-            return
-        self.summary_label.setText(
-            f"预标注完成: {step_result.ok_count} 张写入 · {step_result.fail_count} 张失败")

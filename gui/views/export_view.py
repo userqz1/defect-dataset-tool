@@ -41,6 +41,7 @@ from core.exporter.voc import VocExportOptions, export_voc
 from core.exporter.yolo import YoloExportOptions, export_yolo
 from core.models import Dataset
 from gui.theme import T
+from gui.widgets.node_workspace import NodeWorkspace
 
 
 # ---------- 格式定义 ----------
@@ -150,14 +151,10 @@ class _FormatCard(QFrame):
 
 # ---------- 主视图 ----------
 
-class ExportView(QWidget):
+class ExportView(NodeWorkspace):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("exportView")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-
-        self._dataset: Dataset | None = None
-        self._node_item = None
         self._selected_fmt = "YOLO"
 
         scroll = QScrollArea(self)
@@ -324,13 +321,6 @@ class ExportView(QWidget):
             "copy_images": self.copy_chk.isChecked(),
         })
 
-    def set_results(self, input_data, step_result) -> None:
-        """Display pipeline execution results."""
-        if step_result is None:
-            return
-        report = step_result.details
-        count = getattr(report, "written_images", 0)
-        self.summary_label.setText(f"导出完成: {count} 张图片已写入")
 
     def set_task_type(self, task_type) -> None:
         """Show/hide format cards based on the project's task type."""
