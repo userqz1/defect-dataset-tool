@@ -589,6 +589,22 @@ class PipelineView(QWidget):
                     )
                     return
 
+        # Validate required path parameters
+        _REQUIRED_PATHS = {"augment": "out_dir", "export": "out_dir"}
+        for ndef in graph:
+            req_param = _REQUIRED_PATHS.get(ndef["node_name"])
+            if req_param and not ndef["params"].get(req_param):
+                node_item = self._canvas.node_by_id(ndef["id"])
+                if node_item:
+                    node_item.set_state("error")
+                InfoBar.warning(
+                    "参数未配置",
+                    f"「{ndef['display_name']}」需要先配置输出目录",
+                    parent=self.window(), duration=3000,
+                    position=InfoBarPosition.TOP,
+                )
+                return
+
         for node_item in nodes:
             node_item.set_state("running")
 
