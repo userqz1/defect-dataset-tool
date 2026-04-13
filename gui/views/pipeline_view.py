@@ -179,6 +179,8 @@ class PipelineView(QWidget):
             self._stack.removeWidget(wrapper)
             wrapper.deleteLater()
         self._workspaces.clear()
+        self._workspace_node_items.clear()
+        self._node_results.clear()
 
     def _on_save_clicked(self) -> None:
         # Sync all workspace params back to NodeItems before saving
