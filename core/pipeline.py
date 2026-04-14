@@ -63,8 +63,17 @@ class GraphEngine:
     ) -> GraphResult:
         from .nodes import NODES
 
-        # Parse graph into _GraphNodeDefs
-        nodes = {g["id"]: _GraphNodeDef(**g) for g in graph}
+        # Parse graph into _GraphNodeDefs (explicit fields to avoid blowup on extra keys)
+        nodes = {
+            g["id"]: _GraphNodeDef(
+                id=g["id"],
+                node_name=g["node_name"],
+                display_name=g.get("display_name", g["node_name"]),
+                params=g.get("params", {}),
+                inputs=g.get("inputs", {}),
+            )
+            for g in graph
+        }
         total = len(nodes)
 
         # Topological sort (Kahn's algorithm)

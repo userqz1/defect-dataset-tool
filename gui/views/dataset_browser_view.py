@@ -158,6 +158,8 @@ class DatasetBrowserView(QWidget):
 
     def _scan_dir(self, root: Path) -> None:
         """Scan a directory and load into browser."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
         self._path_label.setText(str(root))
         self._open_btn.setEnabled(False)
         self._stats_label.setText("扫描中…")
@@ -201,6 +203,8 @@ class DatasetBrowserView(QWidget):
 
     def _rescan(self) -> None:
         """Re-scan after file ops (delete/rename/move)."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            return
         ds = self._state.dataset
         if ds is None:
             return
@@ -246,7 +250,10 @@ class DatasetBrowserView(QWidget):
 
     def _run_export(self, dataset, opts: dict) -> None:
         """Execute export in a BatchWorker."""
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
         from core.splitter import SplitOptions, split_dataset
+        from core.exporter.registry import run_export
 
         split_opts = SplitOptions(
             train=opts["train_ratio"],
@@ -259,32 +266,8 @@ class DatasetBrowserView(QWidget):
         copy_images = opts["copy_images"]
 
         def task(progress_cb):
-            if fmt == "YOLO":
-                from core.exporter.yolo import YoloExportOptions, export_yolo
-                return export_yolo(split, YoloExportOptions(out_dir=out_dir, copy_images=copy_images), progress_cb)
-            elif fmt == "COCO":
-                from core.exporter.coco import CocoExportOptions, export_coco
-                return export_coco(split, CocoExportOptions(out_dir=out_dir), progress_cb)
-            elif fmt == "Pascal VOC":
-                from core.exporter.voc import VocExportOptions, export_voc
-                return export_voc(split, VocExportOptions(out_dir=out_dir), progress_cb)
-            elif fmt == "JSON Lines":
-                from core.exporter.jsonl import JsonlExportOptions, export_jsonl
-                return export_jsonl(split, JsonlExportOptions(out_dir=out_dir, copy_images=copy_images), progress_cb)
-            elif fmt == "ShareGPT":
-                from core.exporter.sharegpt import ShareGptExportOptions, export_sharegpt
-                return export_sharegpt(split, ShareGptExportOptions(out_dir=out_dir), progress_cb)
-            elif fmt == "ms-swift":
-                from core.exporter.swift import SwiftExportOptions, export_swift
-                return export_swift(split, SwiftExportOptions(out_dir=out_dir), progress_cb)
-            elif fmt == "LLaVA":
-                from core.exporter.llava import LlavaExportOptions, export_llava
-                return export_llava(split, LlavaExportOptions(out_dir=out_dir, copy_images=copy_images), progress_cb)
-            elif fmt == "CSV":
-                from core.exporter.csv_export import export_csv_dataset
-                return export_csv_dataset(split, out_dir, progress_cb)
-            else:
-                raise ValueError(f"不支持的导出格式: {fmt}")
+            return run_export(fmt, split, out_dir, copy_images=copy_images,
+                              progress_cb=progress_cb)
 
         from gui.dialogs.op_dialogs import ProgressDialog
         from gui.workers.batch_worker import BatchWorker
@@ -326,13 +309,13 @@ class DatasetBrowserView(QWidget):
         if ds is None:
             self._path_label.setText("未选择目录")
             self._stats_label.setText("")
+            self._export_btn.setEnabled(False)
             return
-        # Avoid re-loading if we are the source of this signal
-        if ds is self._state.dataset:
-            self._path_label.setText(str(ds.root_path))
-            self._stats_label.setText(
-                f"{ds.total_images} 图片 · {len(ds.categories)} 类"
-            )
-            # Only reload browser if it doesn't already have this dataset
-            if getattr(self._browser, '_dataset', None) is not ds:
-                self._browser.load_dataset(ds)
+        self._path_label.setText(str(ds.root_path))
+        self._stats_label.setText(
+            f"{ds.total_images} 图片 · {len(ds.categories)} 类"
+        )
+        self._export_btn.setEnabled(True)
+        # Only reload browser if it doesn't already have this dataset
+        if getattr(self._browser, '_dataset', None) is not ds:
+            self._browser.load_dataset(ds)

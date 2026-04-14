@@ -38,79 +38,18 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
+from core.exporter.registry import EXPORTERS
 from core.models import Dataset
 from core.task_types import TASK_REGISTRY, TaskType
 from gui.theme import T
 
 
-# ---------- Format definitions ----------
+# ---------- Format definitions (derived from registry) ----------
 
 _FORMATS = [
-    {"key": "YOLO", "name": "YOLO", "desc": "YOLOv5 / v8 目标检测",
-     "detail": "适用于 Ultralytics YOLO 系列模型训练"},
-    {"key": "COCO", "name": "COCO JSON", "desc": "通用目标检测标准",
-     "detail": "适用于 Detectron2、mmdetection 等框架"},
-    {"key": "Pascal VOC", "name": "Pascal VOC", "desc": "经典 XML 标注格式",
-     "detail": "适用于 SSD、Faster R-CNN 等传统框架"},
-    {"key": "JSON Lines", "name": "JSON Lines", "desc": "通用数据管线格式",
-     "detail": "每行一条 JSON，适合自定义训练脚本和数据分析"},
-    {"key": "ShareGPT", "name": "ShareGPT (LLaMA-Factory)", "desc": "视觉大模型通用微调",
-     "detail": "LLaMA-Factory 标准格式，附带 dataset_info.json"},
-    {"key": "ms-swift", "name": "ms-swift (ModelScope)", "desc": "Qwen-VL / InternVL 微调",
-     "detail": "ModelScope SWIFT 框架格式"},
-    {"key": "LLaVA", "name": "LLaVA 原生", "desc": "LLaVA 原生对话格式",
-     "detail": "对话 JSONL，适用于原版 LLaVA / LLaVA-NeXT 微调"},
-    {"key": "CSV", "name": "CSV 表格", "desc": "数据分析友好",
-     "detail": "扁平表格，可直接用 Pandas/Excel 打开分析"},
+    {"key": e.key, "name": e.display_name, "desc": e.description}
+    for e in EXPORTERS.values()
 ]
-
-_STRUCTURES = {
-    "YOLO": (
-        "<output>/\n"
-        "  images/{train,val,test}/   图片按 split 分目录\n"
-        "  labels/{train,val,test}/   每张图对应一个 .txt\n"
-        "  classes.txt                类别名列表\n"
-        "  data.yaml                  训练配置文件"
-    ),
-    "COCO": (
-        "<output>/\n"
-        "  {train,val,test}/           图片按 split 分目录\n"
-        "  annotations/\n"
-        "    instances_{split}.json    COCO 标准标注"
-    ),
-    "Pascal VOC": (
-        "<output>/\n"
-        "  JPEGImages/                 所有图片\n"
-        "  Annotations/                每张图一个 .xml\n"
-        "  ImageSets/Main/             train.txt / val.txt / test.txt"
-    ),
-    "JSON Lines": (
-        "<output>/\n"
-        "  images/{train,val,test}/    图片（可选）\n"
-        "  {train,val,test}.jsonl      每行一条 JSON 记录"
-    ),
-    "ShareGPT": (
-        "<output>/\n"
-        "  images/{train,val,test}/    图片\n"
-        "  sharegpt_{split}.json       ShareGPT 对话格式\n"
-        "  dataset_info.json           LLaMA-Factory 注册文件"
-    ),
-    "ms-swift": (
-        "<output>/\n"
-        "  images/{train,val,test}/    图片\n"
-        "  swift_{split}.jsonl         ms-swift 对话格式"
-    ),
-    "LLaVA": (
-        "<output>/\n"
-        "  images/{train,val,test}/    图片（可选）\n"
-        "  llava_{split}.jsonl         LLaVA 原生对话格式"
-    ),
-    "CSV": (
-        "<output>/\n"
-        "  images/{train,val,test}/    图片（可选）\n"
-        "  annotations.csv             扁平表格"
-    ),
-}
 
 
 # ---------- Format card ----------
@@ -136,8 +75,6 @@ class _FormatCard(QFrame):
         name_row.addStretch(1)
         name_row.addWidget(CaptionLabel(fmt["desc"]))
         layout.addLayout(name_row)
-
-        layout.addWidget(CaptionLabel(fmt["detail"]))
 
     def set_selected(self, selected: bool) -> None:
         self.setProperty("selected", selected)
@@ -310,7 +247,8 @@ class ExportWizardDialog(MessageBoxBase):
         self._split_preview.setText(
             f"训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
         )
-        self._structure.setText(_STRUCTURES.get(self._selected_fmt, ""))
+        entry = EXPORTERS.get(self._selected_fmt)
+        self._structure.setText(entry.structure if entry else "")
 
     # ---------- Result ----------
 

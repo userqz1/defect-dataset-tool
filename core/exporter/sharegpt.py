@@ -37,7 +37,7 @@ class ExportReport:
     skipped: list[tuple[Path, str]] = field(default_factory=list)
 
 
-def _generate_answer(shapes, iw: int, ih: int) -> str:
+def _generate_answer(shapes) -> str:
     """Auto-generate a description from annotation shapes."""
     if not shapes:
         return "这张图片中未发现标注目标。"
@@ -99,7 +99,7 @@ def export_sharegpt(
                 with Image.open(img.path) as pim:
                     pass  # just validate image is readable
 
-                answer = _generate_answer(shapes, 0, 0)
+                answer = _generate_answer(shapes)
                 sample = {
                     "conversations": [
                         {"from": "human", "value": f"<image>\n{opts.question}"},

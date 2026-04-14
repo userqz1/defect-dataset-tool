@@ -90,7 +90,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("rectangle", "polygon"),
-        export_formats=("YOLO", "COCO", "VOC", "CSV", "JSONL", "LLaVA", "ShareGPT", "ms-swift"),
+        export_formats=("YOLO", "COCO", "VOC", "CSV", "JSONL", "LLaVA", "ShareGPT", "Swift"),
         augment_updates_shapes=True,
     ),
     TaskType.ORIENTED_DET: TaskTypeInfo(
