@@ -215,9 +215,19 @@ class DatasetBrowserView(QWidget):
                 f"{ds.total_images} 图片 · {len(ds.categories)} 类"
             )
             self._browser.load_dataset(ds)
-            self._set_tools_enabled(True)
+            # Tools only useful when we actually have images
+            self._set_tools_enabled(ds.total_images > 0)
             # Broadcast to all views via AppState
             self._state.set_dataset(ds)
+            # Empty-dataset guidance — distinguish "no images" from "filter mismatch"
+            if ds.total_images == 0:
+                InfoBar.warning(
+                    "目录中未找到图片",
+                    "期望布局：<根>/<类别>/images/*.jpg 或扁平 <根>/*.jpg。"
+                    "请确认子目录或扩展名（jpg/png/bmp/tif/webp）。",
+                    parent=self.window(), duration=8000,
+                    position=InfoBarPosition.TOP,
+                )
 
         def on_fail(msg):
             self._scan_worker = None

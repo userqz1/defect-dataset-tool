@@ -133,7 +133,10 @@ class DatasetWelcome(QWidget):
         if projects:
             self._list_label.setText(f"{len(projects)} 个最近数据集")
         else:
-            self._list_label.setText("暂无最近数据集，点击上方按钮打开目录")
+            self._list_label.setText(
+                "选择一个包含图片的文件夹开始 — "
+                "支持 <根>/<类别>/images/*.jpg 或扁平 <根>/*.jpg 布局"
+            )
 
         for ps in projects:
             card = _DatasetCard(
