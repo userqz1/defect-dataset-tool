@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from core.models import Category, Dataset, ImageInfo
-from core.splitter import SplitOptions, SplitResult, split_dataset
+from core.splitter import SplitMode, SplitOptions, SplitResult, split_dataset
 from pathlib import Path
 
 
@@ -71,3 +71,28 @@ class TestSplitResult:
     def test_counts_property(self):
         sr = SplitResult(train=[1, 2, 3], val=[4], test=[5, 6])
         assert sr.counts == (3, 1, 2)
+
+
+class TestSplitMode:
+    """Enum round-tripping + legacy string compatibility."""
+
+    def test_enum_equivalent_to_string(self):
+        """Old SplitOptions(mode='ratio') should behave identical to new
+        SplitOptions(mode=SplitMode.RATIO)."""
+        ds = _dataset({"cat": 100})
+        r_str = split_dataset(ds, SplitOptions(mode="ratio", train=0.8,
+                                               val=0.1, test=0.1))
+        r_enum = split_dataset(ds, SplitOptions(mode=SplitMode.RATIO, train=0.8,
+                                                val=0.1, test=0.1))
+        assert r_str.counts == r_enum.counts
+
+    def test_manual_returns_empty(self):
+        """Manual mode: splitter defers to caller, returns empty result."""
+        ds = _dataset({"cat": 50})
+        result = split_dataset(ds, SplitOptions(mode=SplitMode.MANUAL))
+        assert result.counts == (0, 0, 0)
+
+    def test_enum_values(self):
+        assert SplitMode.RATIO.value == "ratio"
+        assert SplitMode.COUNT.value == "count"
+        assert SplitMode.MANUAL.value == "manual"

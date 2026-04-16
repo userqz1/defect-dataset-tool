@@ -1,6 +1,7 @@
 """Browser view: category tree + filter bar + thumbnail grid + pagination."""
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -47,6 +48,15 @@ from gui.workers.batch_worker import BatchWorker
 PAGE_SIZE = 40
 
 
+class FilterMode(str, Enum):
+    """Which subset of the dataset the grid shows. Stored as its string
+    value in BrowseState for project.json round-tripping."""
+    ALL = "all"
+    LABELED = "labeled"
+    UNLABELED = "unlabeled"
+    ISSUES = "issues"      # only meaningful after a quality check
+
+
 class BrowserView(QWidget):
     image_activated = pyqtSignal(object, list)  # (current ImageInfo, full list)
     thumb_request = pyqtSignal(object)          # Path
@@ -69,7 +79,7 @@ class BrowserView(QWidget):
             app_state = AppState(parent=self)
         self._state = app_state
         self._current_category: str = ""
-        self._filter_mode: str = "all"   # all / labeled / unlabeled / issues
+        self._filter_mode: FilterMode = FilterMode.ALL
         self._search_text: str = ""
         self._page: int = 0
         self._filtered: list[ImageInfo] = []
@@ -135,23 +145,24 @@ class BrowserView(QWidget):
 
         self.chip_group = QButtonGroup(self)
         self.chip_group.setExclusive(True)
-        self._chips: dict[str, FilterChip] = {}
-        for key, label in [
-            ("all", self.tr("全部")),
-            ("labeled", self.tr("已标注")),
-            ("unlabeled", self.tr("未标注")),
-            ("issues", self.tr("有问题")),
+        self._chips: dict[FilterMode, FilterChip] = {}
+        for mode, label in [
+            (FilterMode.ALL, self.tr("全部")),
+            (FilterMode.LABELED, self.tr("已标注")),
+            (FilterMode.UNLABELED, self.tr("未标注")),
+            (FilterMode.ISSUES, self.tr("有问题")),
         ]:
             chip = FilterChip(label)
-            chip.setProperty("filterKey", key)
-            chip.clicked.connect(lambda _c=False, k=key: self._on_filter_changed(k))
+            chip.setProperty("filterKey", mode.value)
+            chip.clicked.connect(
+                lambda _c=False, m=mode: self._on_filter_changed(m))
             self.chip_group.addButton(chip)
             filter_bar.addWidget(chip)
-            self._chips[key] = chip
-            if key == "all":
+            self._chips[mode] = chip
+            if mode is FilterMode.ALL:
                 chip.setChecked(True)
         # "有问题" only meaningful after a quality check ran
-        self._chips["issues"].setEnabled(False)
+        self._chips[FilterMode.ISSUES].setEnabled(False)
 
         filter_bar.addStretch(1)
 
@@ -223,7 +234,8 @@ class BrowserView(QWidget):
         from core.project import BrowseState
         return BrowseState(
             category=self._current_category,
-            filter=self._filter_mode,
+            # Persist as plain string so BrowseState stays JSON-clean
+            filter=self._filter_mode.value,
             search=self._search_text,
             page=self._page,
         )
@@ -232,13 +244,17 @@ class BrowserView(QWidget):
         if state is None:
             return
         self._current_category = state.category or ""
-        self._filter_mode = state.filter or "all"
+        # Accept unknown values gracefully (old project.json from future builds)
+        try:
+            self._filter_mode = FilterMode(state.filter or "all")
+        except ValueError:
+            self._filter_mode = FilterMode.ALL
         self._search_text = state.search or ""
         self._page = state.page or 0
         # Update UI widgets
         self.search.setText(self._search_text)
         for btn in self.chip_group.buttons():
-            if btn.property("filterKey") == self._filter_mode:
+            if btn.property("filterKey") == self._filter_mode.value:
                 btn.setChecked(True)
                 break
         # Select category in tree
@@ -267,10 +283,10 @@ class BrowserView(QWidget):
         self._page = 0
         # New dataset → quality results from prior run are stale
         self._quality_map = {}
-        self._chips["issues"].setEnabled(False)
-        if self._filter_mode == "issues":
-            self._filter_mode = "all"
-            self._chips["all"].setChecked(True)
+        self._chips[FilterMode.ISSUES].setEnabled(False)
+        if self._filter_mode is FilterMode.ISSUES:
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
         self.tree.load_dataset(dataset)
         self._update_readiness(dataset)
         self._apply_filter_and_show()
@@ -362,11 +378,11 @@ class BrowserView(QWidget):
 
     def _apply_filter_and_show(self) -> None:
         imgs = self._all_images()
-        if self._filter_mode == "labeled":
+        if self._filter_mode is FilterMode.LABELED:
             imgs = [i for i in imgs if i.has_label]
-        elif self._filter_mode == "unlabeled":
+        elif self._filter_mode is FilterMode.UNLABELED:
             imgs = [i for i in imgs if not i.has_label]
-        elif self._filter_mode == "issues":
+        elif self._filter_mode is FilterMode.ISSUES:
             imgs = [i for i in imgs if str(i.path) in self._quality_map]
         if self._search_text:
             q = self._search_text.lower()
@@ -411,7 +427,7 @@ class BrowserView(QWidget):
         self._current_category = category
         self._apply_filter_and_show()
 
-    def _on_filter_changed(self, mode: str) -> None:
+    def _on_filter_changed(self, mode: FilterMode) -> None:
         self._filter_mode = mode
         self._apply_filter_and_show()
 
@@ -423,11 +439,11 @@ class BrowserView(QWidget):
         """
         self._quality_map = dict(issues_map)
         has_issues = bool(self._quality_map)
-        self._chips["issues"].setEnabled(has_issues)
-        if not has_issues and self._filter_mode == "issues":
+        self._chips[FilterMode.ISSUES].setEnabled(has_issues)
+        if not has_issues and self._filter_mode is FilterMode.ISSUES:
             # Auto-revert to "all" when issues cleared
-            self._filter_mode = "all"
-            self._chips["all"].setChecked(True)
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()
 
     def _on_search_changed(self, text: str) -> None:

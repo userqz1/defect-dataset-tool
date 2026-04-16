@@ -11,17 +11,27 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 from .models import Dataset, ImageInfo
 
-SplitMode = Literal["ratio", "count", "manual"]
+
+class SplitMode(str, Enum):
+    """How split_dataset decides where each image goes."""
+    RATIO = "ratio"     # train/val/test are fractions 0..1
+    COUNT = "count"     # explicit per-split counts
+    MANUAL = "manual"   # caller assembles train/val/test themselves
+
+# Retained for BrowseState / project.json serialization: Literal here lets
+# static type checkers accept raw strings round-tripped from disk.
+SplitModeStr = Literal["ratio", "count", "manual"]
 
 
 @dataclass
 class SplitOptions:
-    mode: SplitMode = "ratio"
+    mode: SplitMode | SplitModeStr = SplitMode.RATIO
     # ratio 模式
     train: float = 0.8
     val: float = 0.1
@@ -82,13 +92,15 @@ def _slice_count(items: list[ImageInfo], opts: SplitOptions, scale: float = 1.0)
 
 def split_dataset(dataset: Dataset, opts: SplitOptions | None = None) -> SplitResult:
     opts = opts or SplitOptions()
-    if opts.mode == "manual":
+    # Accept both SplitMode enum and legacy plain-string for backward compat
+    mode = opts.mode.value if isinstance(opts.mode, SplitMode) else opts.mode
+    if mode == SplitMode.MANUAL.value:
         # manual 由调用方组装；这里返回空
         return SplitResult()
 
     rng = random.Random(opts.seed)
     result = SplitResult()
-    slicer = _slice_ratio if opts.mode == "ratio" else _slice_count
+    slicer = _slice_ratio if mode == SplitMode.RATIO.value else _slice_count
 
     if opts.stratified:
         total = sum(c.image_count for c in dataset.categories) or 1
