@@ -126,16 +126,7 @@ def check_compliance(dataset: Dataset, task_type: TaskType) -> ComplianceReport:
             action=f"「{min_cat}」仅 {min_count} 张" if not enough else "",
         ))
 
-    # 6. Export format available
-    if info:
-        has_formats = len(info.export_formats) > 0
-        checks.append(ComplianceCheck(
-            category="export",
-            item="可用导出格式",
-            passed=has_formats,
-            current=", ".join(info.export_formats[:3]) + ("..." if len(info.export_formats) > 3 else ""),
-            required="≥ 1",
-            action="",
-        ))
+    # Note: 可用导出格式 not included — it's static task metadata,
+    # shown in the export dialog itself, not a dataset gate.
 
     return ComplianceReport(task_type=task_type, checks=checks)

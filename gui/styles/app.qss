@@ -295,14 +295,19 @@ QLabel#placeholderStatus {
  * 11. 就绪检查条
  * ============================================================ */
 
+QLabel#readinessOk,
+QLabel#readinessGap {
+    padding: 6px 14px;
+    min-height: 20px;
+    border-radius: 12px;
+    background: $SURFACE_DIM;
+}
 QLabel#readinessOk {
     color: $SUCCESS;
-    padding: 2px 8px;
 }
 QLabel#readinessGap {
     color: $WARNING;
-    padding: 2px 8px;
-    font-weight: bold;
+    font-weight: 600;
 }
 
 /* ============================================================

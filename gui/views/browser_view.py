@@ -265,14 +265,23 @@ class BrowserView(QWidget):
         """Store task type for compliance checking."""
         self._task_type = task_type
 
+    # Compact labels — compliance checker uses verbose Chinese names.
+    # Here we collapse them into short pill-style chips.
+    _READINESS_LABEL = {
+        "图片数量": "图片",
+        "分类数": "分类",
+        "标注覆盖": "标注",
+        "类别平衡": "平衡",
+        "每类最少张数": "最少",
+    }
+
     def _update_readiness(self, dataset: Dataset) -> None:
-        """Show compliance status — objective facts from compliance checker."""
+        """Compact readiness chips — short label + value, pill color by status."""
         for w in self._readiness_items:
             self._readiness_bar.removeWidget(w)
             w.deleteLater()
         self._readiness_items.clear()
 
-        # Run compliance check
         from core.compliance import check_compliance
         task_type = getattr(self, "_task_type", None)
         if task_type is None:
@@ -282,15 +291,41 @@ class BrowserView(QWidget):
         report = check_compliance(dataset, task_type)
 
         for check in report.checks:
-            text = f"{check.icon} {check.item}: {check.current}"
+            short = self._READINESS_LABEL.get(check.item, check.item)
+            value = self._format_readiness_value(check.item, check.current)
+            # Pass: short label + value (e.g. "图片 5,098")
+            # Fail: action when available, else short+value
+            if check.passed:
+                text = f"{short} {value}"
+            else:
+                text = check.action or f"{short} {value}"
             lbl = CaptionLabel(text)
             lbl.setObjectName("readinessOk" if check.passed else "readinessGap")
-            if not check.passed and check.action:
-                lbl.setToolTip(check.action)
+            # Tooltip always shows the full detail — the chip stays short
+            lbl.setToolTip(f"{check.item}: {check.current}"
+                           + (f" · 需求 {check.required}" if check.required else "")
+                           + (f"\n{check.action}" if check.action else ""))
             self._readiness_bar.addWidget(lbl)
             self._readiness_items.append(lbl)
 
         self._readiness_bar.addStretch(1)
+
+    @staticmethod
+    def _format_readiness_value(item: str, current: str) -> str:
+        """Strip verbose prefixes so the chip reads "图片 5,098" not "图片 5,098 张"."""
+        # "5,098 张" → "5,098"
+        if current.endswith(" 张"):
+            return current[:-2]
+        # "15 个" → "15"
+        if current.endswith(" 个"):
+            return current[:-2]
+        # "4,906/5,098 (96%)" → "96%"
+        if "(" in current and current.endswith(")"):
+            return current[current.rindex("(") + 1:-1]
+        # "最少: OverLimit (4张)" → "OverLimit 4"
+        if current.startswith("最少:"):
+            return current[3:].replace("(", "").replace(")", "").replace("张", "").strip()
+        return current
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)

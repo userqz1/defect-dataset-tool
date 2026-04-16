@@ -89,25 +89,25 @@ class _ThumbDelegate(QStyledItemDelegate):
             painter.setPen(QColor(T.TEXT_3))
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter, "加载中…")
 
-        # ---- Badge (top-right) ----
+        # ---- Badge (top-right) — silent when OK, only show warnings ----
+        # Labeled is the expected "good" state; showing "● 有标注" on every
+        # thumbnail in a fully-annotated dataset is pure noise. Only flag
+        # the actionable state ("无标注") here.
         badge_font = QFont(painter.font())
         badge_font.setPointSize(badge_font.pointSize() - 1)
-        painter.setFont(badge_font)
-        if img.has_label:
-            badge_text = "● 有标注"
-            badge_color = QColor(T.SUCCESS)
-        else:
+        bh = 20
+        if not img.has_label:
+            painter.setFont(badge_font)
             badge_text = "● 无标注"
             badge_color = QColor(T.WARNING)
-        fm = QFontMetrics(badge_font)
-        bw = fm.horizontalAdvance(badge_text) + 16
-        bh = 20
-        badge_rect = QRect(inner.right() - bw, inner.y(), bw, bh)
-        painter.setPen(QPen(QColor(T.BORDER), 1))
-        painter.setBrush(QColor(T.CONTENT))
-        painter.drawRoundedRect(badge_rect, 10, 10)
-        painter.setPen(badge_color)
-        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+            fm = QFontMetrics(badge_font)
+            bw = fm.horizontalAdvance(badge_text) + 16
+            badge_rect = QRect(inner.right() - bw, inner.y(), bw, bh)
+            painter.setPen(QPen(QColor(T.BORDER), 1))
+            painter.setBrush(QColor(T.CONTENT))
+            painter.drawRoundedRect(badge_rect, 10, 10)
+            painter.setPen(badge_color)
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
         # ---- Quality badge (top-left) ----
         kinds: list[str] | None = index.data(ROLE_QUALITY)
