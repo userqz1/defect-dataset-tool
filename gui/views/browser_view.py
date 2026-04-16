@@ -1,8 +1,11 @@
 """Browser view: category tree + filter bar + thumbnail grid + pagination."""
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -527,6 +530,15 @@ class BrowserView(QWidget):
         self._run(
             lambda cb: fileops.batch_rename(sel, pattern=pattern, start=start),
             self.tr("正在重命名…"),
+            history={
+                "action": "batch-rename",
+                "params": {
+                    "pattern": pattern, "start": start,
+                    "image_count": len(sel),
+                    "images": [str(i.path) for i in sel],
+                },
+                "summary": f"批量重命名 {len(sel)} 张（{pattern}）",
+            },
         )
 
     def _do_move(self, sel: list[ImageInfo]) -> None:
@@ -543,6 +555,16 @@ class BrowserView(QWidget):
         self._run(
             lambda cb: fileops.move_to_category(sel, root, target),
             self.tr("正在移动到 {target}…").format(target=target),
+            history={
+                "action": "move-to-category",
+                "params": {
+                    "target": target,
+                    "image_count": len(sel),
+                    # capture source paths for future undo
+                    "images": [str(i.path) for i in sel],
+                },
+                "summary": f"移动 {len(sel)} 张到 {target}",
+            },
         )
 
     def _do_convert(self, sel: list[ImageInfo]) -> None:
@@ -594,6 +616,11 @@ class BrowserView(QWidget):
             lambda cb: fileops.rename_category(root, name, new_name, progress_cb=cb),
             self.tr("正在重命名类别…"),
             rescan=True,
+            history={
+                "action": "rename-category",
+                "params": {"old": name, "new": new_name},
+                "summary": f"重命名类别 {name} → {new_name}",
+            },
         )
 
     def _do_merge_categories(self, name: str) -> None:
@@ -611,6 +638,11 @@ class BrowserView(QWidget):
             lambda cb: fileops.merge_categories(root, sources, target, progress_cb=cb),
             self.tr("正在合并类别…"),
             rescan=True,
+            history={
+                "action": "merge-categories",
+                "params": {"sources": list(sources), "target": target},
+                "summary": f"合并 {'、'.join(sources)} → {target}",
+            },
         )
 
     def _do_split_category(self, name: str) -> None:
@@ -637,11 +669,29 @@ class BrowserView(QWidget):
             lambda cb: fileops.split_category(root, name, new_name, sel, progress_cb=cb),
             self.tr("正在拆分类别…"),
             rescan=True,
+            history={
+                "action": "split-category",
+                "params": {
+                    "source": name, "new": new_name,
+                    "image_count": len(sel),
+                    "images": [str(i.path) for i in sel],
+                },
+                "summary": f"从 {name} 拆出 {len(sel)} 张到 {new_name}",
+            },
         )
 
     # ---- 通用 worker 驱动 ----
 
-    def _run(self, fn, title: str, rescan: bool = False) -> None:
+    def _run(self, fn, title: str, rescan: bool = False,
+             history: dict | None = None) -> None:
+        """Run a batch operation.
+
+        Args:
+            history: Optional ``{"action": str, "params": dict, "summary": str}``
+                describing a metadata operation. When present, both success
+                and failure append to ``.dataforge/history.jsonl`` via
+                core.history — the only gateway for metadata audit logging.
+        """
         if self._worker is not None:
             box = MessageBox(
                 self.tr("请稍候"), self.tr("已有操作正在执行"), self.window()
@@ -650,6 +700,7 @@ class BrowserView(QWidget):
             box.exec()
             return
         self._pending_rescan = rescan
+        self._pending_history = history
         self._progress = ProgressDialog(title, self.window())
         self._progress.show()
 
@@ -671,7 +722,14 @@ class BrowserView(QWidget):
             try:
                 index_cache.clear(self._state.dataset.root_path)
             except Exception:
-                pass
+                logger.exception("index cache clear failed")
+        # Append to operation history BEFORE surfacing UI feedback, so a
+        # blocking dialog can't silently drop the log entry.
+        self._record_history(
+            ok=result.fail_count == 0,
+            ok_count=getattr(result, "ok_count", 0),
+            fail_count=getattr(result, "fail_count", 0),
+        )
         if result.fail_count:
             details = "\n".join(f"{p}\n  → {err}" for p, err in result.failed[:200])
             FailureDetailDialog(
@@ -690,9 +748,42 @@ class BrowserView(QWidget):
 
     def _on_op_failed(self, msg: str) -> None:
         self._cleanup_worker()
+        self._record_history(ok=False, error=msg)
         box = MessageBox(self.tr("操作失败"), msg, self.window())
         box.cancelButton.hide()
         box.exec()
+
+    def _record_history(self, ok: bool, ok_count: int = 0,
+                         fail_count: int = 0, error: str = "") -> None:
+        """Append a single JSONL entry for the just-finished metadata op.
+
+        No-op when the caller didn't pass ``history=`` to _run (pure image
+        transforms / exports don't need an audit trail — only things that
+        move or rename belong in history).
+        """
+        hist = getattr(self, "_pending_history", None)
+        self._pending_history = None
+        if hist is None or not self._state.dataset:
+            return
+        from core import history as _hist
+        summary = hist.get("summary", "")
+        if error:
+            summary = f"{summary}（失败：{error}）"
+        elif fail_count:
+            summary = f"{summary}（{ok_count} 成功 / {fail_count} 失败）"
+        try:
+            _hist.append(
+                self._state.dataset.root_path,
+                _hist.HistoryEntry.now(
+                    action=hist.get("action", "unknown"),
+                    params=hist.get("params", {}),
+                    ok=ok,
+                    summary=summary,
+                ),
+            )
+        except Exception:
+            logger.exception("history record failed for %s",
+                             hist.get("action"))
 
     def _cleanup_worker(self) -> None:
         if self._progress:

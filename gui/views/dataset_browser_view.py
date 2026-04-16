@@ -108,8 +108,15 @@ class DatasetBrowserView(QWidget):
 
         tbar_lay.addStretch()
 
+        self._history_btn = PushButton("历史")
+        self._history_btn.setIcon(FIF.HISTORY)
+        self._history_btn.setFixedWidth(80)
+        self._history_btn.setEnabled(False)
+        self._history_btn.clicked.connect(self._on_history)
+        tbar_lay.addWidget(self._history_btn)
+
         self._stats_btn = PushButton("统计")
-        self._stats_btn.setIcon(FIF.HISTORY)
+        self._stats_btn.setIcon(FIF.PIE_SINGLE)
         self._stats_btn.setFixedWidth(80)
         self._stats_btn.setEnabled(False)
         self._stats_btn.clicked.connect(self._on_stats)
@@ -342,8 +349,16 @@ class DatasetBrowserView(QWidget):
     def _set_tools_enabled(self, enabled: bool) -> None:
         """Enable/disable all toolbar buttons."""
         for btn in (self._export_btn, self._quality_btn, self._dedup_btn,
-                    self._augment_btn, self._stats_btn):
+                    self._augment_btn, self._history_btn, self._stats_btn):
             btn.setEnabled(enabled)
+
+    def _on_history(self) -> None:
+        """Show the operation history for the current dataset."""
+        ds = self._state.dataset
+        if ds is None:
+            return
+        from gui.dialogs.history_dialog import HistoryDialog
+        HistoryDialog(ds.root_path, parent=self.window()).exec()
 
     def _all_images(self) -> list:
         """Collect all images from current dataset."""
@@ -453,12 +468,18 @@ class DatasetBrowserView(QWidget):
         )
 
     def _delete_duplicates(self, groups) -> None:
-        """Delete duplicate images (keep first in each group)."""
+        """Delete duplicate images (keep first in each group).
+
+        Records the action to history.jsonl so a future undo phase can
+        locate the trashed files — send2trash is recoverable from the
+        OS recycle bin but not always from inside the app.
+        """
         import logging
         from send2trash import send2trash
         log = logging.getLogger(__name__)
         deleted = 0
         failed = 0
+        trashed_paths: list[str] = []
         for g in groups:
             for img in g.images[1:]:
                 try:
@@ -466,9 +487,32 @@ class DatasetBrowserView(QWidget):
                     if img.label_path and img.label_path.exists():
                         send2trash(str(img.label_path))
                     deleted += 1
+                    trashed_paths.append(str(img.path))
                 except Exception:
                     log.exception("send2trash failed for %s", img.path)
                     failed += 1
+        # Record to history (best-effort — doesn't block rescan on failure)
+        ds = self._state.dataset
+        if ds is not None:
+            try:
+                from core import history as _hist
+                _hist.append(
+                    ds.root_path,
+                    _hist.HistoryEntry.now(
+                        action="delete-duplicates",
+                        params={
+                            "group_count": len(groups),
+                            "deleted": deleted,
+                            "failed": failed,
+                            "trashed": trashed_paths,
+                        },
+                        ok=failed == 0,
+                        summary=f"删除重复图片 {deleted} 张到回收站"
+                                + (f"（{failed} 失败）" if failed else ""),
+                    ),
+                )
+            except Exception:
+                log.exception("history append failed after delete-duplicates")
         if failed:
             InfoBar.warning(
                 "部分删除失败",
