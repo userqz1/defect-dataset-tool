@@ -23,6 +23,16 @@ from gui.theme import T
 ROLE_IMG = Qt.ItemDataRole.UserRole          # ImageInfo
 ROLE_PIX = Qt.ItemDataRole.UserRole + 1      # QPixmap (thumbnail)
 ROLE_DIM = Qt.ItemDataRole.UserRole + 2      # (w, h) tuple
+ROLE_QUALITY = Qt.ItemDataRole.UserRole + 3  # list[str] of quality issue kinds
+
+# Map quality kinds → 1-char Chinese badge code
+_QUALITY_CHAR = {
+    "blur": "模",
+    "blank": "空",
+    "over": "曝",
+    "under": "暗",
+    "corrupt": "损",
+}
 
 
 class _ThumbDelegate(QStyledItemDelegate):
@@ -99,6 +109,19 @@ class _ThumbDelegate(QStyledItemDelegate):
         painter.setPen(badge_color)
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
+        # ---- Quality badge (top-left) ----
+        kinds: list[str] | None = index.data(ROLE_QUALITY)
+        if kinds:
+            chars = "".join(_QUALITY_CHAR.get(k, "?") for k in kinds)
+            qfm = QFontMetrics(badge_font)
+            qw = qfm.horizontalAdvance(chars) + 14
+            q_rect = QRect(inner.x(), inner.y(), qw, bh)
+            painter.setPen(QPen(QColor(T.ERROR), 1))
+            painter.setBrush(QColor(T.ERROR))
+            painter.drawRoundedRect(q_rect, 10, 10)
+            painter.setPen(QColor(T.CONTENT))
+            painter.drawText(q_rect, Qt.AlignmentFlag.AlignCenter, chars)
+
         # ---- Meta area (bottom: separator + name + dimensions) ----
         meta_top = card.y() + self.THUMB_H
         # Separator line
@@ -161,13 +184,23 @@ class ThumbnailGrid(QListWidget):
         # path → item row index for fast thumb_ready lookup
         self._path_to_row: dict[str, int] = {}
 
-    def set_images(self, images: list[ImageInfo]) -> None:
+    def set_images(
+        self,
+        images: list[ImageInfo],
+        quality_map: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Render given images. quality_map (path str → list of issue kinds)
+        is consulted to paint a red badge on problematic thumbnails."""
         self.clear()
         self._path_to_row.clear()
+        qm = quality_map or {}
         for i, img in enumerate(images):
             item = QListWidgetItem()
             item.setSizeHint(QSize(T.CARD_WIDTH, T.CARD_HEIGHT))
             item.setData(ROLE_IMG, img)
+            kinds = qm.get(str(img.path))
+            if kinds:
+                item.setData(ROLE_QUALITY, kinds)
             self.addItem(item)
             self._path_to_row[str(img.path)] = i
             self.request_thumb.emit(img.path)

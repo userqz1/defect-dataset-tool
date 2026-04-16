@@ -62,10 +62,13 @@ class BrowserView(QWidget):
 
         self._dataset: Dataset | None = None
         self._current_category: str = ""
-        self._filter_mode: str = "all"   # all / labeled / unlabeled
+        self._filter_mode: str = "all"   # all / labeled / unlabeled / issues
         self._search_text: str = ""
         self._page: int = 0
         self._filtered: list[ImageInfo] = []
+        # Quality issues map: path str → list of kinds. Cleared on dataset
+        # change; populated by DatasetBrowserView after a quality check.
+        self._quality_map: dict[str, list[str]] = {}
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -124,18 +127,23 @@ class BrowserView(QWidget):
 
         self.chip_group = QButtonGroup(self)
         self.chip_group.setExclusive(True)
+        self._chips: dict[str, FilterChip] = {}
         for key, label in [
             ("all", self.tr("全部")),
             ("labeled", self.tr("已标注")),
             ("unlabeled", self.tr("未标注")),
+            ("issues", self.tr("有问题")),
         ]:
             chip = FilterChip(label)
             chip.setProperty("filterKey", key)
             chip.clicked.connect(lambda _c=False, k=key: self._on_filter_changed(k))
             self.chip_group.addButton(chip)
             filter_bar.addWidget(chip)
+            self._chips[key] = chip
             if key == "all":
                 chip.setChecked(True)
+        # "有问题" only meaningful after a quality check ran
+        self._chips["issues"].setEnabled(False)
 
         filter_bar.addStretch(1)
 
@@ -243,6 +251,12 @@ class BrowserView(QWidget):
         self._dataset = dataset
         self._current_category = ""
         self._page = 0
+        # New dataset → quality results from prior run are stale
+        self._quality_map = {}
+        self._chips["issues"].setEnabled(False)
+        if self._filter_mode == "issues":
+            self._filter_mode = "all"
+            self._chips["all"].setChecked(True)
         self.tree.load_dataset(dataset)
         self._update_readiness(dataset)
         self._apply_filter_and_show()
@@ -307,6 +321,8 @@ class BrowserView(QWidget):
             imgs = [i for i in imgs if i.has_label]
         elif self._filter_mode == "unlabeled":
             imgs = [i for i in imgs if not i.has_label]
+        elif self._filter_mode == "issues":
+            imgs = [i for i in imgs if str(i.path) in self._quality_map]
         if self._search_text:
             q = self._search_text.lower()
             imgs = [i for i in imgs if q in i.path.name.lower()]
@@ -326,7 +342,7 @@ class BrowserView(QWidget):
         if self._thumb_pending > 0:
             self._thumb_bar.show()
             self._thumb_bar.start()
-        self.grid.set_images(page_imgs)
+        self.grid.set_images(page_imgs, quality_map=self._quality_map)
 
         # 空状态切换
         if total == 0:
@@ -352,6 +368,21 @@ class BrowserView(QWidget):
 
     def _on_filter_changed(self, mode: str) -> None:
         self._filter_mode = mode
+        self._apply_filter_and_show()
+
+    def set_quality_issues(self, issues_map: dict[str, list[str]]) -> None:
+        """Apply quality-check results: red corner badges + enable "有问题" filter.
+
+        Pass an empty dict to clear (e.g. on dataset change). Map key must
+        be ``str(image.path)`` matching what the grid stores.
+        """
+        self._quality_map = dict(issues_map)
+        has_issues = bool(self._quality_map)
+        self._chips["issues"].setEnabled(has_issues)
+        if not has_issues and self._filter_mode == "issues":
+            # Auto-revert to "all" when issues cleared
+            self._filter_mode = "all"
+            self._chips["all"].setChecked(True)
         self._apply_filter_and_show()
 
     def _on_search_changed(self, text: str) -> None:

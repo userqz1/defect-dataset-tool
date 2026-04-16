@@ -43,6 +43,7 @@ class Tokens:
     ACCENT_SOFT: str
     SUCCESS: str
     WARNING: str
+    ERROR: str = "#c0392b"
 
     # ---- Node editor ----
     NODE_CAT_CLEAN: str = ""
@@ -92,6 +93,7 @@ LIGHT = Tokens(
     ACCENT_SOFT="#f4e8e2",
     SUCCESS="#5a7a3c",
     WARNING="#b8842b",
+    ERROR="#c0392b",
     NODE_CAT_CLEAN="#4a9a8a",
     NODE_CAT_AUGMENT="#8a6ac0",
     NODE_CAT_SPLIT="#c09840",
@@ -116,6 +118,7 @@ DARK = Tokens(
     ACCENT_SOFT="#3d2a22",
     SUCCESS="#7a9a4c",
     WARNING="#d09a3a",
+    ERROR="#e74c3c",
     NODE_CAT_CLEAN="#5abaa0",
     NODE_CAT_AUGMENT="#a080e0",
     NODE_CAT_SPLIT="#d0a850",

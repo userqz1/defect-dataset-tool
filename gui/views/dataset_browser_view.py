@@ -403,10 +403,16 @@ class DatasetBrowserView(QWidget):
         def on_done(issues):
             progress.accept()
             if not issues:
+                # Clear any prior quality state
+                self._browser.set_quality_issues({})
                 InfoBar.success("质量检查完成", "未发现问题图片",
                                 parent=self.window(), duration=3000,
                                 position=InfoBarPosition.TOP)
                 return
+            # Push results into the browser so the grid shows red badges
+            # and the "有问题" filter chip becomes enabled.
+            issues_map = {str(issue.image.path): issue.kinds for issue in issues}
+            self._browser.set_quality_issues(issues_map)
             # Summarize by kind
             from collections import Counter
             kind_counts = Counter()
@@ -420,7 +426,7 @@ class DatasetBrowserView(QWidget):
                 parts.append(f"{c} {kind_names.get(k, k)}")
             InfoBar.warning(
                 f"发现 {len(issues)} 张问题图片",
-                " · ".join(parts),
+                " · ".join(parts) + " · 缩略图已标红角，可用 \"有问题\" 筛选",
                 parent=self.window(), duration=8000,
                 position=InfoBarPosition.TOP,
             )
