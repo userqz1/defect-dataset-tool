@@ -4,6 +4,8 @@ Layout detection (决定一次、走一条路径)：
     standard  — <root>/<cat>/images/*  (+ labels/*.json)
     flat      — <root>/<cat>/*.jpg     (+ 同级 *.json)
     single    — <root>/*.jpg           (没有类别层，合成 "(未分类)" 类别)
+    coco      — <root>/annotations.json (COCO) + 同目录或 images/ 子目录的图片
+                类别来自 COCO categories，所有图片 label_path 都指向同一个 JSON
     recursive — 根一层既无图也无标准结构，递归向下最多 MAX_DEPTH 层，
                 用"图片所在目录名"做类别，同名自动合并
     empty     — 未发现任何图片
@@ -26,8 +28,10 @@ from . import config as _cfg
 from .annotation_formats import (
     LABEL_EXTENSIONS,
     YOLO_AUX_FILES,
+    CocoIndex,
     load_yolo_classes,
     parse_annotation,
+    parse_coco,
 )
 from .models import Category, Dataset, ImageInfo
 
@@ -69,7 +73,33 @@ def _has_image_file(d: Path, exts: set[str]) -> bool:
 
 # ---------- 布局检测 ----------
 
+def _find_coco_json(root: Path) -> tuple[Path, CocoIndex] | None:
+    """Scan root (and an optional ``annotations/`` subdir) for a file that
+    parse_coco accepts. Returns (path, index) of the first match."""
+    candidates: list[Path] = []
+    # Root-level JSONs first
+    for e in _scandir_safe(root):
+        if e.is_file() and e.name.lower().endswith(".json"):
+            candidates.append(Path(e.path))
+    # Common COCO layout: annotations/instances_*.json
+    ann_dir = root / "annotations"
+    if ann_dir.is_dir():
+        for e in _scandir_safe(ann_dir):
+            if e.is_file() and e.name.lower().endswith(".json"):
+                candidates.append(Path(e.path))
+    for p in candidates:
+        idx = parse_coco(p)
+        if idx is not None and idx.by_stem:
+            return p, idx
+    return None
+
+
 def _detect_layout(root: Path, exts: set[str]) -> str:
+    # COCO check comes first — the "single" and "recursive" heuristics
+    # would otherwise blindly match and leave annotations at 0.
+    if _find_coco_json(root) is not None:
+        return "coco"
+
     subdirs = _list_subdirs(root)
 
     if _has_image_file(root, exts):
@@ -130,6 +160,8 @@ def scan_dataset(
         categories, t_img = _scan_single(root, exts, progress_cb, counter)
     elif layout == "recursive":
         categories, t_img = _scan_recursive(root, exts, progress_cb, counter)
+    elif layout == "coco":
+        categories, t_img = _scan_coco(root, exts, progress_cb, counter)
     else:
         categories, t_img = _scan_categorical(root, exts, progress_cb, counter)
 
@@ -263,6 +295,78 @@ def _scan_single(
         )],
         len(images),
     )
+
+
+def _scan_coco(
+    root: Path, exts: set[str], progress_cb: ProgressCb | None, counter: list[int]
+) -> tuple[list[Category], int]:
+    """Build categories from COCO's ``categories`` + images list.
+
+    All images get ``label_path`` pointing at the COCO JSON; parse_annotation
+    has a cached COCO branch so 1000 images only pay one parse.
+    """
+    found = _find_coco_json(root)
+    if found is None:
+        return [], 0
+    json_path, idx = found
+
+    # Images may live at root, in root/images/, or in whatever file_name said
+    image_dirs: list[Path] = [root]
+    if (root / "images").is_dir():
+        image_dirs.append(root / "images")
+    # Walk subdirs that don't look like the annotations dir
+    for e in _list_subdirs(root):
+        if e.name.lower() != "annotations":
+            image_dirs.append(Path(e.path))
+
+    # Dedup by stem for annotation lookup; category assignment from first shape
+    image_paths_by_stem: dict[str, Path] = {}
+    for d in image_dirs:
+        for e in _scandir_safe(d):
+            if not e.is_file():
+                continue
+            ext = os.path.splitext(e.name)[1].lower()
+            if ext not in exts:
+                continue
+            stem = os.path.splitext(e.name)[0]
+            image_paths_by_stem.setdefault(stem, Path(e.path))
+
+    by_category: dict[str, list[ImageInfo]] = {}
+    label_count_by_cat: dict[str, int] = {}
+    UNLABELED = "(未标注)"
+
+    for stem, p in image_paths_by_stem.items():
+        shapes = idx.by_stem.get(stem, [])
+        has_label = bool(shapes)
+        if has_label:
+            # Category = first shape's label (COCO images can have multiple
+            # classes; this is a display heuristic, the shapes carry truth)
+            cat_name = shapes[0].label
+            label_count_by_cat[cat_name] = label_count_by_cat.get(cat_name, 0) + 1
+        else:
+            cat_name = UNLABELED
+        by_category.setdefault(cat_name, []).append(
+            ImageInfo(
+                path=p,
+                category=cat_name,
+                has_label=has_label,
+                label_path=json_path if has_label else None,
+            )
+        )
+        counter[0] += 1
+        if progress_cb and counter[0] % PROGRESS_CHUNK == 0:
+            progress_cb(counter[0], 0, cat_name)
+
+    categories = [
+        Category(
+            name=name,
+            image_count=len(imgs),
+            label_count=label_count_by_cat.get(name, 0),
+            images=imgs,
+        )
+        for name, imgs in sorted(by_category.items())
+    ]
+    return categories, sum(c.image_count for c in categories)
 
 
 def _scan_recursive(

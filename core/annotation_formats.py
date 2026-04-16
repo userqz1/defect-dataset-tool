@@ -44,16 +44,52 @@ def parse_annotation(
     image_path: Path | None = None,
     yolo_class_names: list[str] | None = None,
 ) -> ParseResult:
-    """Pick a parser by file extension and run it."""
+    """Pick a parser by file extension and run it.
+
+    `.json` dispatches to COCO when the file is dataset-level (contains
+    images+annotations+categories keys); otherwise to per-image LabelMe.
+    The COCO file is cached (by mtime) so thousands of images hitting the
+    same JSON pay only one parse cost.
+    """
     ext = label_path.suffix.lower()
     if ext == ".json":
-        # LabelMe per-image JSON. (COCO 不在此分发，COCO 是数据集级单文件)
+        coco = _load_coco_cached(label_path)
+        if coco is not None:
+            if image_path is None:
+                return ParseResult(None, "COCO annotation requires image_path")
+            shapes = coco.by_stem.get(image_path.stem, [])
+            return ParseResult(Annotation(image_path=image_path, shapes=list(shapes)))
+        # Not COCO — treat as per-image LabelMe
         return parse_labelme(label_path, image_path)
     if ext == ".txt":
         return parse_yolo(label_path, image_path, class_names=yolo_class_names)
     if ext == ".xml":
         return parse_voc(label_path, image_path)
     return ParseResult(None, f"unsupported label format: {ext}")
+
+
+# Module-global cache: path → (mtime_ns, CocoIndex|None). Sized cache would
+# need thread-safety; since scan/count all run on the worker thread and
+# detail_view runs on the main thread, bounded-size dict is fine.
+_COCO_CACHE: dict[Path, tuple[int, "CocoIndex | None"]] = {}
+_COCO_CACHE_MAX = 8
+
+
+def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
+    """Parse a COCO JSON once per mtime. Returns None for non-COCO JSONs
+    (per-image LabelMe) so callers can fall through."""
+    try:
+        mtime = json_path.stat().st_mtime_ns
+    except OSError:
+        return None
+    cached = _COCO_CACHE.get(json_path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    idx = parse_coco(json_path)
+    if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
+        _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
+    _COCO_CACHE[json_path] = (mtime, idx)
+    return idx
 
 
 def detect_format(label_path: Path) -> str:

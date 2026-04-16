@@ -173,6 +173,73 @@ class TestCountAnnotations:
         assert total == 0
 
 
+class TestCocoLayout:
+    """COCO: single dataset-level JSON referencing images in the same root
+    or in ``images/``. Reviewer's bug: scanner treated .json per-image and
+    reported 0 annotations for valid COCO datasets."""
+
+    def _coco_payload(self) -> bytes:
+        import json as _json
+        payload = {
+            "images": [
+                {"id": 1, "file_name": "a.jpg", "width": 64, "height": 64},
+                {"id": 2, "file_name": "b.jpg", "width": 64, "height": 64},
+            ],
+            "annotations": [
+                {"id": 1, "image_id": 1, "category_id": 1, "bbox": [0, 0, 20, 20]},
+                {"id": 2, "image_id": 1, "category_id": 2, "bbox": [20, 20, 10, 10]},
+                {"id": 3, "image_id": 2, "category_id": 1, "bbox": [5, 5, 30, 30]},
+            ],
+            "categories": [
+                {"id": 1, "name": "cat"},
+                {"id": 2, "name": "dog"},
+            ],
+        }
+        return _json.dumps(payload).encode()
+
+    def test_detect_coco_root_level(self, tmp_path):
+        _touch(tmp_path / "annotations.json", self._coco_payload())
+        _touch(tmp_path / "a.jpg", _make_png())
+        _touch(tmp_path / "b.jpg", _make_png())
+        assert _detect_layout(tmp_path, IMG_EXTS) == "coco"
+
+    def test_detect_coco_annotations_subdir(self, tmp_path):
+        _touch(tmp_path / "annotations" / "instances_train.json",
+               self._coco_payload())
+        _touch(tmp_path / "images" / "a.jpg", _make_png())
+        _touch(tmp_path / "images" / "b.jpg", _make_png())
+        assert _detect_layout(tmp_path, IMG_EXTS) == "coco"
+
+    def test_scan_counts_annotations(self, tmp_path):
+        """Reviewer's exact scenario: open a COCO dataset → get actual counts,
+        not 0."""
+        _touch(tmp_path / "annotations.json", self._coco_payload())
+        _touch(tmp_path / "a.jpg", _make_png())
+        _touch(tmp_path / "b.jpg", _make_png())
+        ds = scan_dataset(tmp_path)
+        assert ds.layout == "coco"
+        assert ds.total_images == 2
+        # cat/dog categories should show up (not the filesystem-named "(未分类)")
+        cat_names = {c.name for c in ds.categories}
+        assert "cat" in cat_names
+        # count_annotations must see all 3 shapes
+        total = count_annotations(ds)
+        assert total == 3
+        assert ds.total_annotations == 3
+
+    def test_labelme_json_not_misdetected_as_coco(self, tmp_path):
+        """Per-image LabelMe JSONs (no images/annotations/categories keys)
+        must still go down the per-image LabelMe path, not COCO."""
+        import json as _json
+        _touch(tmp_path / "c" / "images" / "a.jpg", _make_png())
+        labelme = {"shapes": [{"label": "x", "shape_type": "rectangle",
+                               "points": [[1, 1], [5, 5]]}],
+                   "imagePath": "a.jpg"}
+        _touch(tmp_path / "c" / "labels" / "a.json",
+               _json.dumps(labelme).encode())
+        assert _detect_layout(tmp_path, IMG_EXTS) == "standard"
+
+
 # ---- PNG helper ----
 
 def _make_png() -> bytes:
