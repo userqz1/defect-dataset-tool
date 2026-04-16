@@ -20,6 +20,7 @@ from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
     MessageBoxBase,
+    RadioButton,
     SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
@@ -126,13 +127,37 @@ class DedupResultDialog(MessageBoxBase):
 # ── Augment ────────────────────────────────────────────────────
 
 class AugmentDialog(MessageBoxBase):
-    """Augmentation options: transforms + output directory."""
+    """Augmentation options: transforms + output directory.
 
-    def __init__(self, parent=None) -> None:
+    Caller passes ``selected_count`` to enable a "仅已选中" source option;
+    omit it (or pass 0) to hide that option.
+    """
+
+    def __init__(self, parent=None, selected_count: int = 0) -> None:
         super().__init__(parent=parent)
         self.titleLabel = SubtitleLabel("数据增强", self)
         self.viewLayout.addWidget(self.titleLabel)
         self.widget.setMinimumWidth(440)
+
+        # Source selection (only meaningful when something is selected)
+        self._source: str = "all"
+        if selected_count > 0:
+            self.viewLayout.addWidget(StrongBodyLabel("来源"))
+            src_row = QHBoxLayout()
+            src_row.setSpacing(T.GAP)
+            self._src_all = RadioButton("全部图片")
+            self._src_all.setChecked(True)
+            self._src_sel = RadioButton(f"仅已选中（{selected_count} 张）")
+            self._src_all.toggled.connect(
+                lambda c: self._set_source("all") if c else None
+            )
+            self._src_sel.toggled.connect(
+                lambda c: self._set_source("selected") if c else None
+            )
+            src_row.addWidget(self._src_all)
+            src_row.addWidget(self._src_sel)
+            src_row.addStretch()
+            self.viewLayout.addLayout(src_row)
 
         # Geometric transforms
         self.viewLayout.addWidget(StrongBodyLabel("几何变换"))
@@ -204,6 +229,9 @@ class AugmentDialog(MessageBoxBase):
             self._dir_label.setText(str(self._out_dir))
             self.yesButton.setEnabled(True)
 
+    def _set_source(self, s: str) -> None:
+        self._source = s
+
     def options(self) -> dict:
         from core.augment import AugmentOptions
         return {
@@ -220,6 +248,7 @@ class AugmentDialog(MessageBoxBase):
                 n_per_image=self._n_per.value(),
             ),
             "out_dir": self._out_dir,
+            "source": self._source,  # "all" | "selected"
         }
 
 

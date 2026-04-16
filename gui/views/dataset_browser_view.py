@@ -516,19 +516,32 @@ class DatasetBrowserView(QWidget):
         if not images:
             return
 
+        # Look at current selection so the dialog can offer "仅已选中"
+        selected = self._browser.get_selected_images()
+
         from gui.dialogs.tool_dialogs import AugmentDialog
-        dlg = AugmentDialog(parent=self.window())
+        dlg = AugmentDialog(parent=self.window(),
+                            selected_count=len(selected))
         if not dlg.exec():
             return
         aug_opts = dlg.options()
         if aug_opts["out_dir"] is None:
             return
 
+        # Honor source choice
+        source_imgs = (selected if aug_opts.get("source") == "selected"
+                       else images)
+        if not source_imgs:
+            InfoBar.warning("没有可用图片", "请先选中图片或切换到\"全部\"",
+                            parent=self.window(), duration=4000,
+                            position=InfoBarPosition.TOP)
+            return
+
         from core.augment import augment_batch
         from gui.dialogs.op_dialogs import ProgressDialog
         from gui.workers.batch_worker import BatchWorker
 
-        image_paths = [img.path for img in images]
+        image_paths = [img.path for img in source_imgs]
         out_dir = aug_opts["out_dir"]
         opts = aug_opts["opts"]
 
