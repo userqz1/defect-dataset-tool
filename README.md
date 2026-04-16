@@ -1,7 +1,7 @@
 <p align="center">
-  <h1 align="center">数据坊 / DataForge</h1>
+  <h1 align="center">数据工坊 / DataForge</h1>
   <p align="center">
-    <strong>可视化数据集处理流水线 (Python 3.11 + PyQt6 + Fluent)</strong>
+    <strong>本地、离线、中文的图像数据集一站式管理工具</strong>
   </p>
 </p>
 
@@ -14,53 +14,79 @@
     <img src="https://img.shields.io/badge/GUI-PyQt6%20%2B%20Fluent-41cd52.svg" alt="PyQt6 Fluent">
     <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License">
     <img src="https://img.shields.io/badge/Platform-Windows-lightgrey.svg" alt="Platform">
-    <img src="https://img.shields.io/badge/Formats-LabelMe%20%7C%20YOLO%20%7C%20VOC%20%7C%20COCO-orange.svg" alt="Formats">
 </p>
 
 ---
 
-## 项目定位
+## 是什么
 
-n8n / ComfyUI 风格的图像数据集处理工具。打开即画布，从侧栏拖入节点、连线、配参数、一键执行：
+打开一个文件夹 → 浏览图片和标注 → 一键导出训练格式。
 
-```
-[数据源] → [质量检查] → [AI 预标注] → [数据增强] → [划分] → [导出 YOLO]
-```
+围绕「浏览器」这一个屏组织：左边类别树，中间缩略图网格，右边详情/标注。
+顶部工具栏放质量检查、去重、增强、统计、导出。看到一张图想做什么就点什么——不用学节点连线、不用搭流程。
 
-支持分类、检测、分割、异常检测等 CV 任务。核心逻辑 (`core/`) 与 GUI (`gui/`) 完全解耦。
+首期聚焦目标检测，架构预留分类/分割/关键点扩展。
 
 ---
 
-## 核心能力
+## 快速开始
 
-### 节点画布
+```bash
+# 1. 装依赖
+pip install -r requirements.txt
 
-| 节点 | 功能 |
+# 2. 启动
+python main.py
+
+# 3. 在首页点「打开数据集目录」→ 选择任意包含图片的文件夹
+#    → 自动识别布局 → 进入浏览器 → 用工具栏导出 YOLO/COCO/...
+```
+
+支持的目录布局（自动识别）：
+
+```
+A) 标准:    <根>/<类别>/images/*.jpg + <根>/<类别>/labels/*.json
+B) 扁平:    <根>/*.jpg + <根>/*.json
+C) 单类:    <根>/images/*.jpg + <根>/labels/*.json
+D) 递归:    <根>/**/.jpg
+```
+
+---
+
+## 主要功能
+
+### 浏览器
+- 智能扫描，5 种目录布局自动识别
+- 缩略图网格，分页/筛选/搜索/多选/右键批量操作
+- SQLite 索引 + 磁盘缩略图缓存，二次打开瞬时
+- 类别树支持重命名/合并/拆分
+- 顶部 readiness bar 实时显示数据集合规状态
+
+### 单图详情
+- 矩形/多边形手动绘制 + 编辑
+- 多格式读写：LabelMe / YOLO / VOC / COCO（读什么写什么）
+
+### 工具栏
+| 按钮 | 功能 |
 |------|------|
-| **数据源** | 选择数据集目录，自动识别 5 种布局，浏览/标注/删除图片 |
-| **质量检查** | 检测模糊/空白/过曝/欠曝/损坏，输出合格/不合格两路 |
-| **重复检测** | pHash 相似度聚类，输出唯一/重复两路 |
-| **AI 预标注** | YOLOv8 本地推理，批量生成 LabelMe 标注 |
-| **数据增强** | 翻转/旋转/裁剪/亮度/对比度/Copy-Paste，生成新样本 |
-| **数据集划分** | 按比例/按数量/手动，支持分层采样 |
-| **导出** | YOLO / COCO / Pascal VOC / CSV 格式 |
+| **导出** | 8 种格式向导，自动切分 train/val/test |
+| **质量检查** | 模糊/空白/过曝/欠曝/损坏；结果直贴缩略图角标 |
+| **去重** | pHash 相似度聚类，可一键删除重复到回收站 |
+| **增强** | 几何 + 光度变换组合，支持「全部」或「仅已选中」 |
+| **统计** | 类别分布、目标数/图、不平衡比、尺寸范围 |
 
-- 节点从侧栏拖入画布，端口连线，双击配参数
-- 点「执行流程」一键运行整个图，数据按连线流转
-- 方案可保存/加载，参数随方案持久化
+### 导出格式
 
-### 标注编辑
-
-数据源节点内置完整标注编辑器：
-- 矩形/多边形手动绘制，快捷键操作
-- 多格式读写：LabelMe / YOLO / VOC / COCO
-- 读什么格式写什么格式，YOLO 自动维护 `classes.txt`
-
-### 数据集管理
-
-- 智能扫描：自动识别 `standard` / `flat` / `single` / `recursive` / `empty` 布局
-- 缓存加速：SQLite 索引 + 磁盘缩略图，二次打开瞬时
-- 缩略图网格浏览，支持筛选/搜索/分页/多选/右键批量操作
+| 格式 | 用途 |
+|------|------|
+| **YOLO** | Ultralytics YOLO 检测/分割 |
+| **COCO** | COCO instances JSON |
+| **Pascal VOC** | XML + ImageSets |
+| **CSV** | Pandas 友好平面表 |
+| **JSON Lines** | 流式 JSONL |
+| **LLaVA** | 多模态微调 |
+| **ShareGPT** | LLaMA-Factory 多模态 |
+| **ms-swift** | ModelScope swift VLM |
 
 ---
 
@@ -69,75 +95,52 @@ n8n / ComfyUI 风格的图像数据集处理工具。打开即画布，从侧栏
 ```
 core/                    # 纯 Python，零 GUI 依赖
   models.py              数据类 (Dataset, Category, ImageInfo, Annotation, Shape)
-  nodes.py               ProcessingNode 协议 + 所有节点实现 + NODES 注册表
-  pipeline.py            GraphEngine 图执行引擎 (拓扑排序 + 端口路由)
-  scheme.py              方案序列化 (画布状态 → JSON)
   dataset.py             两阶段扫描 + 布局检测
   annotation_formats.py  LabelMe / YOLO / VOC / COCO 统一解析
-  quality.py / dedup.py / augment.py / splitter.py / predictor.py ...
-  exporter/              YOLO / COCO / VOC / CSV / JSONL / LLaVA / ShareGPT ...
+  quality.py             质量检查 (模糊/空白/过曝/欠曝/损坏)
+  dedup.py               pHash 重复检测
+  augment.py             几何 + 光度增强
+  splitter.py            train/val/test 切分（支持分层）
+  stats.py               基础 + 扩展统计
+  compliance.py          合规检查
+  exporter/              8 种导出格式 + 统一注册表
 
 gui/                     # PyQt6 + qfluentwidgets
-  main_window.py         FluentWindow：首页 + 编辑器 + 设置
+  main_window.py         FluentWindow：首页 / 浏览器 / 设置
+  app_state.py           共享 Dataset/Project 状态
   views/
-    scheme_welcome_view   首页（方案管理）
-    pipeline_view         编辑器（画布 + workspace 栈）
-    browser_view          缩略图网格浏览
-    detail_view           单图查看 + 标注编辑
-    cleaning_view         质量检查 workspace
-    augment_view          数据增强 workspace
-    predict_view          AI 预标注 workspace
-    split_view            划分 workspace
-    export_view           导出 workspace
-    ...
-  widgets/node_editor.py  NodeCanvas / NodeItem / PortItem / ConnectionItem
-  workers/                QThread：扫描 / 缩略图 / 批处理
+    dataset_welcome      首页（最近数据集）
+    dataset_browser_view 浏览器（顶层视图，含工具栏）
+    browser_view         缩略图网格 + 类别树 + 筛选
+    detail_view          单图查看 + 标注编辑
+    settings_view        主题切换
+  widgets/
+    thumbnail_grid       delegate 绘制的高性能网格
+    category_tree, chips, image_viewer, preview_pane
+  dialogs/
+    tool_dialogs         质量检查/去重/增强/统计 弹窗
+    export_wizard        导出向导
+    task_type_dialog     首次打开数据集时选任务类型
+  workers/               QThread：扫描 / 缩略图 / 批处理
 ```
 
-**架构约束：`core/` 禁止 import `PyQt6`。**
+**架构约束：`core/` 禁止 import `PyQt6`** — 便于 CLI/Web 二次封装。
+
+应用数据：`~/.dataforge/` （项目元数据 / 索引缓存 / 缩略图 / 设置）。
 
 ---
 
-## 快速开始
+## 开发
 
 ```bash
-# 环境
-conda create -n defect-tool python=3.11
-conda activate defect-tool
-pip install -r requirements.txt
+# 跑测试
+python -m pytest tests/ -q
 
-# 可选：AI 预标注
-pip install ultralytics
-
-# 运行
-python main.py
+# 单文件 import 检查
+python -m py_compile gui/main_window.py
 ```
 
----
-
-## 工作流
-
-1. 启动 → 首页新建方案（或打开已有方案）
-2. 从侧栏拖入节点到画布：数据源 → 质量检查 → 导出
-3. 连线：拖动输出端口到下游输入端口
-4. 双击数据源 → 选择目录 → 浏览/标注图片
-5. 双击各节点 → 配置参数（阈值、比例、格式等）
-6. 点「执行流程」→ 数据从上到下流转，节点显示结果
-7. 保存方案 → 下次打开自动恢复所有配置
-
----
-
-## 快捷键
-
-| 动作 | 快捷键 |
-|---|---|
-| 编辑标注 | `E` |
-| 矩形 / 多边形 | `R` / `P` |
-| 闭合多边形 | `Enter` |
-| 删除选中 | `Del` |
-| 保存标注 | `Ctrl+S` |
-| 前/后一张 | `A` / `D` |
-| 返回浏览 | `Esc` |
+测试覆盖：核心数据集扫描、标注解析、所有导出格式端到端、切分、增强等。
 
 ---
 

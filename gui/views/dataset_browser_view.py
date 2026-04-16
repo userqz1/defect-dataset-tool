@@ -1,8 +1,9 @@
-"""Top-level dataset browser — standalone view, no pipeline dependency.
+"""Top-level dataset browser — standalone view.
 
-Extracted from pipeline_view._make_datasource_ws(). Wraps BrowserView +
-DetailView + ThumbnailWorker + ScanWorker into a self-contained top-level
-widget for MainWindow navigation.
+Wraps BrowserView + DetailView + ThumbnailWorker + ScanWorker into a
+self-contained top-level widget for MainWindow navigation. Also hosts
+the toolbar (export / quality check / dedup / augment / stats) that
+operates on the currently-loaded dataset.
 """
 from __future__ import annotations
 

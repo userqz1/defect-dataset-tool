@@ -1,11 +1,19 @@
+# 数据工坊 / DataForge — runtime dependencies
+# Python 3.11+, Windows 10/11
+
+# ---- GUI ----
 PyQt6>=6.7
 PyQt6-Fluent-Widgets>=1.6
+
+# ---- Image IO + processing ----
 Pillow>=10
-opencv-python>=4.9
-numpy>=1.26
-pandas>=2.2
-pyqtgraph>=0.13
-PyYAML>=6.0
-diskcache>=5.6
-send2trash>=1.8
-imagehash>=4.3
+numpy>=1.26          # core/augment.py 高斯噪声
+imagehash>=4.3       # core/dedup.py 感知哈希
+
+# ---- Filesystem / persistence ----
+PyYAML>=6.0          # YOLO data.yaml 等
+diskcache>=5.6       # 缩略图磁盘缓存
+send2trash>=1.8      # 删除到回收站，可恢复
+
+# ---- 可选 ----
+# ultralytics>=8.0   # AI 预标注 (core/predictor.py)；只有用到再装
