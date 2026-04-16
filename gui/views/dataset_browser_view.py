@@ -84,7 +84,36 @@ class DatasetBrowserView(QWidget):
         self._export_btn.clicked.connect(self._on_export)
         tbar_lay.addWidget(self._export_btn)
 
+        self._quality_btn = PushButton("质量检查")
+        self._quality_btn.setIcon(FIF.SEARCH)
+        self._quality_btn.setFixedWidth(100)
+        self._quality_btn.setEnabled(False)
+        self._quality_btn.clicked.connect(self._on_quality_check)
+        tbar_lay.addWidget(self._quality_btn)
+
+        self._dedup_btn = PushButton("去重")
+        self._dedup_btn.setIcon(FIF.COPY)
+        self._dedup_btn.setFixedWidth(80)
+        self._dedup_btn.setEnabled(False)
+        self._dedup_btn.clicked.connect(self._on_dedup)
+        tbar_lay.addWidget(self._dedup_btn)
+
+        self._augment_btn = PushButton("增强")
+        self._augment_btn.setIcon(FIF.ADD)
+        self._augment_btn.setFixedWidth(80)
+        self._augment_btn.setEnabled(False)
+        self._augment_btn.clicked.connect(self._on_augment)
+        tbar_lay.addWidget(self._augment_btn)
+
         tbar_lay.addStretch()
+
+        self._stats_btn = PushButton("统计")
+        self._stats_btn.setIcon(FIF.HISTORY)
+        self._stats_btn.setFixedWidth(80)
+        self._stats_btn.setEnabled(False)
+        self._stats_btn.clicked.connect(self._on_stats)
+        tbar_lay.addWidget(self._stats_btn)
+
         lay.addWidget(toolbar)
 
         # -- Browser + Detail stack --
@@ -186,7 +215,7 @@ class DatasetBrowserView(QWidget):
                 f"{ds.total_images} 图片 · {len(ds.categories)} 类"
             )
             self._browser.load_dataset(ds)
-            self._export_btn.setEnabled(True)
+            self._set_tools_enabled(True)
             # Broadcast to all views via AppState
             self._state.set_dataset(ds)
 
@@ -304,18 +333,256 @@ class DatasetBrowserView(QWidget):
         worker.start()
         self._export_worker = worker
 
+    def _set_tools_enabled(self, enabled: bool) -> None:
+        """Enable/disable all toolbar buttons."""
+        for btn in (self._export_btn, self._quality_btn, self._dedup_btn,
+                    self._augment_btn, self._stats_btn):
+            btn.setEnabled(enabled)
+
+    def _all_images(self) -> list:
+        """Collect all images from current dataset."""
+        ds = self._state.dataset
+        if ds is None:
+            return []
+        return [img for cat in ds.categories for img in cat.images]
+
     def _on_dataset_changed(self, ds) -> None:
-        """Receive dataset update from AppState (e.g. from pipeline rescan)."""
+        """Receive dataset update from AppState."""
         if ds is None:
             self._path_label.setText("未选择目录")
             self._stats_label.setText("")
-            self._export_btn.setEnabled(False)
+            self._set_tools_enabled(False)
             return
         self._path_label.setText(str(ds.root_path))
         self._stats_label.setText(
             f"{ds.total_images} 图片 · {len(ds.categories)} 类"
         )
-        self._export_btn.setEnabled(True)
-        # Only reload browser if it doesn't already have this dataset
+        self._set_tools_enabled(True)
         if getattr(self._browser, '_dataset', None) is not ds:
             self._browser.load_dataset(ds)
+
+    # -- Tool handlers --
+
+    def _on_quality_check(self) -> None:
+        """Run quality check on all images."""
+        images = self._all_images()
+        if not images:
+            return
+
+        from gui.dialogs.tool_dialogs import QualityCheckDialog
+        dlg = QualityCheckDialog(parent=self.window())
+        if not dlg.exec():
+            return
+
+        from core.quality import QualityOptions, check_images
+        opts = QualityOptions(blur_threshold=dlg.blur_threshold())
+
+        from gui.dialogs.op_dialogs import ProgressDialog
+        from gui.workers.batch_worker import BatchWorker
+
+        progress = ProgressDialog("质量检查", parent=self.window())
+        progress.show()
+
+        def task(progress_cb):
+            return check_images(images, opts, progress_cb=progress_cb)
+
+        worker = BatchWorker(task)
+        worker.progress.connect(
+            lambda d, t, n: progress.set_progress(d, t, n))
+
+        def on_done(issues):
+            progress.accept()
+            if not issues:
+                InfoBar.success("质量检查完成", "未发现问题图片",
+                                parent=self.window(), duration=3000,
+                                position=InfoBarPosition.TOP)
+                return
+            # Summarize by kind
+            from collections import Counter
+            kind_counts = Counter()
+            for issue in issues:
+                for k in issue.kinds:
+                    kind_counts[k] += 1
+            parts = []
+            kind_names = {"blur": "模糊", "blank": "空白",
+                          "over": "过曝", "under": "欠曝", "corrupt": "损坏"}
+            for k, c in kind_counts.most_common():
+                parts.append(f"{c} {kind_names.get(k, k)}")
+            InfoBar.warning(
+                f"发现 {len(issues)} 张问题图片",
+                " · ".join(parts),
+                parent=self.window(), duration=8000,
+                position=InfoBarPosition.TOP,
+            )
+
+        def on_fail(msg):
+            progress.accept()
+            InfoBar.error("质量检查失败", msg,
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
+
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        self._quality_worker = worker
+
+    def _on_dedup(self) -> None:
+        """Run duplicate detection."""
+        images = self._all_images()
+        if not images:
+            return
+
+        from gui.dialogs.tool_dialogs import DedupDialog
+        dlg = DedupDialog(parent=self.window())
+        if not dlg.exec():
+            return
+        threshold = dlg.threshold()
+
+        from core.dedup import find_duplicates
+        from gui.dialogs.op_dialogs import ProgressDialog
+        from gui.workers.batch_worker import BatchWorker
+
+        progress = ProgressDialog("重复检测", parent=self.window())
+        progress.show()
+
+        def task(progress_cb):
+            return find_duplicates(images, threshold=threshold,
+                                   progress_cb=progress_cb)
+
+        worker = BatchWorker(task)
+        worker.progress.connect(
+            lambda d, t, n: progress.set_progress(d, t, n))
+
+        def on_done(groups):
+            progress.accept()
+            if not groups:
+                InfoBar.success("重复检测完成", "未发现重复图片",
+                                parent=self.window(), duration=3000,
+                                position=InfoBarPosition.TOP)
+                return
+            from gui.dialogs.tool_dialogs import DedupResultDialog
+            result_dlg = DedupResultDialog(groups, parent=self.window())
+            if result_dlg.exec():
+                self._delete_duplicates(result_dlg.groups)
+
+        def on_fail(msg):
+            progress.accept()
+            InfoBar.error("重复检测失败", msg,
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
+
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        self._dedup_worker = worker
+
+    def _delete_duplicates(self, groups) -> None:
+        """Delete duplicate images (keep first in each group)."""
+        from send2trash import send2trash
+        deleted = 0
+        for g in groups:
+            for img in g.images[1:]:
+                try:
+                    send2trash(str(img.path))
+                    if img.label_path and img.label_path.exists():
+                        send2trash(str(img.label_path))
+                    deleted += 1
+                except Exception:
+                    pass
+        InfoBar.success("删除完成", f"已移除 {deleted} 张重复图片到回收站",
+                        parent=self.window(), duration=5000,
+                        position=InfoBarPosition.TOP)
+        self._rescan()
+
+    def _on_augment(self) -> None:
+        """Run data augmentation."""
+        images = self._all_images()
+        if not images:
+            return
+
+        from gui.dialogs.tool_dialogs import AugmentDialog
+        dlg = AugmentDialog(parent=self.window())
+        if not dlg.exec():
+            return
+        aug_opts = dlg.options()
+        if aug_opts["out_dir"] is None:
+            return
+
+        from core.augment import augment_batch
+        from gui.dialogs.op_dialogs import ProgressDialog
+        from gui.workers.batch_worker import BatchWorker
+
+        image_paths = [img.path for img in images]
+        out_dir = aug_opts["out_dir"]
+        opts = aug_opts["opts"]
+
+        progress = ProgressDialog("数据增强", parent=self.window())
+        progress.show()
+
+        def task(progress_cb):
+            return augment_batch(image_paths, out_dir, opts,
+                                 progress_cb=progress_cb)
+
+        worker = BatchWorker(task)
+        worker.progress.connect(
+            lambda d, t, n: progress.set_progress(d, t, n))
+
+        def on_done(result):
+            progress.accept()
+            InfoBar.success(
+                "增强完成",
+                f"生成 {result.count} 张增强图片到 {out_dir}",
+                parent=self.window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+
+        def on_fail(msg):
+            progress.accept()
+            InfoBar.error("增强失败", msg,
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
+
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        self._augment_worker = worker
+
+    def _on_stats(self) -> None:
+        """Compute and show dataset statistics."""
+        ds = self._state.dataset
+        if ds is None:
+            return
+
+        from core.stats import compute_extended_stats, compute_stats
+        from gui.dialogs.op_dialogs import ProgressDialog
+        from gui.workers.batch_worker import BatchWorker
+
+        stats = compute_stats(ds)  # fast, no worker needed
+
+        progress = ProgressDialog("计算详细统计", parent=self.window())
+        progress.show()
+
+        def task(progress_cb):
+            return compute_extended_stats(ds, progress_cb=progress_cb)
+
+        worker = BatchWorker(task)
+        worker.progress.connect(
+            lambda d, t, n: progress.set_progress(d, t, n))
+
+        def on_done(extended):
+            progress.accept()
+            from gui.dialogs.tool_dialogs import StatsResultDialog
+            dlg = StatsResultDialog(stats, extended, parent=self.window())
+            dlg.exec()
+
+        def on_fail(msg):
+            progress.accept()
+            # Show basic stats even if extended fails
+            from gui.dialogs.tool_dialogs import StatsResultDialog
+            dlg = StatsResultDialog(stats, None, parent=self.window())
+            dlg.exec()
+
+        worker.finished_ok.connect(on_done)
+        worker.failed.connect(on_fail)
+        worker.start()
+        self._stats_worker = worker
