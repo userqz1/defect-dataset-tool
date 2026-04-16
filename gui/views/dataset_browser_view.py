@@ -387,45 +387,27 @@ class DatasetBrowserView(QWidget):
             return
 
         from core.quality import QualityOptions, check_images
+        from gui.workers.batch_runner import BatchRunner
         opts = QualityOptions(blur_threshold=dlg.blur_threshold())
 
-        from gui.dialogs.op_dialogs import ProgressDialog
-        from gui.workers.batch_worker import BatchWorker
-
-        progress = ProgressDialog("质量检查", parent=self.window())
-        progress.show()
-
-        def task(progress_cb):
-            return check_images(images, opts, progress_cb=progress_cb)
-
-        worker = BatchWorker(task)
-        worker.progress.connect(
-            lambda d, t, n: progress.set_progress(d, t, n))
-
-        def on_done(issues):
-            progress.accept()
+        def handle(issues):
             if not issues:
-                # Clear any prior quality state
                 self._browser.set_quality_issues({})
                 InfoBar.success("质量检查完成", "未发现问题图片",
                                 parent=self.window(), duration=3000,
                                 position=InfoBarPosition.TOP)
                 return
-            # Push results into the browser so the grid shows red badges
-            # and the "有问题" filter chip becomes enabled.
-            issues_map = {str(issue.image.path): issue.kinds for issue in issues}
+            issues_map = {str(i.image.path): i.kinds for i in issues}
             self._browser.set_quality_issues(issues_map)
-            # Summarize by kind
             from collections import Counter
-            kind_counts = Counter()
+            kind_counts: Counter = Counter()
             for issue in issues:
                 for k in issue.kinds:
                     kind_counts[k] += 1
-            parts = []
             kind_names = {"blur": "模糊", "blank": "空白",
                           "over": "过曝", "under": "欠曝", "corrupt": "损坏"}
-            for k, c in kind_counts.most_common():
-                parts.append(f"{c} {kind_names.get(k, k)}")
+            parts = [f"{c} {kind_names.get(k, k)}"
+                     for k, c in kind_counts.most_common()]
             InfoBar.warning(
                 f"发现 {len(issues)} 张问题图片",
                 " · ".join(parts) + " · 缩略图已标红角，可用 \"有问题\" 筛选",
@@ -433,16 +415,10 @@ class DatasetBrowserView(QWidget):
                 position=InfoBarPosition.TOP,
             )
 
-        def on_fail(msg):
-            progress.accept()
-            InfoBar.error("质量检查失败", msg,
-                          parent=self.window(), duration=5000,
-                          position=InfoBarPosition.TOP)
-
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        self._quality_worker = worker
+        BatchRunner(self, "质量检查").run(
+            task=lambda cb: check_images(images, opts, progress_cb=cb),
+            on_done=handle,
+        )
 
     def _on_dedup(self) -> None:
         """Run duplicate detection."""
@@ -457,22 +433,9 @@ class DatasetBrowserView(QWidget):
         threshold = dlg.threshold()
 
         from core.dedup import find_duplicates
-        from gui.dialogs.op_dialogs import ProgressDialog
-        from gui.workers.batch_worker import BatchWorker
+        from gui.workers.batch_runner import BatchRunner
 
-        progress = ProgressDialog("重复检测", parent=self.window())
-        progress.show()
-
-        def task(progress_cb):
-            return find_duplicates(images, threshold=threshold,
-                                   progress_cb=progress_cb)
-
-        worker = BatchWorker(task)
-        worker.progress.connect(
-            lambda d, t, n: progress.set_progress(d, t, n))
-
-        def on_done(groups):
-            progress.accept()
+        def handle(groups):
             if not groups:
                 InfoBar.success("重复检测完成", "未发现重复图片",
                                 parent=self.window(), duration=3000,
@@ -483,16 +446,11 @@ class DatasetBrowserView(QWidget):
             if result_dlg.exec():
                 self._delete_duplicates(result_dlg.groups)
 
-        def on_fail(msg):
-            progress.accept()
-            InfoBar.error("重复检测失败", msg,
-                          parent=self.window(), duration=5000,
-                          position=InfoBarPosition.TOP)
-
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        self._dedup_worker = worker
+        BatchRunner(self, "重复检测").run(
+            task=lambda cb: find_duplicates(images, threshold=threshold,
+                                            progress_cb=cb),
+            on_done=handle,
+        )
 
     def _delete_duplicates(self, groups) -> None:
         """Delete duplicate images (keep first in each group)."""
@@ -552,26 +510,13 @@ class DatasetBrowserView(QWidget):
             return
 
         from core.augment import augment_batch
-        from gui.dialogs.op_dialogs import ProgressDialog
-        from gui.workers.batch_worker import BatchWorker
+        from gui.workers.batch_runner import BatchRunner
 
         image_paths = [img.path for img in source_imgs]
         out_dir = aug_opts["out_dir"]
         opts = aug_opts["opts"]
 
-        progress = ProgressDialog("数据增强", parent=self.window())
-        progress.show()
-
-        def task(progress_cb):
-            return augment_batch(image_paths, out_dir, opts,
-                                 progress_cb=progress_cb)
-
-        worker = BatchWorker(task)
-        worker.progress.connect(
-            lambda d, t, n: progress.set_progress(d, t, n))
-
-        def on_done(result):
-            progress.accept()
+        def handle(result):
             InfoBar.success(
                 "增强完成",
                 f"生成 {result.count} 张增强图片到 {out_dir}",
@@ -579,16 +524,11 @@ class DatasetBrowserView(QWidget):
                 position=InfoBarPosition.TOP,
             )
 
-        def on_fail(msg):
-            progress.accept()
-            InfoBar.error("增强失败", msg,
-                          parent=self.window(), duration=5000,
-                          position=InfoBarPosition.TOP)
-
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        self._augment_worker = worker
+        BatchRunner(self, "数据增强").run(
+            task=lambda cb: augment_batch(image_paths, out_dir, opts,
+                                          progress_cb=cb),
+            on_done=handle,
+        )
 
     def _on_stats(self) -> None:
         """Compute and show dataset statistics."""
@@ -597,35 +537,16 @@ class DatasetBrowserView(QWidget):
             return
 
         from core.stats import compute_extended_stats, compute_stats
-        from gui.dialogs.op_dialogs import ProgressDialog
-        from gui.workers.batch_worker import BatchWorker
+        from gui.workers.batch_runner import BatchRunner
+        stats = compute_stats(ds)  # fast, no worker
 
-        stats = compute_stats(ds)  # fast, no worker needed
-
-        progress = ProgressDialog("计算详细统计", parent=self.window())
-        progress.show()
-
-        def task(progress_cb):
-            return compute_extended_stats(ds, progress_cb=progress_cb)
-
-        worker = BatchWorker(task)
-        worker.progress.connect(
-            lambda d, t, n: progress.set_progress(d, t, n))
-
-        def on_done(extended):
-            progress.accept()
+        def show_dialog(extended):
             from gui.dialogs.tool_dialogs import StatsResultDialog
-            dlg = StatsResultDialog(stats, extended, parent=self.window())
-            dlg.exec()
+            StatsResultDialog(stats, extended, parent=self.window()).exec()
 
-        def on_fail(msg):
-            progress.accept()
-            # Show basic stats even if extended fails
-            from gui.dialogs.tool_dialogs import StatsResultDialog
-            dlg = StatsResultDialog(stats, None, parent=self.window())
-            dlg.exec()
-
-        worker.finished_ok.connect(on_done)
-        worker.failed.connect(on_fail)
-        worker.start()
-        self._stats_worker = worker
+        BatchRunner(self, "计算详细统计").run(
+            task=lambda cb: compute_extended_stats(ds, progress_cb=cb),
+            on_done=show_dialog,
+            # Extended stats is best-effort — on failure still show basic
+            on_fail=lambda _msg: show_dialog(None),
+        )
