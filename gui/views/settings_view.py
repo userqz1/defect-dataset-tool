@@ -1,6 +1,8 @@
 """设置：主题切换 / 缩略图缓存 / 最近数据集。"""
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
@@ -23,6 +25,8 @@ from qfluentwidgets import (
 from core.recent import clear_recent, load_recent
 from core.thumbnail_cache import ThumbnailCache
 from gui.theme import T
+
+logger = logging.getLogger(__name__)
 
 
 def _human_bytes(n: int) -> str:
@@ -208,6 +212,7 @@ class SettingsView(QWidget):
             cache.close()
             self.cache_label.setText(f"缩略图缓存:{_human_bytes(n)}")
         except Exception as e:  # noqa: BLE001
+            logger.exception("reading cache size failed")
             self.cache_label.setText(f"缩略图缓存:读取失败 ({e})")
 
     def _on_clear_cache(self) -> None:
@@ -217,6 +222,7 @@ class SettingsView(QWidget):
             cache.close()
             self.cache_label.setText(f"已清空 {n} 项缓存")
         except Exception as e:  # noqa: BLE001
+            logger.exception("clearing cache failed")
             self.cache_label.setText(f"清空失败:{e}")
 
     # 最近列表

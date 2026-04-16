@@ -8,6 +8,7 @@ AppState owns the shared Dataset/Project. All views react to its signals.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtGui import QColor
@@ -25,6 +26,8 @@ from qfluentwidgets import (
 from gui.app_state import AppState
 from gui.theme import T, load_qss, set_theme as set_app_theme
 from gui.views.settings_view import SettingsView
+
+logger = logging.getLogger(__name__)
 
 
 def _install_nav_expand_patch() -> None:
@@ -79,7 +82,8 @@ class MainWindow(FluentWindow):
         try:
             self.navigationInterface.panel.returnButton.hide()
         except Exception:
-            pass
+            # qfluentwidgets internal layout — best-effort tweak.
+            logger.debug("hide returnButton failed", exc_info=True)
 
         self._build_views()
         self.switchTo(self.home)
@@ -155,7 +159,8 @@ class MainWindow(FluentWindow):
             elif self.width() >= self._nav_collapse_threshold and panel.isCollapsed():
                 panel.expand(useAni=False)
         except Exception:
-            pass
+            # qfluentwidgets internal layout — best-effort tweak.
+            logger.debug("nav resize patch failed", exc_info=True)
 
     def _on_theme_changed(self, name: str) -> None:
         set_app_theme(name, window=self)

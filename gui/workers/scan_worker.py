@@ -9,6 +9,7 @@ Main thread receives a single (Dataset, ExtendedStats) result when done.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
@@ -17,6 +18,8 @@ from core import index_cache
 from core.dataset import count_annotations, scan_dataset
 from core.models import Dataset
 from core.stats import ExtendedStats, compute_extended_stats
+
+logger = logging.getLogger(__name__)
 
 
 class ScanResult:
@@ -40,10 +43,12 @@ class ScanWorker(QThread):
         self.finished.connect(self.deleteLater)
 
     def run(self) -> None:
-        # Phase 0: try cache
+        # Phase 0: try cache (non-fatal — stale/corrupt cache → rescan)
         try:
             cached = index_cache.load(self._root)
         except Exception:
+            logger.warning("index cache load failed for %s — rescanning",
+                           self._root, exc_info=True)
             cached = None
 
         if cached is not None:
@@ -55,11 +60,12 @@ class ScanWorker(QThread):
                     progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
                 )
             except Exception:
+                logger.exception("extended stats failed on cached dataset")
                 ext = None
             self.finished_ok.emit(ScanResult(cached, ext))
             return
 
-        # Phase 1: filesystem scan
+        # Phase 1: filesystem scan (fatal — no dataset → no UI)
         try:
             self.phase.emit("scan")
             dataset = scan_dataset(
@@ -67,10 +73,11 @@ class ScanWorker(QThread):
                 progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
             )
         except Exception as e:  # noqa: BLE001
+            logger.exception("scan_dataset failed for %s", self._root)
             self.failed.emit(str(e))
             return
 
-        # Phase 2: parse annotation counts
+        # Phase 2: parse annotation counts (non-fatal — 0 counts better than no UI)
         try:
             self.phase.emit("annotate")
             count_annotations(
@@ -78,14 +85,15 @@ class ScanWorker(QThread):
                 progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
             )
         except Exception:
-            pass
+            logger.exception("count_annotations failed — continuing with 0 counts")
 
         try:
             index_cache.save(dataset)
         except Exception:
-            pass
+            logger.warning("index cache save failed — next open will rescan",
+                           exc_info=True)
 
-        # Phase 3: extended statistics
+        # Phase 3: extended statistics (non-fatal — readiness bar degrades)
         ext = None
         try:
             self.phase.emit("analyze")
@@ -94,6 +102,6 @@ class ScanWorker(QThread):
                 progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
             )
         except Exception:
-            pass
+            logger.exception("compute_extended_stats failed")
 
         self.finished_ok.emit(ScanResult(dataset, ext))

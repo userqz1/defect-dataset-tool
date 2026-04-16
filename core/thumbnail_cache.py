@@ -1,10 +1,13 @@
 """On-disk thumbnail cache. Pure Python — no PyQt."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import diskcache
 from PIL import Image, ImageOps
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CACHE_DIR = Path.home() / ".dataforge" / "thumbnails"
 
@@ -40,6 +43,7 @@ class ThumbnailCache:
                 im.save(buf, format="JPEG", quality=85)
                 data = buf.getvalue()
         except Exception:
+            logger.exception("thumbnail generation failed for %s", path)
             return None
         self._cache.set(key, data)
         return data
@@ -54,6 +58,7 @@ class ThumbnailCache:
             with Image.open(path) as im:
                 dim = im.size  # (w, h)
         except Exception:
+            logger.warning("could not read dimensions of %s", path, exc_info=True)
             return None
         self._cache.set(key, dim)
         return dim
@@ -63,6 +68,7 @@ class ThumbnailCache:
         try:
             return int(self._cache.volume())
         except Exception:
+            logger.exception("thumbnail cache volume() failed")
             return 0
 
     def clear(self) -> int:
@@ -70,6 +76,7 @@ class ThumbnailCache:
         try:
             return int(self._cache.clear())
         except Exception:
+            logger.exception("thumbnail cache clear() failed")
             return 0
 
     def close(self) -> None:

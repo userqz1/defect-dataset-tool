@@ -159,8 +159,9 @@ class DatasetBrowserView(QWidget):
         if self._scan_worker is not None:
             self._scan_worker.quit()
             self._scan_worker.wait(3000)
-        self._thumb.requestInterruption()
-        self._thumb.wait(3000)
+        # stop() wakes the queue + closes diskcache; requestInterruption
+        # alone would leave the worker blocked on queue.get().
+        self._thumb.stop()
 
     # -- Private --
 
@@ -495,8 +496,11 @@ class DatasetBrowserView(QWidget):
 
     def _delete_duplicates(self, groups) -> None:
         """Delete duplicate images (keep first in each group)."""
+        import logging
         from send2trash import send2trash
+        log = logging.getLogger(__name__)
         deleted = 0
+        failed = 0
         for g in groups:
             for img in g.images[1:]:
                 try:
@@ -505,10 +509,19 @@ class DatasetBrowserView(QWidget):
                         send2trash(str(img.label_path))
                     deleted += 1
                 except Exception:
-                    pass
-        InfoBar.success("删除完成", f"已移除 {deleted} 张重复图片到回收站",
-                        parent=self.window(), duration=5000,
-                        position=InfoBarPosition.TOP)
+                    log.exception("send2trash failed for %s", img.path)
+                    failed += 1
+        if failed:
+            InfoBar.warning(
+                "部分删除失败",
+                f"成功 {deleted} 张，{failed} 张失败（查看日志）",
+                parent=self.window(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+        else:
+            InfoBar.success("删除完成", f"已移除 {deleted} 张重复图片到回收站",
+                            parent=self.window(), duration=5000,
+                            position=InfoBarPosition.TOP)
         self._rescan()
 
     def _on_augment(self) -> None:

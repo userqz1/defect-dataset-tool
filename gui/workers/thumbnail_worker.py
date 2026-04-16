@@ -7,12 +7,15 @@ Workflow:
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from queue import Empty, Queue
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from core.thumbnail_cache import ThumbnailCache
+
+logger = logging.getLogger(__name__)
 
 
 class ThumbnailWorker(QThread):
@@ -40,14 +43,14 @@ class ThumbnailWorker(QThread):
                 break
 
     def stop(self) -> None:
+        """Graceful shutdown: signal the run loop, wake the queue, wait."""
         self._running = False
-        self._queue.put(None)  # 唤醒
+        self._queue.put(None)  # 唤醒 — matches the `if path is None: break`
         self.wait(2000)
-        # Close the diskcache to release SQLite connection
         try:
             self._cache.close()
         except Exception:
-            pass
+            logger.exception("thumbnail cache close failed")
 
     def run(self) -> None:
         while self._running:
@@ -57,8 +60,12 @@ class ThumbnailWorker(QThread):
                 continue
             if path is None:
                 break
-            data = self._cache.get_or_generate(path, self._size)
-            if data is None:
-                continue
-            dim = self._cache.get_dimensions(path) or (0, 0)
-            self.thumb_ready.emit(str(path), data, dim[0], dim[1])
+            try:
+                data = self._cache.get_or_generate(path, self._size)
+                if data is None:
+                    continue
+                dim = self._cache.get_dimensions(path) or (0, 0)
+                self.thumb_ready.emit(str(path), data, dim[0], dim[1])
+            except Exception:
+                # Never let one bad image tear down the whole worker.
+                logger.exception("thumbnail worker failed on %s", path)

@@ -13,6 +13,7 @@ generated label file matches the source format.
 from __future__ import annotations
 
 import copy
+import logging
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,8 @@ from .annotation_formats import load_yolo_classes, parse_annotation
 from .annotation_writer import write_annotation
 from .fileops import OpResult, label_path_for_image
 from .models import Annotation, Shape
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -156,7 +159,9 @@ def _apply_photometric(im: Image.Image, opts: AugmentOptions, rng: random.Random
             arr = (arr + noise).clip(0, 255).astype("uint8")
             im = Image.fromarray(arr)
         except Exception:
-            pass
+            # numpy missing or image mode incompatible — augmentation still
+            # proceeds with other transforms applied, just no noise.
+            _log.warning("gauss_noise skipped", exc_info=True)
     return im
 
 
