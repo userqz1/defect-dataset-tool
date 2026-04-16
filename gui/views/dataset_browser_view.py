@@ -119,7 +119,8 @@ class DatasetBrowserView(QWidget):
 
         # -- Browser + Detail stack --
         self._browser_stack = QStackedWidget()
-        self._browser = BrowserView()
+        # BrowserView reads dataset/task_type via AppState — single truth.
+        self._browser = BrowserView(app_state=self._state)
         self._detail = DetailView()
 
         self._thumb = ThumbnailWorker(size=170, parent=self)
@@ -213,15 +214,10 @@ class DatasetBrowserView(QWidget):
 
             from gui.workers.scan_worker import ScanResult
             ds = result.dataset if isinstance(result, ScanResult) else result
-            self._stats_label.setText(
-                f"{ds.total_images} 图片 · {len(ds.categories)} 类"
-            )
-            self._browser.load_dataset(ds)
-            # Tools only useful when we actually have images
-            self._set_tools_enabled(ds.total_images > 0)
-            # Broadcast to all views via AppState
+            # Single write: AppState → dataset_changed signal →
+            # _on_dataset_changed updates the topbar + browser. No dual
+            # writes to both self._browser and self._state.
             self._state.set_dataset(ds)
-            # Empty-dataset guidance — distinguish "no images" from "filter mismatch"
             if ds.total_images == 0:
                 InfoBar.warning(
                     "目录中未找到图片",
@@ -259,10 +255,8 @@ class DatasetBrowserView(QWidget):
             self._scan_worker = None
             from gui.workers.scan_worker import ScanResult
             ds = result.dataset if isinstance(result, ScanResult) else result
-            self._browser.load_dataset(ds)
-            self._stats_label.setText(
-                f"{ds.total_images} 图片 · {len(ds.categories)} 类"
-            )
+            # Same single-write pattern as the initial scan — the
+            # dataset_changed handler re-renders everything.
             self._state.set_dataset(ds)
 
         def _fail(msg):
@@ -359,7 +353,13 @@ class DatasetBrowserView(QWidget):
         return [img for cat in ds.categories for img in cat.images]
 
     def _on_dataset_changed(self, ds) -> None:
-        """Receive dataset update from AppState."""
+        """Single rendering path for dataset changes.
+
+        AppState is the truth; this handler is the one place that
+        reacts to changes and rebuilds the browser + topbar. Having it
+        the only write path removes the stale-guard hack that used to
+        read BrowserView._dataset (now deleted).
+        """
         if ds is None:
             self._path_label.setText("未选择目录")
             self._stats_label.setText("")
@@ -369,9 +369,9 @@ class DatasetBrowserView(QWidget):
         self._stats_label.setText(
             f"{ds.total_images} 图片 · {len(ds.categories)} 类"
         )
-        self._set_tools_enabled(True)
-        if getattr(self._browser, '_dataset', None) is not ds:
-            self._browser.load_dataset(ds)
+        # Tools only useful when we actually have images
+        self._set_tools_enabled(ds.total_images > 0)
+        self._browser.load_dataset(ds)
 
     # -- Tool handlers --
 

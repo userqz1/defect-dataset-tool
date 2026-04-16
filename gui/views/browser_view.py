@@ -55,19 +55,27 @@ class BrowserView(QWidget):
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
 
-    def __init__(self) -> None:
+    def __init__(self, app_state=None) -> None:
         super().__init__()
         self.setObjectName("browserView")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        self._dataset: Dataset | None = None
+        # AppState is the single source of truth for the current Dataset.
+        # Injected from DatasetBrowserView. A fallback minimal stub keeps
+        # the view constructable in isolation (tests) but never stores a
+        # dataset itself.
+        if app_state is None:
+            from gui.app_state import AppState
+            app_state = AppState(parent=self)
+        self._state = app_state
         self._current_category: str = ""
         self._filter_mode: str = "all"   # all / labeled / unlabeled / issues
         self._search_text: str = ""
         self._page: int = 0
         self._filtered: list[ImageInfo] = []
-        # Quality issues map: path str → list of kinds. Cleared on dataset
-        # change; populated by DatasetBrowserView after a quality check.
+        # Quality issues map: path str → list of kinds — ephemeral UI state
+        # that never outlives the session, kept here (not in AppState) on
+        # purpose so reloading the dataset clears it.
         self._quality_map: dict[str, list[str]] = {}
 
         root = QHBoxLayout(self)
@@ -248,7 +256,13 @@ class BrowserView(QWidget):
     # ---------- 外部接口 ----------
 
     def load_dataset(self, dataset: Dataset) -> None:
-        self._dataset = dataset
+        """Re-render tree + grid for the given dataset.
+
+        Does NOT store the dataset — AppState owns it. The caller
+        (typically ``DatasetBrowserView._on_dataset_changed``) has
+        already pushed *dataset* into AppState, so subsequent reads
+        via ``self._state.dataset`` see the same object.
+        """
         self._current_category = ""
         self._page = 0
         # New dataset → quality results from prior run are stale
@@ -260,10 +274,6 @@ class BrowserView(QWidget):
         self.tree.load_dataset(dataset)
         self._update_readiness(dataset)
         self._apply_filter_and_show()
-
-    def set_task_type(self, task_type) -> None:
-        """Store task type for compliance checking."""
-        self._task_type = task_type
 
     # Compact labels — compliance checker uses verbose Chinese names.
     # Here we collapse them into short pill-style chips.
@@ -283,7 +293,7 @@ class BrowserView(QWidget):
         self._readiness_items.clear()
 
         from core.compliance import check_compliance
-        task_type = getattr(self, "_task_type", None)
+        task_type = self._state.task_type
         if task_type is None:
             from core.task_types import TaskType
             task_type = TaskType.DETECTION
@@ -337,16 +347,16 @@ class BrowserView(QWidget):
     # ---------- 内部 ----------
 
     def _all_images(self) -> list[ImageInfo]:
-        if not self._dataset:
+        if not self._state.dataset:
             return []
         if self._current_category:
-            for cat in self._dataset.categories:
+            for cat in self._state.dataset.categories:
                 if cat.name == self._current_category:
                     return list(cat.images)
             return []
         # 全部
         out: list[ImageInfo] = []
-        for cat in self._dataset.categories:
+        for cat in self._state.dataset.categories:
             out.extend(cat.images)
         return out
 
@@ -504,16 +514,16 @@ class BrowserView(QWidget):
         )
 
     def _do_move(self, sel: list[ImageInfo]) -> None:
-        if not self._dataset:
+        if not self._state.dataset:
             return
-        cats = [c.name for c in self._dataset.categories]
+        cats = [c.name for c in self._state.dataset.categories]
         dlg = MoveToCategoryDialog(cats, self.window())
         if not dlg.exec():
             return
         target = dlg.target()
         if not target:
             return
-        root = self._dataset.root_path
+        root = self._state.dataset.root_path
         self._run(
             lambda cb: fileops.move_to_category(sel, root, target),
             self.tr("正在移动到 {target}…").format(target=target),
@@ -555,7 +565,7 @@ class BrowserView(QWidget):
     # ---- 类别管理 ----
 
     def _do_rename_category(self, name: str) -> None:
-        if not self._dataset:
+        if not self._state.dataset:
             return
         from gui.dialogs.category_dialogs import RenameCategoryDialog
         cats = self.tree.get_category_names()
@@ -563,7 +573,7 @@ class BrowserView(QWidget):
         if not dlg.exec():
             return
         new_name = dlg.new_name()
-        root = self._dataset.root_path
+        root = self._state.dataset.root_path
         self._run(
             lambda cb: fileops.rename_category(root, name, new_name, progress_cb=cb),
             self.tr("正在重命名类别…"),
@@ -571,7 +581,7 @@ class BrowserView(QWidget):
         )
 
     def _do_merge_categories(self, name: str) -> None:
-        if not self._dataset:
+        if not self._state.dataset:
             return
         from gui.dialogs.category_dialogs import MergeCategoriesDialog
         cats = self.tree.get_category_names()
@@ -580,7 +590,7 @@ class BrowserView(QWidget):
             return
         sources = dlg.sources()
         target = dlg.target()
-        root = self._dataset.root_path
+        root = self._state.dataset.root_path
         self._run(
             lambda cb: fileops.merge_categories(root, sources, target, progress_cb=cb),
             self.tr("正在合并类别…"),
@@ -588,7 +598,7 @@ class BrowserView(QWidget):
         )
 
     def _do_split_category(self, name: str) -> None:
-        if not self._dataset:
+        if not self._state.dataset:
             return
         sel = self.get_selected_images()
         if not sel:
@@ -606,7 +616,7 @@ class BrowserView(QWidget):
         if not dlg.exec():
             return
         new_name = dlg.new_name()
-        root = self._dataset.root_path
+        root = self._state.dataset.root_path
         self._run(
             lambda cb: fileops.split_category(root, name, new_name, sel, progress_cb=cb),
             self.tr("正在拆分类别…"),
@@ -641,9 +651,9 @@ class BrowserView(QWidget):
     def _on_op_done(self, result) -> None:
         self._cleanup_worker()
         # 清索引缓存，下次打开重新扫描
-        if self._dataset:
+        if self._state.dataset:
             try:
-                index_cache.clear(self._dataset.root_path)
+                index_cache.clear(self._state.dataset.root_path)
             except Exception:
                 pass
         if result.fail_count:
