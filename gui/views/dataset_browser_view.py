@@ -345,8 +345,20 @@ class DatasetBrowserView(QWidget):
             return
         task_type = self._state.task_type
 
+        # Surface 手动划分 counts to the wizard so its "manual" radio can
+        # show the bucketed totals + auto-disable when nothing is bucketed.
+        project = self._state.project
+        if project is not None:
+            ss = project.split_state
+            manual_counts = (len(ss.manual_train), len(ss.manual_val),
+                             len(ss.manual_test))
+        else:
+            manual_counts = (0, 0, 0)
+
         from gui.dialogs.export_wizard import ExportWizardDialog
-        dlg = ExportWizardDialog(ds, task_type, parent=self.window())
+        dlg = ExportWizardDialog(ds, task_type,
+                                  manual_counts=manual_counts,
+                                  parent=self.window())
         if not dlg.exec():
             return
         opts = dlg.export_options()
@@ -387,15 +399,32 @@ class DatasetBrowserView(QWidget):
         q = opts.get("question") or ""
         if q:
             extra["question"] = q
+
+        # Manual mode (review #1): pull bucketed paths from project.split_state
+        # so SplitStep can resolve them to ImageInfos in ctx.dataset.
+        split_mode = opts.get("split_mode", "ratio")
+        if split_mode == "manual":
+            project = self._state.project
+            ss = project.split_state if project else None
+            split_step = SplitStep(
+                mode="manual",
+                manual_train=tuple(ss.manual_train) if ss else (),
+                manual_val=tuple(ss.manual_val) if ss else (),
+                manual_test=tuple(ss.manual_test) if ss else (),
+            )
+        else:
+            split_step = SplitStep(
+                train=opts["train_ratio"],
+                val=opts["val_ratio"],
+                test=opts["test_ratio"],
+                stratified=opts.get("stratified", True),
+                seed=opts.get("seed"),
+            )
+
         pipe = Pipeline(
             name=f"{schema.display_name} 导出",
             steps=[
-                SplitStep(
-                    train=opts["train_ratio"],
-                    val=opts["val_ratio"],
-                    test=opts["test_ratio"],
-                    stratified=opts.get("stratified", True),
-                ),
+                split_step,
                 ExportStep(
                     schema_key=opts["format"],
                     out_dir=out_dir,

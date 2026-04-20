@@ -128,13 +128,26 @@ class DedupStep:
 
 @dataclass(frozen=True)
 class SplitStep:
-    """Split ``ctx.dataset`` into train/val/test. Populates ``ctx.split``."""
+    """Split ``ctx.dataset`` into train/val/test. Populates ``ctx.split``.
+
+    Two modes:
+
+    - ``ratio`` (default) — proportional split via ``core.splitter.split_dataset``.
+    - ``manual`` — caller supplies ``manual_train/val/test`` as image-path
+      strings; the step matches them back to ``ctx.dataset`` ImageInfos.
+      Paths absent from the dataset are silently dropped (covers the case
+      where a user manually-bucketed an image then later deleted it).
+    """
 
     train: float = 0.8
     val: float = 0.1
     test: float = 0.1
     seed: int | None = None
     stratified: bool = True   # per-category proportional split
+    mode: str = "ratio"       # "ratio" | "manual"
+    manual_train: tuple[str, ...] = ()
+    manual_val: tuple[str, ...] = ()
+    manual_test: tuple[str, ...] = ()
     name: str = "划分"
     kind: str = "split"
     stop_on_error: bool = True
@@ -142,14 +155,29 @@ class SplitStep:
     def execute(self, ctx: PipelineContext, progress_cb: ProgressCb | None = None) -> None:
         if ctx.dataset is None:
             raise RuntimeError("SplitStep 需要 ctx.dataset")
-        from ..splitter import SplitOptions, split_dataset
-        kwargs = dict(
-            train=self.train, val=self.val, test=self.test,
-            stratified=self.stratified,
-        )
-        if self.seed is not None:
-            kwargs["seed"] = self.seed
-        ctx.split = split_dataset(ctx.dataset, SplitOptions(**kwargs))
+
+        if self.mode == "manual":
+            from ..splitter import manual_split
+            by_path = {
+                str(img.path): img
+                for c in ctx.dataset.categories for img in c.images
+            }
+            def resolve(paths: tuple[str, ...]) -> list:
+                return [by_path[p] for p in paths if p in by_path]
+            ctx.split = manual_split(
+                resolve(self.manual_train),
+                resolve(self.manual_val),
+                resolve(self.manual_test),
+            )
+        else:
+            from ..splitter import SplitOptions, split_dataset
+            kwargs = dict(
+                train=self.train, val=self.val, test=self.test,
+                stratified=self.stratified,
+            )
+            if self.seed is not None:
+                kwargs["seed"] = self.seed
+            ctx.split = split_dataset(ctx.dataset, SplitOptions(**kwargs))
         if progress_cb:
             progress_cb(1, 1, "")
 

@@ -163,6 +163,45 @@ class TestSplitExportComposition:
         _, msg = result.errors[0]
         assert "split" in msg.lower() or "Split" in msg
 
+    def test_split_step_manual_mode(self, synthetic_dataset, tmp_path):
+        """Manual mode (review #1): paths supplied by caller drive the split.
+
+        Confirms the GUI 右键 → 加入手动划分 flow ends up with non-empty
+        SplitResult — previously SplitOptions(mode=manual) returned empty
+        and the wizard had no way to feed the saved paths back in.
+        """
+        all_imgs = [img for c in synthetic_dataset.categories for img in c.images]
+        train_paths = tuple(str(i.path) for i in all_imgs[:3])
+        val_paths = tuple(str(i.path) for i in all_imgs[3:5])
+        test_paths = tuple(str(i.path) for i in all_imgs[5:])
+
+        pipe = Pipeline(
+            name="manual-split",
+            steps=[SplitStep(
+                mode="manual",
+                manual_train=train_paths,
+                manual_val=val_paths,
+                manual_test=test_paths,
+            )],
+        )
+        ctx = PipelineContext(dataset=synthetic_dataset)
+        result = pipe.run(ctx)
+        assert result.ok, f"errors: {result.errors}"
+        assert result.context.split is not None
+        assert len(result.context.split.train) == 3
+        assert len(result.context.split.val) == 2
+        assert len(result.context.split.test) == 1
+
+    def test_split_step_manual_mode_drops_unknown_paths(self, synthetic_dataset):
+        """Stale paths (image since deleted) are silently dropped — no crash."""
+        ctx = PipelineContext(dataset=synthetic_dataset)
+        Pipeline(name="x", steps=[SplitStep(
+            mode="manual",
+            manual_train=("/nonexistent/ghost.jpg",),
+        )]).run(ctx)
+        assert ctx.split is not None
+        assert len(ctx.split.train) == 0
+
     def test_export_unknown_schema_errors(self, synthetic_dataset, tmp_path):
         pipe = Pipeline(
             name="bad-schema",

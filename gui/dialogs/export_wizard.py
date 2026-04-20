@@ -14,6 +14,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -34,6 +35,8 @@ from qfluentwidgets import (
     MessageBoxBase,
     PrimaryPushButton,
     PushButton,
+    RadioButton,
+    SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
 )
@@ -95,6 +98,7 @@ class ExportWizardDialog(MessageBoxBase):
     """Three-step export wizard — format → params → preview+execute."""
 
     def __init__(self, dataset: Dataset, task_type: TaskType | None = None,
+                 manual_counts: tuple[int, int, int] = (0, 0, 0),
                  parent=None) -> None:
         super().__init__(parent=parent)
         self._dataset = dataset
@@ -102,6 +106,9 @@ class ExportWizardDialog(MessageBoxBase):
         self._selected_fmt = "YOLO"
         self._out_dir: Path | None = None
         self._worker = None
+        # Counts of paths already bucketed via 右键 → 加入手动划分;
+        # used to enable the "manual" radio + show "训练 N · 验证 M · 测试 K".
+        self._manual_counts = manual_counts
 
         self.widget.setMinimumWidth(680)
 
@@ -154,7 +161,41 @@ class ExportWizardDialog(MessageBoxBase):
         p_lay.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
         p_lay.setSpacing(T.GAP)
 
-        # Split ratio
+        # Split mode — ratio (auto) vs manual (right-click 加入手动划分 result)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(T.GAP_LG)
+        self._mode_ratio_rb = RadioButton("按比例自动划分")
+        self._mode_manual_rb = RadioButton(
+            "用手动划分集合 (右键\"加入手动划分\")"
+        )
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self._mode_ratio_rb)
+        self._mode_group.addButton(self._mode_manual_rb)
+        manual_total = sum(self._manual_counts)
+        # Manual radio is only meaningful when the user already bucketed
+        # something — disable + add a hint otherwise so it doesn't look broken.
+        if manual_total > 0:
+            self._mode_manual_rb.setText(
+                f"用手动划分集合 (训练 {self._manual_counts[0]} · "
+                f"验证 {self._manual_counts[1]} · 测试 {self._manual_counts[2]})"
+            )
+        else:
+            self._mode_manual_rb.setEnabled(False)
+            self._mode_manual_rb.setToolTip(
+                "右键缩略图 → 加入手动划分 后，此选项才可用"
+            )
+        self._mode_ratio_rb.setChecked(True)
+        mode_row.addWidget(self._mode_ratio_rb)
+        mode_row.addWidget(self._mode_manual_rb)
+        mode_row.addStretch(1)
+        p_lay.addLayout(mode_row)
+
+        # Split ratio (only relevant in ratio mode; hidden when manual chosen)
+        self._ratio_widget = QFrame()
+        ratio_lay = QVBoxLayout(self._ratio_widget)
+        ratio_lay.setContentsMargins(0, 0, 0, 0)
+        ratio_lay.setSpacing(T.GAP)
+
         ratio_row = QHBoxLayout()
         ratio_row.setSpacing(T.GAP_LG)
         ratio_row.addWidget(BodyLabel("训练集"))
@@ -170,18 +211,41 @@ class ExportWizardDialog(MessageBoxBase):
         self._test.setRange(0, 1); self._test.setValue(0.1); self._test.setSingleStep(0.05)
         ratio_row.addWidget(self._test)
         ratio_row.addStretch(1)
-        p_lay.addLayout(ratio_row)
+        ratio_lay.addLayout(ratio_row)
 
-        self._copy_chk = CheckBox("复制图片到导出目录")
-        self._copy_chk.setChecked(True)
-        p_lay.addWidget(self._copy_chk)
+        # Seed (review #7) — 0 = random; non-zero = reproducible split.
+        # Lets the user re-run the same export and get the same train/val/test,
+        # which matters for "上次测试集 87.3%, 这次复测一下" comparisons.
+        seed_row = QHBoxLayout()
+        seed_row.setSpacing(T.GAP)
+        seed_row.addWidget(BodyLabel("随机种子"))
+        self._seed = SpinBox()
+        self._seed.setRange(0, 2_147_483_647)
+        self._seed.setValue(0)
+        self._seed.setFixedWidth(140)
+        seed_row.addWidget(self._seed)
+        seed_row.addWidget(CaptionLabel("(0 = 每次随机)"))
+        seed_row.addStretch(1)
+        ratio_lay.addLayout(seed_row)
 
         # Stratified (review #11) — preserve per-category ratios when splitting.
         # Off means pure random; training on imbalanced data usually wants this
         # ON so each split gets proportional class counts.
         self._stratified_chk = CheckBox("按类别分层抽样(推荐)")
         self._stratified_chk.setChecked(True)
-        p_lay.addWidget(self._stratified_chk)
+        ratio_lay.addWidget(self._stratified_chk)
+
+        p_lay.addWidget(self._ratio_widget)
+
+        self._copy_chk = CheckBox("复制图片到导出目录")
+        self._copy_chk.setChecked(True)
+        p_lay.addWidget(self._copy_chk)
+
+        # Toggle ratio block visibility based on mode selection
+        self._mode_ratio_rb.toggled.connect(
+            lambda on: (self._ratio_widget.setVisible(on),
+                        self._update_preview())
+        )
 
         # VLM question (review #8) — shown only for schemas whose options_class
         # declares a ``question`` field (ShareGPT / LLaVA / Swift). For CV
@@ -282,20 +346,28 @@ class ExportWizardDialog(MessageBoxBase):
     # ---------- Preview ----------
 
     def _update_preview(self) -> None:
-        n = sum(c.image_count for c in self._dataset.categories)
-        tr, va, te = self._train.value(), self._val.value(), self._test.value()
-        s = tr + va + te
-        if s > 0:
-            n_tr = int(round(n * tr / s))
-            n_va = int(round(n * va / s))
-            n_te = n - n_tr - n_va
+        if self._mode_manual_rb.isChecked():
+            n_tr, n_va, n_te = self._manual_counts
+            self._split_preview.setText(
+                f"手动 · 训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
+            )
         else:
-            n_tr, n_va, n_te = n, 0, 0
-        self._split_preview.setText(
-            f"训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
-        )
+            n = sum(c.image_count for c in self._dataset.categories)
+            tr, va, te = self._train.value(), self._val.value(), self._test.value()
+            s = tr + va + te
+            if s > 0:
+                n_tr = int(round(n * tr / s))
+                n_va = int(round(n * va / s))
+                n_te = n - n_tr - n_va
+            else:
+                n_tr, n_va, n_te = n, 0, 0
+            self._split_preview.setText(
+                f"训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
+            )
         schema = get_schema(self._selected_fmt)
-        self._structure.setText(schema.directory_preview if schema else "")
+        # getattr guard (review #14) — a future Schema that forgets to
+        # define directory_preview would otherwise AttributeError here.
+        self._structure.setText(getattr(schema, "directory_preview", "") if schema else "")
         # Show Q&A row only when the schema's options support a question.
         supports_q = bool(
             schema and "question" in schema.options_class.__dataclass_fields__
@@ -348,12 +420,16 @@ class ExportWizardDialog(MessageBoxBase):
 
     def export_options(self) -> dict:
         """Return the configured export parameters."""
+        seed_val = self._seed.value()
         return {
             "format": self._selected_fmt,
             "out_dir": self._out_dir,
+            "split_mode": "manual" if self._mode_manual_rb.isChecked() else "ratio",
             "train_ratio": self._train.value(),
             "val_ratio": self._val.value(),
             "test_ratio": self._test.value(),
+            # 0 = "no fixed seed" (every run is fresh random); non-zero is forwarded
+            "seed": seed_val if seed_val > 0 else None,
             "copy_images": self._copy_chk.isChecked(),
             "stratified": self._stratified_chk.isChecked(),
             # question only meaningful for VLM schemas; empty string = use default
