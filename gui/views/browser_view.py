@@ -24,23 +24,17 @@ from qfluentwidgets import (
     IndeterminateProgressBar,
     LineEdit,
     MessageBox,
+    PushButton,
     ToolButton,
 )
 
-from core import fileops, index_cache, transform as tx
-from core.convert import convert_batch
+from core import fileops, index_cache
 from core.exporter.subset import export_subset
 from core.models import Dataset, ImageInfo
 from gui.dialogs.op_dialogs import (
-    ConvertDialog,
-    CropDialog,
     FailureDetailDialog,
-    FlipDialog,
     MoveToCategoryDialog,
     ProgressDialog,
-    RenameDialog,
-    ResizeDialog,
-    RotateDialog,
 )
 from gui.theme import T
 from gui.widgets.category_tree import CategoryTree
@@ -171,6 +165,35 @@ class BrowserView(QWidget):
 
         self.selection_label = CaptionLabel("")
         filter_bar.addWidget(self.selection_label)
+
+        # "多选" toggle — when on, a single click on a thumbnail toggles
+        # selection (no Ctrl needed), ideal for touchpad / quick bulk picking.
+        # Off = default desktop behavior (单选 + Ctrl/Shift 辅助).
+        self._multi_btn = PushButton(self.tr("多选"))
+        self._multi_btn.setCheckable(True)
+        self._multi_btn.setFixedWidth(80)
+        self._multi_btn.setFixedHeight(32)
+        self._multi_btn.toggled.connect(self._on_multi_toggle)
+        filter_bar.addWidget(self._multi_btn)
+
+        # "全选 / 取消全选" toggle — current page scope; for cross-page bulk
+        # use the filter chips first, then 全选.
+        self._select_all_btn = PushButton(self.tr("全选"))
+        self._select_all_btn.setFixedWidth(80)
+        self._select_all_btn.setFixedHeight(32)
+        self._select_all_btn.setEnabled(False)
+        self._select_all_btn.clicked.connect(self._on_select_all_toggle)
+        filter_bar.addWidget(self._select_all_btn)
+
+        # Visible delete entry — right-click menu alone was too hidden.
+        # Enabled only when at least one thumbnail is selected.
+        self._delete_btn = PushButton(self.tr("删除"))
+        self._delete_btn.setIcon(FIF.DELETE)
+        self._delete_btn.setFixedWidth(80)
+        self._delete_btn.setFixedHeight(32)
+        self._delete_btn.setEnabled(False)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
+        filter_bar.addWidget(self._delete_btn)
 
         right_layout.addLayout(filter_bar)
 
@@ -311,13 +334,13 @@ class BrowserView(QWidget):
             w.deleteLater()
         self._readiness_items.clear()
 
-        from core.compliance import check_compliance
+        from core.task_readiness import check_task_readiness
         task_type = self._state.task_type
         if task_type is None:
             from core.task_types import TaskType
             task_type = TaskType.DETECTION
 
-        report = check_compliance(dataset, task_type)
+        report = check_task_readiness(dataset, task_type)
 
         for check in report.checks:
             short = self._READINESS_LABEL.get(check.item, check.item)
@@ -427,7 +450,14 @@ class BrowserView(QWidget):
         self.next_btn.setEnabled(self._page < page_count - 1)
 
     def _on_category_selected(self, category: str) -> None:
+        # Reset filter when switching categories — otherwise a user who
+        # clicked "未标注" while viewing one category sees an empty page
+        # on every subsequent category that happens to be fully annotated,
+        # and can't tell the filter is still active. 直觉:类别切换 = 看这类全部。
         self._current_category = category
+        if self._filter_mode is not FilterMode.ALL:
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()
 
     def _on_filter_changed(self, mode: FilterMode) -> None:
@@ -458,9 +488,51 @@ class BrowserView(QWidget):
 
     def _on_selection_changed(self, selected: list[ImageInfo]) -> None:
         n = len(selected)
+        total_on_page = self.grid.count()
         self.selection_label.setText(
             self.tr("已选 {n} 张").format(n=n) if n else ""
         )
+        self._delete_btn.setEnabled(n > 0)
+        # Toggle select-all button label + enabled state
+        self._select_all_btn.setEnabled(total_on_page > 0)
+        if total_on_page > 0 and n >= total_on_page:
+            self._select_all_btn.setText(self.tr("取消全选"))
+        else:
+            self._select_all_btn.setText(self.tr("全选"))
+
+    def _on_select_all_toggle(self) -> None:
+        """Toggle between select-all-on-current-page and clear-selection."""
+        total_on_page = self.grid.count()
+        if total_on_page == 0:
+            return
+        if len(self.grid.selectedItems()) >= total_on_page:
+            self.grid.clearSelection()
+        else:
+            self.grid.selectAll()
+
+    def _on_multi_toggle(self, checked: bool) -> None:
+        """Switch grid between Extended (default, Ctrl/Shift) and Multi (click-toggle).
+
+        Extended selection is the desktop convention — click one, Ctrl+click
+        to add, Shift+click for range. Some users expect phone-like toggling
+        (single click selects/unselects without a modifier) so this button
+        flips the grid to MultiSelection while pressed. Clearing on exit
+        avoids a mixed state (half the selection from one mode, half the
+        other) that would confuse the delete confirmation.
+        """
+        from PyQt6.QtWidgets import QAbstractItemView
+        if checked:
+            self.grid.setSelectionMode(
+                QAbstractItemView.SelectionMode.MultiSelection)
+        else:
+            self.grid.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection)
+            self.grid.clearSelection()
+
+    def _on_delete_clicked(self) -> None:
+        sel = self.grid.selected_images()
+        if sel:
+            self._do_delete(sel)
 
     def _on_item_activated(self, img: ImageInfo) -> None:
         self.image_activated.emit(img, self._filtered)
@@ -489,14 +561,7 @@ class BrowserView(QWidget):
         ).setEnabled(False)
         menu.addSeparator()
         menu.addAction(self.tr("删除 (回收站)"), lambda: self._do_delete(sel))
-        menu.addAction(self.tr("批量重命名…"), lambda: self._do_rename(sel))
         menu.addAction(self.tr("移动到类别…"), lambda: self._do_move(sel))
-        menu.addSeparator()
-        menu.addAction(self.tr("格式转换…"), lambda: self._do_convert(sel))
-        menu.addAction(self.tr("缩放…"), lambda: self._do_transform(sel, tx.resize_one, ResizeDialog))
-        menu.addAction(self.tr("裁剪…"), lambda: self._do_transform(sel, tx.crop_one, CropDialog))
-        menu.addAction(self.tr("旋转…"), lambda: self._do_transform(sel, tx.rotate_one, RotateDialog))
-        menu.addAction(self.tr("翻转…"), lambda: self._do_transform(sel, tx.flip_one, FlipDialog))
         menu.addSeparator()
         split_menu = menu.addMenu(self.tr("加入手动划分"))
         split_menu.addAction(self.tr("→ Train"), lambda: self.add_to_split.emit("train", sel))
@@ -509,36 +574,21 @@ class BrowserView(QWidget):
     # ---- 各操作 ----
 
     def _do_delete(self, sel: list[ImageInfo]) -> None:
-        box = MessageBox(
-            self.tr("确认删除"),
-            self.tr("将 {n} 个图片+标注移至回收站，确认？").format(n=len(sel)),
-            self.window(),
-        )
+        labeled = sum(1 for i in sel if i.has_label)
+        unlabeled = len(sel) - labeled
+        parts = [f"{len(sel)} 张图片"]
+        if labeled and unlabeled:
+            parts.append(f"其中 {labeled} 张带标注、{unlabeled} 张未标注")
+        elif labeled:
+            parts.append(f"含 {labeled} 份标注文件")
+        # 未标注情况下,第二行是冗余的 ("XX 张图片" 已经说明),不再补
+        body = self.tr("将以下内容移至回收站，确认？\n\n") + "\n".join(parts)
+        box = MessageBox(self.tr("确认删除"), body, self.window())
         if not box.exec():
             return
         self._run(
             lambda cb: fileops.delete_pairs(sel, to_trash=True),
             self.tr("正在删除…"),
-        )
-
-    def _do_rename(self, sel: list[ImageInfo]) -> None:
-        dlg = RenameDialog(self.window())
-        if not dlg.exec():
-            return
-        pattern = dlg.pattern.text()
-        start = dlg.start.value()
-        self._run(
-            lambda cb: fileops.batch_rename(sel, pattern=pattern, start=start),
-            self.tr("正在重命名…"),
-            history={
-                "action": "batch-rename",
-                "params": {
-                    "pattern": pattern, "start": start,
-                    "image_count": len(sel),
-                    "images": [str(i.path) for i in sel],
-                },
-                "summary": f"批量重命名 {len(sel)} 张（{pattern}）",
-            },
         )
 
     def _do_move(self, sel: list[ImageInfo]) -> None:
@@ -565,28 +615,6 @@ class BrowserView(QWidget):
                 },
                 "summary": f"移动 {len(sel)} 张到 {target}",
             },
-        )
-
-    def _do_convert(self, sel: list[ImageInfo]) -> None:
-        dlg = ConvertDialog(self.window())
-        if not dlg.exec():
-            return
-        opts = dlg.options()
-        paths = [i.path for i in sel]
-        self._run(
-            lambda cb: convert_batch(paths, opts, progress_cb=cb),
-            self.tr("正在转换…"),
-        )
-
-    def _do_transform(self, sel: list[ImageInfo], op_fn, DlgCls) -> None:
-        dlg = DlgCls(self.window())
-        if not dlg.exec():
-            return
-        opts = dlg.options()
-        paths = [i.path for i in sel]
-        self._run(
-            lambda cb: tx.batch_apply(paths, op_fn, opts, progress_cb=cb),
-            self.tr("处理中…"),
         )
 
     def _do_export_subset(self, sel: list[ImageInfo]) -> None:

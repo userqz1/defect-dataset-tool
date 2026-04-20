@@ -38,18 +38,22 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from core.exporter.registry import EXPORTERS
 from core.models import Dataset
-from core.task_types import TASK_REGISTRY, TaskType
+from core.schema import all_schemas, get as get_schema, schemas_for_task
+from core.task_types import TaskType
 from gui.theme import T
 
 
-# ---------- Format definitions (derived from registry) ----------
+# ---------- Format definitions (derived from Schema registry) ----------
+# v1.2 §5.5: core.schema is the single source of truth for export formats.
+# Legacy formats without a Schema (CSV / JSONL / LLaVA / ms-swift) return
+# in v0.2 per §14.4 once they're ported to Schema objects.
 
-_FORMATS = [
-    {"key": e.key, "name": e.display_name, "desc": e.description}
-    for e in EXPORTERS.values()
-]
+def _format_cards() -> list[dict]:
+    return [
+        {"key": s.key, "name": s.display_name, "desc": s.description}
+        for s in all_schemas()
+    ]
 
 
 # ---------- Format card ----------
@@ -109,20 +113,37 @@ class ExportWizardDialog(MessageBoxBase):
         cards_grid = QGridLayout()
         cards_grid.setSpacing(T.GAP)
         self._format_cards: dict[str, _FormatCard] = {}
-        for i, fmt in enumerate(_FORMATS):
+        for i, fmt in enumerate(_format_cards()):
             card = _FormatCard(fmt)
             card.mousePressEvent = lambda e, k=fmt["key"]: self._select_format(k)
             self._format_cards[fmt["key"]] = card
             cards_grid.addWidget(card, i // 2, i % 2)
         self.viewLayout.addLayout(cards_grid)
 
-        # Filter by task type
+        # Filter by task type — Schema-driven (v1.2 §5.5)
         if task_type:
-            info = TASK_REGISTRY.get(task_type)
-            if info:
-                allowed = set(info.export_formats)
-                for key, card in self._format_cards.items():
-                    card.setVisible(key in allowed)
+            allowed = {s.key for s in schemas_for_task(task_type)}
+            for key, card in self._format_cards.items():
+                card.setVisible(key in allowed)
+
+        # ===== Readiness row (Schema-driven, v1.2 §5.4) =====
+        # Shows per-slot pills when the selected format has a registered
+        # core.schema entry. Other formats fall through silently.
+        self._readiness_frame = QFrame()
+        self._readiness_frame.setObjectName("chartFrame")
+        ready_lay = QVBoxLayout(self._readiness_frame)
+        ready_lay.setContentsMargins(T.PAD_LG, T.PAD, T.PAD_LG, T.PAD)
+        ready_lay.setSpacing(T.GAP_XS)
+
+        self._readiness_title = BodyLabel("")
+        ready_lay.addWidget(self._readiness_title)
+
+        self._readiness_pills_row = QHBoxLayout()
+        self._readiness_pills_row.setSpacing(T.GAP_XS)
+        self._readiness_pills_row.addStretch(1)
+        ready_lay.addLayout(self._readiness_pills_row)
+
+        self.viewLayout.addWidget(self._readiness_frame)
 
         # ===== Step 2: Parameters =====
         self.viewLayout.addWidget(StrongBodyLabel("② 配置参数"))
@@ -200,8 +221,12 @@ class ExportWizardDialog(MessageBoxBase):
         self.cancelButton.setText("取消")
         self.yesButton.setEnabled(False)
 
-        # Initial selection
-        self._select_format("YOLO")
+        # Initial selection — first visible schema (task_type may hide YOLO)
+        initial = next(
+            (k for k, c in self._format_cards.items() if c.isVisible()),
+            next(iter(self._format_cards), "YOLO"),
+        )
+        self._select_format(initial)
         self._update_preview()
 
         # Wire ratio changes to preview update
@@ -247,8 +272,50 @@ class ExportWizardDialog(MessageBoxBase):
         self._split_preview.setText(
             f"训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
         )
-        entry = EXPORTERS.get(self._selected_fmt)
-        self._structure.setText(entry.structure if entry else "")
+        schema = get_schema(self._selected_fmt)
+        self._structure.setText(schema.directory_preview if schema else "")
+        self._refresh_readiness()
+
+    # ---------- Readiness (Schema-driven) ----------
+
+    def _refresh_readiness(self) -> None:
+        """Rebuild per-slot pills from the selected format's Schema.
+
+        Hides the readiness frame entirely if the format has no Schema
+        registered (legacy path for formats not yet migrated to core.schema).
+        """
+        schema = get_schema(self._selected_fmt)
+        if schema is None:
+            self._readiness_frame.setVisible(False)
+            return
+
+        self._readiness_frame.setVisible(True)
+        report = schema.validate(self._dataset)
+        gaps = [slot.name for slot in report.missing()]
+        suffix = "就绪" if report.ready else f"缺:{'、'.join(gaps)}"
+        self._readiness_title.setText(
+            f"合规状态 · {schema.display_name}  {report.progress_text} {suffix}"
+        )
+
+        # Clear previous pills (keep the trailing stretch at index 0 after clear)
+        while self._readiness_pills_row.count() > 0:
+            item = self._readiness_pills_row.takeAt(0)
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.deleteLater()
+
+        for slot, status in report.results:
+            icon = "✓" if status.ok else "✗"
+            pill = CaptionLabel(f"{icon} {slot.name}")
+            pill.setObjectName("readinessOk" if status.ok else "readinessGap")
+            tip_parts = [status.current_text]
+            if status.required_text:
+                tip_parts.append(f"要求 {status.required_text}")
+            if status.action_text:
+                tip_parts.append(status.action_text)
+            pill.setToolTip(" · ".join(p for p in tip_parts if p))
+            self._readiness_pills_row.addWidget(pill)
+        self._readiness_pills_row.addStretch(1)
 
     # ---------- Result ----------
 

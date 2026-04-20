@@ -37,19 +37,38 @@ class ScanWorker(QThread):
     finished_ok = pyqtSignal(object)       # ScanResult
     failed = pyqtSignal(str)
 
-    def __init__(self, root: Path, parent: QObject | None = None) -> None:
+    def __init__(self, root: Path, parent: QObject | None = None,
+                 force_rescan: bool = False) -> None:
+        """
+        Args:
+            root: dataset root directory.
+            parent: Qt parent.
+            force_rescan: If True, skip the index cache and re-walk the
+                filesystem. Used by the manual "刷新" button — users hit it
+                because they know something changed that mtime-fingerprint
+                might miss (e.g. annotation file edits in-place).
+        """
         super().__init__(parent)
         self._root = root
+        self._force_rescan = force_rescan
         self.finished.connect(self.deleteLater)
 
     def run(self) -> None:
         # Phase 0: try cache (non-fatal — stale/corrupt cache → rescan)
-        try:
-            cached = index_cache.load(self._root)
-        except Exception:
-            logger.warning("index cache load failed for %s — rescanning",
-                           self._root, exc_info=True)
-            cached = None
+        cached = None
+        if not self._force_rescan:
+            try:
+                cached = index_cache.load(self._root)
+            except Exception:
+                logger.warning("index cache load failed for %s — rescanning",
+                               self._root, exc_info=True)
+                cached = None
+        else:
+            # Manual refresh: nuke the cache so next open is also fresh
+            try:
+                index_cache.clear(self._root)
+            except Exception:
+                logger.warning("index cache clear failed", exc_info=True)
 
         if cached is not None:
             # Still compute extended stats even for cached dataset

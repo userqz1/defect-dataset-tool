@@ -78,6 +78,13 @@ class DatasetBrowserView(QWidget):
         tbar_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
         tbar_lay.setSpacing(T.GAP)
 
+        self._refresh_btn = PushButton("刷新")
+        self._refresh_btn.setIcon(FIF.SYNC)
+        self._refresh_btn.setFixedWidth(80)
+        self._refresh_btn.setEnabled(False)
+        self._refresh_btn.clicked.connect(self._on_refresh)
+        tbar_lay.addWidget(self._refresh_btn)
+
         self._export_btn = PushButton("导出")
         self._export_btn.setIcon(FIF.SHARE)
         self._export_btn.setFixedWidth(80)
@@ -85,9 +92,9 @@ class DatasetBrowserView(QWidget):
         self._export_btn.clicked.connect(self._on_export)
         tbar_lay.addWidget(self._export_btn)
 
-        self._quality_btn = PushButton("质量检查")
+        self._quality_btn = PushButton("质检")
         self._quality_btn.setIcon(FIF.SEARCH)
-        self._quality_btn.setFixedWidth(100)
+        self._quality_btn.setFixedWidth(80)
         self._quality_btn.setEnabled(False)
         self._quality_btn.clicked.connect(self._on_quality_check)
         tbar_lay.addWidget(self._quality_btn)
@@ -98,13 +105,6 @@ class DatasetBrowserView(QWidget):
         self._dedup_btn.setEnabled(False)
         self._dedup_btn.clicked.connect(self._on_dedup)
         tbar_lay.addWidget(self._dedup_btn)
-
-        self._augment_btn = PushButton("增强")
-        self._augment_btn.setIcon(FIF.ADD)
-        self._augment_btn.setFixedWidth(80)
-        self._augment_btn.setEnabled(False)
-        self._augment_btn.clicked.connect(self._on_augment)
-        tbar_lay.addWidget(self._augment_btn)
 
         tbar_lay.addStretch()
 
@@ -150,8 +150,12 @@ class DatasetBrowserView(QWidget):
         self._browser_stack.addWidget(self._detail)
         lay.addWidget(self._browser_stack, 1)
 
-        # Re-scan when browser reports category changes
-        self._browser.dataset_changed.connect(self._rescan)
+        # Re-scan when browser reports file-system changes (delete / move /
+        # category ops). force=True so fingerprint-based cache-hit doesn't
+        # serve stale data — the user just intentionally modified files.
+        self._browser.dataset_changed.connect(
+            lambda: self._rescan(force=True)
+        )
 
         # Listen to AppState for dataset changes from other sources
         self._state.dataset_changed.connect(self._on_dataset_changed)
@@ -195,8 +199,12 @@ class DatasetBrowserView(QWidget):
         self._state.open_dataset(root, task_type)
         self._scan_dir(root)
 
-    def _scan_dir(self, root: Path) -> None:
-        """Scan a directory and load into browser."""
+    def _scan_dir(self, root: Path, force: bool = False) -> None:
+        """Scan a directory and load into browser.
+
+        ``force=True`` skips the SQLite index cache and re-walks the
+        filesystem — used by the manual "刷新" button.
+        """
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
         self._path_label.setText(str(root))
@@ -208,8 +216,19 @@ class DatasetBrowserView(QWidget):
         progress.show()
 
         from gui.workers.scan_worker import ScanWorker
-        worker = ScanWorker(root, parent=self)
+        worker = ScanWorker(root, parent=self, force_rescan=force)
         self._scan_worker = worker
+
+        # Show which phase is running so 5k-image scans don't look like
+        # they're looping — ScanWorker emits "scan" → "annotate" → "analyze".
+        _PHASE_TITLES = {
+            "scan": "扫描文件系统",
+            "annotate": "解析标注",
+            "analyze": "统计类别分布",
+        }
+
+        def on_phase(p: str) -> None:
+            progress.titleLabel.setText(_PHASE_TITLES.get(p, "扫描数据集"))
 
         def on_progress(done, total, name):
             progress.set_progress(done, total, name)
@@ -240,13 +259,37 @@ class DatasetBrowserView(QWidget):
             self._open_btn.setEnabled(True)
             self._stats_label.setText(f"失败: {msg}")
 
+        worker.phase.connect(on_phase)
         worker.progress.connect(on_progress)
         worker.finished_ok.connect(on_done)
         worker.failed.connect(on_fail)
         worker.start()
 
-    def _rescan(self) -> None:
-        """Re-scan after file ops (delete/rename/move)."""
+    def _on_refresh(self) -> None:
+        """Manual refresh — re-scan the current dataset on demand.
+
+        v1.2 UX note: "实时更新数据集状况" — whenever outside processes
+        (other tools, file-system changes) touch the dataset, user can
+        hit this to re-index without reopening. Goes through _scan_dir so
+        the user gets the same phase-labeled ProgressDialog as initial open.
+        """
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            InfoBar.info("", "正在扫描，请稍候…",
+                         parent=self.window(), duration=1800,
+                         position=InfoBarPosition.TOP)
+            return
+        ds = self._state.dataset
+        if ds is None:
+            return
+        self._scan_dir(ds.root_path, force=True)
+
+    def _rescan(self, force: bool = False) -> None:
+        """Re-scan after file ops (delete/rename/move) or manual refresh.
+
+        ``force=True`` bypasses the SQLite index cache — used by the manual
+        refresh button. Non-forced rescans (after delete/rename/move) still
+        trust the fingerprint check because those ops update parent mtime.
+        """
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
         ds = self._state.dataset
@@ -255,7 +298,7 @@ class DatasetBrowserView(QWidget):
         root = ds.root_path
 
         from gui.workers.scan_worker import ScanWorker
-        worker = ScanWorker(root, parent=self)
+        worker = ScanWorker(root, parent=self, force_rescan=force)
         self._scan_worker = worker
 
         def _done(result):
@@ -291,11 +334,20 @@ class DatasetBrowserView(QWidget):
         self._run_export(ds, opts)
 
     def _run_export(self, dataset, opts: dict) -> None:
-        """Execute export in a BatchWorker."""
+        """Execute export in a BatchWorker — Schema.writer-driven (v1.2 §5.5)."""
         if self._export_worker is not None and self._export_worker.isRunning():
             return
+        from core.schema import get as get_schema
         from core.splitter import SplitOptions, split_dataset
-        from core.exporter.registry import run_export
+
+        schema = get_schema(opts["format"])
+        if schema is None:
+            InfoBar.error(
+                "导出失败", f"未注册的格式:{opts['format']}",
+                parent=self.window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
 
         split_opts = SplitOptions(
             train=opts["train_ratio"],
@@ -304,12 +356,19 @@ class DatasetBrowserView(QWidget):
         )
         split = split_dataset(dataset, split_opts)
         out_dir = opts["out_dir"]
-        fmt = opts["format"]
         copy_images = opts["copy_images"]
 
+        # Build options from the schema's declared options_class.
+        # Only pass copy_images if the dataclass supports it (ShareGPT does,
+        # some future schemas might not).
+        opt_fields = schema.options_class.__dataclass_fields__
+        kwargs: dict = {"out_dir": out_dir}
+        if "copy_images" in opt_fields:
+            kwargs["copy_images"] = copy_images
+        options = schema.options_class(**kwargs)
+
         def task(progress_cb):
-            return run_export(fmt, split, out_dir, copy_images=copy_images,
-                              progress_cb=progress_cb)
+            return schema.writer(split, options, progress_cb=progress_cb)
 
         from gui.dialogs.op_dialogs import ProgressDialog
         from gui.workers.batch_worker import BatchWorker
@@ -348,8 +407,8 @@ class DatasetBrowserView(QWidget):
 
     def _set_tools_enabled(self, enabled: bool) -> None:
         """Enable/disable all toolbar buttons."""
-        for btn in (self._export_btn, self._quality_btn, self._dedup_btn,
-                    self._augment_btn, self._history_btn, self._stats_btn):
+        for btn in (self._refresh_btn, self._export_btn, self._quality_btn,
+                    self._dedup_btn, self._history_btn, self._stats_btn):
             btn.setEnabled(enabled)
 
     def _on_history(self) -> None:
@@ -525,54 +584,6 @@ class DatasetBrowserView(QWidget):
                             parent=self.window(), duration=5000,
                             position=InfoBarPosition.TOP)
         self._rescan()
-
-    def _on_augment(self) -> None:
-        """Run data augmentation."""
-        images = self._all_images()
-        if not images:
-            return
-
-        # Look at current selection so the dialog can offer "仅已选中"
-        selected = self._browser.get_selected_images()
-
-        from gui.dialogs.tool_dialogs import AugmentDialog
-        dlg = AugmentDialog(parent=self.window(),
-                            selected_count=len(selected))
-        if not dlg.exec():
-            return
-        aug_opts = dlg.options()
-        if aug_opts["out_dir"] is None:
-            return
-
-        # Honor source choice
-        source_imgs = (selected if aug_opts.get("source") == "selected"
-                       else images)
-        if not source_imgs:
-            InfoBar.warning("没有可用图片", "请先选中图片或切换到\"全部\"",
-                            parent=self.window(), duration=4000,
-                            position=InfoBarPosition.TOP)
-            return
-
-        from core.augment import augment_batch
-        from gui.workers.batch_runner import BatchRunner
-
-        image_paths = [img.path for img in source_imgs]
-        out_dir = aug_opts["out_dir"]
-        opts = aug_opts["opts"]
-
-        def handle(result):
-            InfoBar.success(
-                "增强完成",
-                f"生成 {result.count} 张增强图片到 {out_dir}",
-                parent=self.window(), duration=5000,
-                position=InfoBarPosition.TOP,
-            )
-
-        BatchRunner(self, "数据增强").run(
-            task=lambda cb: augment_batch(image_paths, out_dir, opts,
-                                          progress_cb=cb),
-            on_done=handle,
-        )
 
     def _on_stats(self) -> None:
         """Compute and show dataset statistics."""

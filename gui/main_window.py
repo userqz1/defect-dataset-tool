@@ -93,10 +93,15 @@ class MainWindow(FluentWindow):
     def _build_views(self) -> None:
         from gui.views.dataset_browser_view import DatasetBrowserView
         from gui.views.dataset_welcome import DatasetWelcome
+        from gui.views.organize_view import OrganizeView
 
         # Home — dataset list
         self.home = DatasetWelcome()
         self.home.open_dataset.connect(self._open_dataset)
+
+        # Organize — batch import → classify → land (v1.2 §9.3)
+        self.organize = OrganizeView()
+        self.organize.import_done.connect(self._open_dataset)
 
         # Browser — top-level dataset browser
         self.browser = DatasetBrowserView(self._state)
@@ -107,6 +112,8 @@ class MainWindow(FluentWindow):
 
         # Nav — TOP
         self.addSubInterface(self.home, FIF.HOME_FILL, "首页",
+                             position=NavigationItemPosition.TOP)
+        self.addSubInterface(self.organize, FIF.FOLDER_ADD, "整理",
                              position=NavigationItemPosition.TOP)
         self.addSubInterface(self.browser, FIF.PHOTO, "浏览器",
                              position=NavigationItemPosition.TOP)
