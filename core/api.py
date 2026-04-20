@@ -60,10 +60,14 @@ from .schema import get as get_schema
 
 # ---- Ingest (batch import → classify → land) ----
 from .ingest import (
+    ByExifDateRule,
+    ByFilenamePrefixRule,
+    BySubdirRule,
     ClassificationResult,
     ClassificationRule,
     IngestPreview,
     IngestResult,
+    ManualRule,
     discover,
     execute,
     execute_with_checks,
@@ -145,6 +149,7 @@ __all__ = [
     # Ingest
     "INGEST_RULES", "ClassificationResult", "ClassificationRule",
     "IngestPreview", "IngestResult",
+    "ByExifDateRule", "ByFilenamePrefixRule", "BySubdirRule", "ManualRule",
     "discover", "execute", "execute_with_checks", "preview",
     # Quality / dedup
     "QualityIssue", "QualityOptions", "check_images",
