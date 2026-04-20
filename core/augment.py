@@ -92,6 +92,49 @@ def _map_shape_points(shapes: list[Shape], fn) -> None:
         s.points = [tuple(fn(float(x), float(y))) for x, y in s.points]
 
 
+# ---------- Pure coordinate transforms (unit-testable) ----------
+#
+# Each ``*_points`` helper takes the image's pre-transform size (``w``,
+# ``h``) and returns a point-mapping function ``(x, y) -> (x', y')``.
+# Keeping the math in standalone callables means tests/test_augment_geom
+# can parametrize over (transform, input_pt, expected_pt) without having
+# to monkey-patch rng to force random branches.
+
+
+def flip_h_points(w: int, h: int):
+    """Horizontal mirror: x -> w - x."""
+    return lambda x, y: (w - x, y)
+
+
+def flip_v_points(w: int, h: int):
+    """Vertical mirror: y -> h - y."""
+    return lambda x, y: (x, h - y)
+
+
+def rotate_90_points(w: int, h: int):
+    """90° clockwise (PIL im.rotate(-90, expand=True)).
+
+    Original (w,h) — after rotate output is (h, w). Mapping:
+        (x, y) -> (h - y, x)
+    """
+    return lambda x, y: (h - y, x)
+
+
+def rotate_180_points(w: int, h: int):
+    """180° (PIL im.rotate(180, expand=True))."""
+    return lambda x, y: (w - x, h - y)
+
+
+def rotate_270_points(w: int, h: int):
+    """270° clockwise = 90° counter-clockwise (PIL im.rotate(90, expand=True))."""
+    return lambda x, y: (y, w - x)
+
+
+def crop_points(x0: int, y0: int):
+    """Crop offset — every point shifts by (-x0, -y0)."""
+    return lambda x, y: (x - x0, y - y0)
+
+
 # ---------- 几何 ----------
 
 def _apply_geometric(
@@ -100,27 +143,28 @@ def _apply_geometric(
     opts: AugmentOptions,
     rng: random.Random,
 ):
-    w, h = im.size
     if opts.flip_h and rng.random() < 0.5:
+        w, h = im.size
         im = ImageOps.mirror(im)
         if ann:
-            _map_shape_points(ann.shapes, lambda x, y: (w - x, y))
+            _map_shape_points(ann.shapes, flip_h_points(w, h))
     if opts.flip_v and rng.random() < 0.5:
+        w, h = im.size
         im = ImageOps.flip(im)
         if ann:
-            _map_shape_points(ann.shapes, lambda x, y: (x, h - y))
+            _map_shape_points(ann.shapes, flip_v_points(w, h))
     if opts.rotate90 and rng.random() < 0.5:
         angle = rng.choice([90, 180, 270])
         ow, oh = im.size
         if angle == 90:
             im = im.rotate(-90, expand=True)
-            fn = lambda x, y: (oh - y, x)
+            fn = rotate_90_points(ow, oh)
         elif angle == 180:
             im = im.rotate(180, expand=True)
-            fn = lambda x, y: (ow - x, oh - y)
+            fn = rotate_180_points(ow, oh)
         else:
             im = im.rotate(90, expand=True)
-            fn = lambda x, y: (y, ow - x)
+            fn = rotate_270_points(ow, oh)
         if ann:
             _map_shape_points(ann.shapes, fn)
     if opts.random_crop:
@@ -131,7 +175,7 @@ def _apply_geometric(
             y0 = rng.randint(0, oh - ch)
             im = im.crop((x0, y0, x0 + cw, y0 + ch))
             if ann:
-                _map_shape_points(ann.shapes, lambda x, y: (x - x0, y - y0))
+                _map_shape_points(ann.shapes, crop_points(x0, y0))
                 kept = []
                 for s in ann.shapes:
                     if any(0 <= p[0] <= cw and 0 <= p[1] <= ch for p in s.points):
