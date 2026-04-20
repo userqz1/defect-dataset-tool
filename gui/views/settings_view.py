@@ -31,7 +31,6 @@ from qfluentwidgets import (
 from core.thumbnail_cache import ThumbnailCache
 from core.user_settings import load_settings, save_settings
 from gui import i18n
-from gui.theme import T
 
 logger = logging.getLogger(__name__)
 

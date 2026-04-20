@@ -17,7 +17,7 @@ DatasetBrowserView.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QVBoxLayout
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon as FIF, PushButton, ToolButton
 
 from core.models import Dataset

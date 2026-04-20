@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     FluentIcon as FIF,
     IndeterminateProgressBar,
@@ -38,8 +37,7 @@ from gui.dialogs.op_dialogs import (
     ProgressDialog,
 )
 from gui.theme import T
-from gui.widgets.category_tree import CategoryTree
-from gui.widgets.chips import FilterChip, GhostButton
+from gui.widgets.chips import FilterChip
 from gui.widgets.thumbnail_grid import ThumbnailGrid
 from gui.workers.batch_worker import BatchWorker
 

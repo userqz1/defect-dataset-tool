@@ -149,19 +149,6 @@ QPushButton#filterChip:disabled {
     color: $TEXT_3;
 }
 
-QPushButton#ghostButton {
-    background-color: transparent;
-    border: 1px solid $BORDER;
-    border-radius: ${RADIUS}px;
-    padding: 5px 14px;
-    color: $TEXT_2;
-}
-QPushButton#ghostButton:hover {
-    background-color: $HOVER;
-    color: $ACCENT;
-    border-color: $ACCENT;
-}
-
 /* ============================================================
  * 4. Browser 左侧类别栏
  * ============================================================ */

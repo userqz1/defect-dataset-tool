@@ -13,12 +13,3 @@ class FilterChip(QPushButton):
         self.setObjectName("filterChip")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-
-class GhostButton(QPushButton):
-    """Subdued bordered button, styled by QPushButton#ghostButton in app.qss."""
-
-    def __init__(self, text: str) -> None:
-        super().__init__(text)
-        self.setObjectName("ghostButton")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)

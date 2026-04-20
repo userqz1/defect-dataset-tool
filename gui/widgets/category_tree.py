@@ -18,9 +18,8 @@ so a 100-class dataset still scrolls at 60fps.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 
-from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFrame,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
-from PyQt6.QtWidgets import QFrame, QLabel, QWidget
+from PyQt6.QtWidgets import QFrame, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel
 from qfluentwidgets.window.fluent_window import FluentTitleBar
 

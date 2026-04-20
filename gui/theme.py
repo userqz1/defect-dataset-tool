@@ -4,7 +4,7 @@
 
 1. **tokens (本文件)**            原子常量 + 主题集合 (Light / Dark)
 2. **semantic widgets**           qfluentwidgets 的 BodyLabel/CaptionLabel/...
-                                  + 本项目封装的 widgets (FilterChip, GhostButton, ...)
+                                  + 本项目封装的 widgets (FilterChip, ToolSidebar, ...)
 3. **gui/styles/app.qss**         一份 QSS, 用 $TOKEN 占位由 dataclass 注入
                                   只放 "无法靠组件 API 解决" 的容器/复合选择器
 
