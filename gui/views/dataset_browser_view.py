@@ -334,11 +334,20 @@ class DatasetBrowserView(QWidget):
         self._run_export(ds, opts)
 
     def _run_export(self, dataset, opts: dict) -> None:
-        """Execute export in a BatchWorker — Schema.writer-driven (v1.2 §5.5)."""
+        """Execute export as a Pipeline (v1.2 §4.3 + §5.5).
+
+        Runs ``Pipeline([SplitStep, ExportStep])`` so the Pipeline
+        abstraction has a real GUI consumer — previously the wizard
+        hand-rolled schema.writer, leaving core/pipeline/ unused.
+        Adding QualityStep/DedupStep here in v0.2 just means appending
+        to the steps list.
+        """
         if self._export_worker is not None and self._export_worker.isRunning():
             return
         from core.schema import get as get_schema
-        from core.splitter import SplitOptions, split_dataset
+        from core.pipeline import (
+            ExportStep, Pipeline, PipelineContext, SplitStep,
+        )
 
         schema = get_schema(opts["format"])
         if schema is None:
@@ -349,26 +358,26 @@ class DatasetBrowserView(QWidget):
             )
             return
 
-        split_opts = SplitOptions(
-            train=opts["train_ratio"],
-            val=opts["val_ratio"],
-            test=opts["test_ratio"],
-        )
-        split = split_dataset(dataset, split_opts)
         out_dir = opts["out_dir"]
-        copy_images = opts["copy_images"]
-
-        # Build options from the schema's declared options_class.
-        # Only pass copy_images if the dataclass supports it (ShareGPT does,
-        # some future schemas might not).
-        opt_fields = schema.options_class.__dataclass_fields__
-        kwargs: dict = {"out_dir": out_dir}
-        if "copy_images" in opt_fields:
-            kwargs["copy_images"] = copy_images
-        options = schema.options_class(**kwargs)
+        pipe = Pipeline(
+            name=f"{schema.display_name} 导出",
+            steps=[
+                SplitStep(
+                    train=opts["train_ratio"],
+                    val=opts["val_ratio"],
+                    test=opts["test_ratio"],
+                ),
+                ExportStep(
+                    schema_key=opts["format"],
+                    out_dir=out_dir,
+                    copy_images=opts["copy_images"],
+                ),
+            ],
+        )
+        ctx = PipelineContext(dataset=dataset)
 
         def task(progress_cb):
-            return schema.writer(split, options, progress_cb=progress_cb)
+            return pipe.run(ctx, progress_cb=progress_cb)
 
         from gui.dialogs.op_dialogs import ProgressDialog
         from gui.workers.batch_worker import BatchWorker
@@ -382,8 +391,19 @@ class DatasetBrowserView(QWidget):
             progress.set_progress(done, total, name)
 
         def on_done(result):
+            # ``result`` is PipelineResult now; drill in to the per-step
+            # ExportReport for the image count.
             progress.accept()
-            count = getattr(result, "written_images", 0)
+            if not result.ok:
+                msg = " | ".join(f"{name}: {err}" for name, err in result.errors)
+                InfoBar.error(
+                    "导出失败", msg or "未知错误",
+                    parent=self.window(), duration=6000,
+                    position=InfoBarPosition.TOP,
+                )
+                return
+            reports = result.context.export_reports
+            count = getattr(reports[0], "written_images", 0) if reports else 0
             InfoBar.success(
                 "导出完成",
                 f"{count} 张图片已导出到 {out_dir}",

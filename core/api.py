@@ -82,6 +82,32 @@ from .splitter import SplitOptions, SplitResult, split_dataset
 from .annotation_formats import parse_annotation
 from .annotation_writer import write_annotation
 
+
+# ---- Convenience: schema-driven export dispatcher ----
+# (Replaces the v0.1 ``core.exporter.registry.run_export`` helper now that
+# Schema is the single source of truth — review #4+#14.)
+def run_export(key: str, split, out_dir, copy_images: bool = True,
+               progress_cb=None, **extra_options):
+    """Run a Schema's writer in one call. Raises ValueError for unknown keys.
+
+    Thin wrapper: fetches Schema by key, builds its options_class with
+    out_dir + copy_images (if declared) + any extra kwargs a specific
+    schema supports (e.g. ``question`` for LLaVA/Swift/ShareGPT).
+    """
+    schema = get_schema(key)
+    if schema is None:
+        raise ValueError(f"未知导出格式: {key}")
+    opt_fields = schema.options_class.__dataclass_fields__
+    kwargs = {"out_dir": out_dir}
+    if "copy_images" in opt_fields:
+        kwargs["copy_images"] = copy_images
+    for name, value in extra_options.items():
+        if name in opt_fields:
+            kwargs[name] = value
+    options = schema.options_class(**kwargs)
+    return schema.writer(split, options, progress_cb=progress_cb)
+
+
 # ---- Pipeline (v1.2 §4.3 + §7, memory-level; YAML is v0.2) ----
 from .pipeline import (
     DedupStep,
@@ -118,6 +144,8 @@ __all__ = [
     "SplitOptions", "SplitResult", "split_dataset",
     # Annotation I/O
     "parse_annotation", "write_annotation",
+    # Export dispatcher
+    "run_export",
     # Pipeline
     "Pipeline", "PipelineContext", "PipelineResult", "Step",
     "DedupStep", "ExportStep", "IngestStep",

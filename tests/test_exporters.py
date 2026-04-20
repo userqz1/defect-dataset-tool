@@ -6,7 +6,8 @@ Each test:
   3. Runs the exporter
   4. Validates the output structure + parses key files
 
-Covers all 8 formats registered in ``core.exporter.registry.EXPORTERS``.
+Covers all 10 Schemas registered in ``core.schema`` after the v1.2
+registry unification (review #4+#14).
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from core.exporter.registry import EXPORTERS, run_export
+from core.api import all_schemas, run_export
 from core.models import Category, Dataset, ImageInfo
 from core.splitter import SplitOptions, split_dataset
 
@@ -97,10 +98,10 @@ def split(synthetic_dataset):
 # ---- Tests -----------------------------------------------------------------
 
 class TestRegistryComplete:
-    def test_all_8_formats_registered(self):
-        expected = {"YOLO", "COCO", "VOC", "CSV", "JSONL",
-                    "LLaVA", "ShareGPT", "Swift"}
-        assert set(EXPORTERS.keys()) == expected
+    def test_all_10_schemas_registered(self):
+        expected = {"YOLO", "COCO", "VOC", "ImageFolder", "MVTec",
+                    "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift"}
+        assert {s.key for s in all_schemas()} == expected
 
 
 class TestYolo:

@@ -13,17 +13,23 @@ Public API::
     every = all_schemas()                       # list[Schema]
     for_det = schemas_for_task(TaskType.DETECTION)
 
-v0.1 ships the six schemas called out in §14.3: YOLO / COCO / VOC /
-ImageFolder / MVTec / ShareGPT.
+Ten schemas registered as of the v1.2 unification (review #4+#14 retired
+the separate ``core.exporter.registry`` table). v0.1 §14.3 mainline set is
+YOLO / COCO / VOC / ImageFolder / MVTec / ShareGPT; CSV / JSONL / LLaVA /
+Swift come along for the ride because their writers already existed.
 """
 from __future__ import annotations
 
 from ..task_types import TaskType
 from .base import ComplianceReport, Schema, Slot, SlotKind, SlotStatus
 from .coco import COCO_SCHEMA
+from .csv import CSV_SCHEMA
 from .imagefolder import IMAGEFOLDER_SCHEMA
+from .jsonl import JSONL_SCHEMA
+from .llava import LLAVA_SCHEMA
 from .mvtec import MVTEC_SCHEMA
 from .sharegpt import SHAREGPT_SCHEMA
+from .swift import SWIFT_SCHEMA
 from .voc import VOC_SCHEMA
 from .yolo import YOLO_SCHEMA
 
@@ -52,15 +58,19 @@ def schemas_for_task(task_type: TaskType) -> list[Schema]:
 
 
 # ---------- built-in registrations ----------
-# Order matters only for all_schemas()/UI enumeration; keep CV mainline
-# (§1.2 "80% users") before VLM differentiation (§1.2 "20% users").
+# Order matters only for all_schemas()/UI enumeration: CV mainline first
+# (§1.2 "80% users"), generic tabular/flat middle, VLM specialties last.
 
 register(YOLO_SCHEMA)
 register(COCO_SCHEMA)
 register(VOC_SCHEMA)
 register(IMAGEFOLDER_SCHEMA)
 register(MVTEC_SCHEMA)
+register(CSV_SCHEMA)
+register(JSONL_SCHEMA)
 register(SHAREGPT_SCHEMA)
+register(LLAVA_SCHEMA)
+register(SWIFT_SCHEMA)
 
 
 __all__ = [
