@@ -755,6 +755,57 @@ class DatasetBrowserView(QWidget):
         self._browser_stack.setCurrentWidget(self._browser)
         self._rescan(force=True)
 
+    def _delete_issue_images(self, images: list) -> None:
+        """Batch-trash a set of images (from QualityReviewDialog)."""
+        if not images:
+            return
+        from core import fileops
+        from gui.workers.batch_runner import BatchRunner
+
+        def task(cb):
+            return fileops.delete_pairs(images, to_trash=True)
+
+        def handle(result):
+            n_ok = len(getattr(result, "succeeded", []))
+            InfoBar.success(
+                "问题图片已删除",
+                f"{n_ok} 张已移至回收站",
+                parent=self.window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            # Clear quality from AppState (images are gone) + rescan
+            self._state.set_quality_issues(None)
+            self._rescan(force=True)
+
+        BatchRunner(self, "删除问题图片").run(task=task, on_done=handle)
+
+    def _move_issue_images_to_bucket(self, images: list) -> None:
+        """Move issue images to a dedicated category, creating it if needed."""
+        if not images:
+            return
+        ds = self._state.dataset
+        if ds is None:
+            return
+        from core import fileops
+        from gui.workers.batch_runner import BatchRunner
+
+        target = "质量问题"
+        def task(cb):
+            return fileops.move_to_category(images, ds.root_path, target)
+
+        def handle(result):
+            n_ok = len(getattr(result, "succeeded", []))
+            InfoBar.success(
+                f"已移到 {target}",
+                f"{n_ok} 张图片和标注已归档到 {target} 类别",
+                parent=self.window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            self._state.set_quality_issues(None)
+            self._rescan(force=True)
+
+        BatchRunner(self, f"移动到 {target}").run(task=task, on_done=handle)
+
     def _on_add_to_split(self, bucket: str, images: list) -> None:
         """Right-click → "加入手动划分 → Train/Val/Test" handler (review #9).
 
@@ -867,21 +918,26 @@ class DatasetBrowserView(QWidget):
                                 parent=self.window(), duration=3000,
                                 position=InfoBarPosition.TOP)
                 return
-            from collections import Counter
-            kind_counts: Counter = Counter()
-            for issue in issues:
-                for k in issue.kinds:
-                    kind_counts[k] += 1
-            kind_names = {"blur": "模糊", "blank": "空白",
-                          "over": "过曝", "under": "欠曝", "corrupt": "损坏"}
-            parts = [f"{c} {kind_names.get(k, k)}"
-                     for k, c in kind_counts.most_common()]
-            InfoBar.warning(
-                f"发现 {len(issues)} 张问题图片",
-                " · ".join(parts) + " · 缩略图已标红角，可用 \"有问题\" 筛选",
-                parent=self.window(), duration=8000,
-                position=InfoBarPosition.TOP,
-            )
+            # Review #16: let the user act on the findings instead of
+            # just reading a summary. Dialog offers 3 paths.
+            from gui.dialogs.tool_dialogs import QualityReviewDialog
+            dlg = QualityReviewDialog(issues, parent=self.window())
+            if not dlg.exec():
+                return
+            action = dlg.chosen_action()
+            imgs = dlg.issue_images()
+            if action == QualityReviewDialog.ACTION_DELETE:
+                self._delete_issue_images(imgs)
+            elif action == QualityReviewDialog.ACTION_MOVE:
+                self._move_issue_images_to_bucket(imgs)
+            # ACTION_NONE → InfoBar.success with guidance
+            if action == QualityReviewDialog.ACTION_NONE:
+                InfoBar.info(
+                    "已标记问题图片",
+                    f"{len(issues)} 张已标红角,点 \"有问题\" 筛选查看",
+                    parent=self.window(), duration=5000,
+                    position=InfoBarPosition.TOP,
+                )
 
         BatchRunner(self, "质量检查").run(
             task=lambda cb: check_images(self._all_images(), opts,

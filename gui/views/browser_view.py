@@ -51,7 +51,8 @@ class FilterMode(str, Enum):
     ALL = "all"
     LABELED = "labeled"
     UNLABELED = "unlabeled"
-    ISSUES = "issues"      # only meaningful after a quality check
+    ISSUES = "issues"          # only meaningful after a quality check
+    DUPLICATES = "duplicates"  # only meaningful after dedup ran (review #15)
 
 
 class BrowserView(QWidget):
@@ -86,6 +87,9 @@ class BrowserView(QWidget):
         # can read them without re-running the check. BrowserView just
         # subscribes to quality_changed below.
         self._state.quality_changed.connect(self._on_quality_changed)
+        # Duplicates also come through AppState now (review #15) — needed
+        # for the "重复" filter chip to light up after a dedup run.
+        self._state.duplicates_changed.connect(self._on_duplicates_changed)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -150,6 +154,7 @@ class BrowserView(QWidget):
             (FilterMode.LABELED, self.tr("已标注")),
             (FilterMode.UNLABELED, self.tr("未标注")),
             (FilterMode.ISSUES, self.tr("有问题")),
+            (FilterMode.DUPLICATES, self.tr("重复")),
         ]:
             chip = FilterChip(label)
             chip.setProperty("filterKey", mode.value)
@@ -160,8 +165,9 @@ class BrowserView(QWidget):
             self._chips[mode] = chip
             if mode is FilterMode.ALL:
                 chip.setChecked(True)
-        # "有问题" only meaningful after a quality check ran
+        # "有问题" / "重复" only meaningful after their respective run
         self._chips[FilterMode.ISSUES].setEnabled(False)
+        self._chips[FilterMode.DUPLICATES].setEnabled(False)
 
         filter_bar.addStretch(1)
 
@@ -309,10 +315,14 @@ class BrowserView(QWidget):
         """
         self._current_category = ""
         self._page = 0
-        # Quality map is cleared by AppState when dataset changes; we just
-        # reset the "有问题" filter chip visually.
+        # Derived artifacts (quality / dedup) are cleared by AppState when
+        # dataset changes; we just reset the dependent chips visually.
         self._chips[FilterMode.ISSUES].setEnabled(bool(self._state.quality_issue_paths))
+        self._chips[FilterMode.DUPLICATES].setEnabled(bool(self._state.duplicate_groups))
         if self._filter_mode is FilterMode.ISSUES and not self._state.quality_issue_paths:
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
+        elif self._filter_mode is FilterMode.DUPLICATES and not self._state.duplicate_groups:
             self._filter_mode = FilterMode.ALL
             self._chips[FilterMode.ALL].setChecked(True)
         self.tree.load_dataset(dataset)
@@ -408,6 +418,12 @@ class BrowserView(QWidget):
         elif self._filter_mode is FilterMode.ISSUES:
             qmap = self._state.quality_issue_paths
             imgs = [i for i in imgs if str(i.path) in qmap]
+        elif self._filter_mode is FilterMode.DUPLICATES:
+            # Include every image that appears in any DuplicateGroup
+            # (review #15) — not just the "to delete" tail.
+            groups = self._state.duplicate_groups or []
+            dup_paths = {str(img.path) for g in groups for img in g.images}
+            imgs = [i for i in imgs if str(i.path) in dup_paths]
         if self._search_text:
             q = self._search_text.lower()
             imgs = [i for i in imgs if q in i.path.name.lower()]
@@ -472,6 +488,15 @@ class BrowserView(QWidget):
         has_issues = bool(issues)
         self._chips[FilterMode.ISSUES].setEnabled(has_issues)
         if not has_issues and self._filter_mode is FilterMode.ISSUES:
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
+        self._apply_filter_and_show()
+
+    def _on_duplicates_changed(self, groups) -> None:
+        """AppState.duplicates_changed handler — toggles 重复 chip."""
+        has_dupes = bool(groups)
+        self._chips[FilterMode.DUPLICATES].setEnabled(has_dupes)
+        if not has_dupes and self._filter_mode is FilterMode.DUPLICATES:
             self._filter_mode = FilterMode.ALL
             self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()

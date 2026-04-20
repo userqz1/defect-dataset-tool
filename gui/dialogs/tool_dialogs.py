@@ -113,6 +113,92 @@ class DedupResultDialog(MessageBoxBase):
         return self._groups
 
 
+# ── Quality Review (review #16) ────────────────────────────────
+
+class QualityReviewDialog(MessageBoxBase):
+    """Post-quality-check dialog offering batch follow-up actions.
+
+    Review #16: previously the user saw "25 张问题图片" in an InfoBar and
+    had to hunt them down through the "有问题" filter chip + manual delete.
+    This dialog closes the loop: shows the breakdown and lets the user
+    run one of three actions over all issue images in a single click.
+    """
+
+    # Action keys returned via ``chosen_action``
+    ACTION_NONE = "none"
+    ACTION_DELETE = "delete"
+    ACTION_MOVE = "move"
+
+    _KIND_NAMES = {
+        "blur": "模糊", "blank": "空白",
+        "over": "过曝", "under": "欠曝", "corrupt": "损坏",
+    }
+
+    def __init__(self, issues: list, parent=None) -> None:
+        super().__init__(parent=parent)
+        self._issues = list(issues)
+        self._action = self.ACTION_NONE
+
+        self.titleLabel = SubtitleLabel(
+            f"质量检查结果 — 共 {len(issues)} 张问题图片", self
+        )
+        self.viewLayout.addWidget(self.titleLabel)
+        self.widget.setMinimumWidth(480)
+
+        # Per-kind breakdown
+        from collections import Counter
+        kind_counts: Counter = Counter()
+        for issue in issues:
+            for k in issue.kinds:
+                kind_counts[k] += 1
+        if kind_counts:
+            parts = [f"{c} 张 {self._KIND_NAMES.get(k, k)}"
+                     for k, c in kind_counts.most_common()]
+            self.viewLayout.addWidget(CaptionLabel(" · ".join(parts)))
+
+        # Sample filename list (first 15)
+        self.viewLayout.addWidget(CaptionLabel("问题样本:"))
+        for issue in issues[:15]:
+            kinds_cn = "/".join(self._KIND_NAMES.get(k, k) for k in issue.kinds)
+            self.viewLayout.addWidget(
+                CaptionLabel(f"  {issue.image.path.name} — {kinds_cn}")
+            )
+        if len(issues) > 15:
+            self.viewLayout.addWidget(
+                CaptionLabel(f"  … 及其余 {len(issues) - 15} 张")
+            )
+
+        # Action row — three explicit buttons instead of yes/no. Users who
+        # just want to "see" pick 仅标记; the 删除/移类 paths close the loop.
+        from PyQt6.QtWidgets import QHBoxLayout as _QHBoxLayout
+        actions = _QHBoxLayout()
+        actions.setSpacing(T.GAP)
+        from qfluentwidgets import PushButton as _PB
+        mark_btn = _PB("仅标记(稍后处理)", self)
+        mark_btn.clicked.connect(lambda: self._choose(self.ACTION_NONE))
+        move_btn = _PB("移到「质量问题」类别", self)
+        move_btn.clicked.connect(lambda: self._choose(self.ACTION_MOVE))
+        del_btn = _PB("删除到回收站", self)
+        del_btn.clicked.connect(lambda: self._choose(self.ACTION_DELETE))
+        actions.addWidget(mark_btn)
+        actions.addWidget(move_btn)
+        actions.addWidget(del_btn)
+        self.viewLayout.addLayout(actions)
+
+        self.yesButton.hide()
+        self.cancelButton.setText("取消")
+
+    def _choose(self, action: str) -> None:
+        self._action = action
+        self.accept()
+
+    def chosen_action(self) -> str:
+        return self._action
+
+    def issue_images(self):
+        return [i.image for i in self._issues]
+
+
 # ── Stats ──────────────────────────────────────────────────────
 
 class StatsResultDialog(MessageBoxBase):
