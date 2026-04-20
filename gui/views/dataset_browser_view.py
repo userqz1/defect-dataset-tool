@@ -9,25 +9,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
-    CaptionLabel,
-    FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
-    PrimaryPushButton,
-    PushButton,
 )
 
 from gui.app_state import AppState
-from gui.theme import T
 from gui.views.browser_view import BrowserView
 from gui.views.detail_view import DetailView
 from gui.workers.thumbnail_worker import ThumbnailWorker
@@ -42,41 +34,17 @@ class DatasetBrowserView(QWidget):
         self._state = app_state
         self._scan_worker = None
         self._export_worker = None
+        self._catalog_user_open = True   # user-driven visibility of Catalog
 
-        root_lay = QVBoxLayout(self)
-        root_lay.setContentsMargins(0, 0, 0, 0)
-        root_lay.setSpacing(0)
-        # `lay` kept as local alias so the existing topbar block below
-        # (path + stats + open_btn) stays identical structurally.
-        lay = root_lay
+        # 3-column body — matches the design handoff's (NavRail 60 |
+        # ToolsPanel 248 | Viewer 1fr | Catalog 340). The 60px NavRail is
+        # provided by FluentWindow's NavigationInterface, so this widget
+        # only lays out the inner three columns.
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # -- Top bar: path + stats + open button --
-        topbar = QFrame()
-        topbar.setObjectName("detailTopBar")
-        topbar.setFixedHeight(44)
-        tb_lay = QHBoxLayout(topbar)
-        tb_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
-        tb_lay.setSpacing(T.GAP)
-
-        self._path_label = CaptionLabel("未选择目录")
-        tb_lay.addWidget(self._path_label, 1)
-
-        self._stats_label = CaptionLabel("")
-        tb_lay.addWidget(self._stats_label)
-
-        open_btn = PrimaryPushButton("选择目录")
-        open_btn.setIcon(FIF.FOLDER)
-        open_btn.setFixedWidth(120)
-        open_btn.clicked.connect(self._on_open_dir)
-        tb_lay.addWidget(open_btn)
-        self._open_btn = open_btn
-
-        lay.addWidget(topbar)
-
-        # -- Vertical ToolSidebar (replaces the old horizontal toolbar) --
-        # User feedback: the horizontal row crammed 6+ buttons into a
-        # single line and forced "处理" into a dropdown. Vertical layout
-        # gives every action its own first-class row.
+        # Column 1: Tools panel
         from gui.widgets.tool_sidebar import ToolSidebar
         self._tool_sidebar = ToolSidebar()
         self._tool_sidebar.refresh_requested.connect(self._on_refresh)
@@ -93,28 +61,32 @@ class DatasetBrowserView(QWidget):
         self._tool_sidebar.export_requested.connect(self._on_export)
         self._tool_sidebar.history_requested.connect(self._on_history)
         self._tool_sidebar.stats_requested.connect(self._on_stats)
+        root.addWidget(self._tool_sidebar)
 
-        # -- Browser + Detail stack --
+        # Column 2: Browser + Detail stack (the "viewer" region)
         self._browser_stack = QStackedWidget()
-        # BrowserView reads dataset/task_type via AppState — single truth.
         self._browser = BrowserView(app_state=self._state)
         self._detail = DetailView()
+        # DatasetBar moved INTO BrowserView per the design — the header
+        # now belongs to the viewer region, not the outer shell.
+        self._browser.open_clicked.connect(self._on_open_dir)
+        self._dataset_bar = self._browser.dataset_bar  # alias for stat updates
+        root.addWidget(self._browser_stack, 1)
 
-        # body = tool_sidebar + browser_stack (side by side)
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-        body.addWidget(self._tool_sidebar)
-        body.addWidget(self._browser_stack, 1)
-        lay.addLayout(body)
-
-        # ToolSidebar is meaningless in DetailView (single-image ops live in
-        # detail_view's own topbar); hide it on stack switch.
-        self._browser_stack.currentChanged.connect(
-            lambda idx: self._tool_sidebar.setVisible(
-                self._browser_stack.widget(idx) is self._browser
-            )
-        )
+        # Column 3: Catalog panel (distribution chart + class tree)
+        from gui.widgets.catalog_panel import CatalogPanel
+        self._catalog = CatalogPanel()
+        self._catalog.category_selected.connect(self._browser._on_category_selected)
+        self._catalog.rename_requested.connect(self._browser._do_rename_category)
+        self._catalog.merge_requested.connect(self._browser._do_merge_categories)
+        self._catalog.split_requested.connect(self._browser._do_split_category)
+        # Close × in the catalog header + the DatasetBar catalog toggle
+        # both drive visibility so the panel can close to free horizontal
+        # room on narrower windows (design handoff §Interactions).
+        self._catalog.close_requested.connect(lambda: self._set_catalog_open(False))
+        self._dataset_bar.catalog_toggled.connect(self._set_catalog_open)
+        self._browser.set_catalog_tree(self._catalog.tree)
+        root.addWidget(self._catalog)
 
         self._thumb = ThumbnailWorker(size=170, parent=self)
         self._thumb.start()
@@ -131,14 +103,20 @@ class DatasetBrowserView(QWidget):
         self._detail.back_requested.connect(
             lambda: self._browser_stack.setCurrentWidget(self._browser)
         )
+        # Tools + Catalog only make sense when the grid is active; hide
+        # them when drilling into DetailView so the image viewer has the
+        # full middle width.
+        self._browser_stack.currentChanged.connect(
+            lambda idx: self._set_side_panels_visible(
+                self._browser_stack.widget(idx) is self._browser
+            )
+        )
         # In-detail "改分类" (review #21) — DetailView emits, outer view
         # performs fileops.move_to_category and triggers force rescan.
         self._detail.change_category_requested.connect(self._on_change_category)
 
         self._browser_stack.addWidget(self._browser)
         self._browser_stack.addWidget(self._detail)
-        # Note: _browser_stack is already placed inside `body` above
-        # alongside _tool_sidebar; no second lay.addWidget here.
 
         # Re-scan when browser reports file-system changes (delete / move /
         # category ops). force=True so fingerprint-based cache-hit doesn't
@@ -154,12 +132,36 @@ class DatasetBrowserView(QWidget):
 
         # Listen to AppState for dataset changes from other sources
         self._state.dataset_changed.connect(self._on_dataset_changed)
+        # Keep DatasetBar's "Flagged" stat in sync as quality checks finish.
+        self._state.quality_changed.connect(
+            lambda issues: self._dataset_bar.set_flagged_count(
+                len(issues or [])
+            )
+        )
 
     # -- Public API --
 
     def open_directory(self, root: Path) -> None:
         """Programmatic entry — called by MainWindow after welcome page action."""
         self._scan_dir(root)
+
+    def _set_side_panels_visible(self, visible: bool) -> None:
+        """Show/hide Tools + Catalog columns with DetailView stack switch."""
+        self._tool_sidebar.setVisible(visible)
+        # Respect the user's explicit catalog preference — don't show it
+        # again automatically when coming back from DetailView if the user
+        # had closed it manually.
+        self._catalog.setVisible(visible and self._catalog_user_open)
+
+    def _set_catalog_open(self, open_: bool) -> None:
+        """Toggle catalog panel visibility + keep DatasetBar's btn synced."""
+        self._catalog_user_open = open_
+        self._catalog.setVisible(open_)
+        # Reflect state on the DatasetBar's toggle button without re-emitting
+        btn = self._dataset_bar._catalog_btn
+        btn.blockSignals(True)
+        btn.setChecked(open_)
+        btn.blockSignals(False)
 
     def cleanup(self) -> None:
         """Stop workers. Called from MainWindow.closeEvent."""
@@ -208,9 +210,7 @@ class DatasetBrowserView(QWidget):
         """
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
-        self._path_label.setText(str(root))
-        self._open_btn.setEnabled(False)
-        self._stats_label.setText("扫描中…")
+        self._dataset_bar.set_open_enabled(False)
 
         from gui.dialogs.op_dialogs import ProgressDialog
         # Cancelable: picking the wrong directory (C:\Windows, a NAS root…)
@@ -241,7 +241,7 @@ class DatasetBrowserView(QWidget):
         def on_done(result):
             self._scan_worker = None
             progress.accept()
-            self._open_btn.setEnabled(True)
+            self._dataset_bar.set_open_enabled(True)
 
             from gui.workers.scan_worker import ScanResult
             if isinstance(result, ScanResult):
@@ -269,14 +269,15 @@ class DatasetBrowserView(QWidget):
         def on_fail(msg):
             self._scan_worker = None
             progress.accept()
-            self._open_btn.setEnabled(True)
-            self._stats_label.setText(f"失败: {msg}")
+            self._dataset_bar.set_open_enabled(True)
+            InfoBar.error("扫描失败", msg,
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
 
         def on_canceled():
             self._scan_worker = None
             progress.accept()
-            self._open_btn.setEnabled(True)
-            self._stats_label.setText("已取消扫描")
+            self._dataset_bar.set_open_enabled(True)
             InfoBar.info("", "扫描已取消",
                          parent=self.window(), duration=3000,
                          position=InfoBarPosition.TOP)
@@ -902,20 +903,16 @@ class DatasetBrowserView(QWidget):
         """Single rendering path for dataset changes.
 
         AppState is the truth; this handler is the one place that
-        reacts to changes and rebuilds the browser + topbar. Having it
-        the only write path removes the stale-guard hack that used to
-        read BrowserView._dataset (now deleted).
+        reacts to changes and rebuilds dataset bar + catalog + browser.
         """
         if ds is None:
-            self._path_label.setText("未选择目录")
-            self._stats_label.setText("")
+            self._dataset_bar.clear()
+            self._catalog.clear()
             self._set_tools_enabled(False)
             return
-        self._path_label.setText(str(ds.root_path))
-        self._stats_label.setText(
-            f"{ds.total_images} 图片 · {len(ds.categories)} 类"
-        )
-        # Tools only useful when we actually have images
+        flagged = len(self._state.quality_issues or [])
+        self._dataset_bar.set_dataset(ds, flagged_count=flagged)
+        self._catalog.set_dataset(ds)
         self._set_tools_enabled(ds.total_images > 0)
         self._browser.load_dataset(ds)
 

@@ -31,6 +31,7 @@ from qfluentwidgets import (
 from core import fileops, index_cache
 from core.exporter.subset import export_subset
 from core.models import Dataset, ImageInfo
+from gui import i18n
 from gui.dialogs.op_dialogs import (
     FailureDetailDialog,
     MoveToCategoryDialog,
@@ -62,6 +63,9 @@ class BrowserView(QWidget):
     add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
+    # Bubbled from DatasetBar's 选择目录 button — DatasetBrowserView owns
+    # the actual file dialog + scan plumbing.
+    open_clicked = pyqtSignal()
 
     def __init__(self, app_state) -> None:
         """BrowserView requires an AppState — construction with None used to
@@ -91,43 +95,44 @@ class BrowserView(QWidget):
         # for the "重复" filter chip to light up after a dedup run.
         self._state.duplicates_changed.connect(self._on_duplicates_changed)
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        # Single-column layout — viewer region per the design handoff.
+        # The 4-column body (NavRail | Tools | Viewer | Catalog) lives in
+        # DatasetBrowserView; BrowserView is just the viewer.
+        right_layout = QVBoxLayout(self)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
 
-        # 左侧类别树
-        left = QFrame()
-        left.setObjectName("categorySidebar")
-        left.setFixedWidth(T.SIDEBAR_WIDTH)
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
+        # DatasetBar sits at the top of the viewer, full width.
+        from gui.widgets.dataset_bar import DatasetBar
+        self.dataset_bar = DatasetBar()
+        self.dataset_bar.open_clicked.connect(self.open_clicked.emit)
+        right_layout.addWidget(self.dataset_bar)
 
-        header = CaptionLabel("  " + self.tr("类别"))
-        header.setObjectName("sectionHeader")
-        header.setFixedHeight(44)
-        left_layout.addWidget(header)
+        # CategoryTree reference is set from outside by DatasetBrowserView
+        # (it lives in CatalogPanel now). _do_rename / merge / split still
+        # need to know the category list, so we read it from this handle.
+        self._catalog_tree: "CategoryTree | None" = None
 
-        self.tree = CategoryTree()
-        self.tree.category_selected.connect(self._on_category_selected)
-        self.tree.rename_requested.connect(self._do_rename_category)
-        self.tree.merge_requested.connect(self._do_merge_categories)
-        self.tree.split_requested.connect(self._do_split_category)
-        left_layout.addWidget(self.tree)
-
-        root.addWidget(left)
-
-        # 右侧主区
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.GAP_LG)
-        right_layout.setSpacing(T.PAD)
+        # -- Viewer body (filter bar + grid + paging) has its own padding --
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(T.PAD_XL, T.PAD, T.PAD_XL, T.GAP_LG)
+        body_lay.setSpacing(T.PAD)
+        right_layout.addWidget(body, 1)
+        right_layout = body_lay  # rest of the init uses this name
 
         # 就绪检查条（替代独立概览页 — 核心设计：输出是已知格子，缺什么补什么）
-        self._readiness_bar = QHBoxLayout()
+        # Wrap in a fixed-height container — otherwise, when the grid
+        # hides on an empty filter result, QVBoxLayout redistributes the
+        # freed vertical space into these pill labels (Preferred policy),
+        # rendering them as giant beige rectangles. 36px keeps the row tight.
+        self._readiness_row = QFrame()
+        self._readiness_row.setFixedHeight(36)
+        self._readiness_bar = QHBoxLayout(self._readiness_row)
+        self._readiness_bar.setContentsMargins(0, 0, 0, 0)
         self._readiness_bar.setSpacing(T.GAP_LG)
         self._readiness_items: list[QWidget] = []
-        right_layout.addLayout(self._readiness_bar)
+        right_layout.addWidget(self._readiness_row)
 
         # 筛选栏
         filter_bar = QHBoxLayout()
@@ -135,8 +140,10 @@ class BrowserView(QWidget):
 
         from PyQt6.QtCore import QTimer
         self.search = LineEdit()
-        self.search.setPlaceholderText(self.tr("搜索文件名…"))
-        self.search.setFixedWidth(280)
+        self.search.setPlaceholderText(i18n.t("filter.search_placeholder"))
+        # Narrower default so filter chips keep their natural width when
+        # the viewer is below ~1100px — previously 280 ate the chip budget.
+        self.search.setFixedWidth(220)
         self.search.setFixedHeight(32)
         # 300ms debounce — 不在每次按键时都重新过滤
         self._search_timer = QTimer(self)
@@ -146,28 +153,49 @@ class BrowserView(QWidget):
         self.search.textChanged.connect(lambda _: self._search_timer.start())
         filter_bar.addWidget(self.search)
 
+        # Segmented chip group (Claude-web redesign): chips live inside a
+        # single bg-subtle container rather than each carrying its own border.
+        # Active chip gets a white bg + subtle shadow — much quieter baseline
+        # with a single strong selection signal.
         self.chip_group = QButtonGroup(self)
         self.chip_group.setExclusive(True)
         self._chips: dict[FilterMode, FilterChip] = {}
-        for mode, label in [
-            (FilterMode.ALL, self.tr("全部")),
-            (FilterMode.LABELED, self.tr("已标注")),
-            (FilterMode.UNLABELED, self.tr("未标注")),
-            (FilterMode.ISSUES, self.tr("有问题")),
-            (FilterMode.DUPLICATES, self.tr("重复")),
-        ]:
-            chip = FilterChip(label)
+
+        chip_container = QFrame()
+        chip_container.setObjectName("filterChipGroup")
+        # Minimum size policy horizontally — Qt can't shrink below
+        # sizeHint, so the "全部/已标注/未标注/有问题/重复" row stays readable
+        # even when the viewer tightens. Previously chips clipped to
+        # "标/标/问" at narrow widths (Preferred default let Qt squeeze them).
+        from PyQt6.QtWidgets import QSizePolicy
+        chip_container.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed,
+        )
+        chip_lay = QHBoxLayout(chip_container)
+        chip_lay.setContentsMargins(2, 2, 2, 2)
+        chip_lay.setSpacing(1)
+
+        self._chip_i18n = {
+            FilterMode.ALL: "filter.all",
+            FilterMode.LABELED: "filter.labeled",
+            FilterMode.UNLABELED: "filter.unlabeled",
+            FilterMode.ISSUES: "filter.issues",
+            FilterMode.DUPLICATES: "filter.duplicates",
+        }
+        for mode, key in self._chip_i18n.items():
+            chip = FilterChip(i18n.t(key))
             chip.setProperty("filterKey", mode.value)
             chip.clicked.connect(
                 lambda _c=False, m=mode: self._on_filter_changed(m))
             self.chip_group.addButton(chip)
-            filter_bar.addWidget(chip)
+            chip_lay.addWidget(chip)
             self._chips[mode] = chip
             if mode is FilterMode.ALL:
                 chip.setChecked(True)
         # "有问题" / "重复" only meaningful after their respective run
         self._chips[FilterMode.ISSUES].setEnabled(False)
         self._chips[FilterMode.DUPLICATES].setEnabled(False)
+        filter_bar.addWidget(chip_container)
 
         filter_bar.addStretch(1)
 
@@ -177,31 +205,30 @@ class BrowserView(QWidget):
         # "多选" toggle — when on, a single click on a thumbnail toggles
         # selection (no Ctrl needed), ideal for touchpad / quick bulk picking.
         # Off = default desktop behavior (单选 + Ctrl/Shift 辅助).
-        self._multi_btn = PushButton(self.tr("多选"))
+        # NOTE: no setFixedWidth on these — English labels ("Select all",
+        # "Multi", "Delete") are 7–11 chars and a fixed 80-90px clips them.
+        # Letting the buttons size to content + QSS padding works for both zh/en.
+        self._multi_btn = PushButton(i18n.t("filter.multi"))
         self._multi_btn.setCheckable(True)
-        self._multi_btn.setFixedWidth(80)
         self._multi_btn.setFixedHeight(32)
         self._multi_btn.toggled.connect(self._on_multi_toggle)
         filter_bar.addWidget(self._multi_btn)
 
-        # "全选 / 取消全选" toggle — current page scope; for cross-page bulk
-        # use the filter chips first, then 全选.
-        self._select_all_btn = PushButton(self.tr("全选"))
-        self._select_all_btn.setFixedWidth(80)
+        self._select_all_btn = PushButton(i18n.t("filter.select_all"))
         self._select_all_btn.setFixedHeight(32)
         self._select_all_btn.setEnabled(False)
         self._select_all_btn.clicked.connect(self._on_select_all_toggle)
         filter_bar.addWidget(self._select_all_btn)
 
-        # Visible delete entry — right-click menu alone was too hidden.
-        # Enabled only when at least one thumbnail is selected.
-        self._delete_btn = PushButton(self.tr("删除"))
+        self._delete_btn = PushButton(i18n.t("filter.delete"))
         self._delete_btn.setIcon(FIF.DELETE)
-        self._delete_btn.setFixedWidth(80)
         self._delete_btn.setFixedHeight(32)
         self._delete_btn.setEnabled(False)
         self._delete_btn.clicked.connect(self._on_delete_clicked)
         filter_bar.addWidget(self._delete_btn)
+
+        # Re-text on language switch
+        i18n.bus.language_changed.connect(self._retranslate)
 
         right_layout.addLayout(filter_bar)
 
@@ -214,7 +241,24 @@ class BrowserView(QWidget):
         self.grid.customContextMenuRequested.connect(self._on_context_menu)
         self._worker: BatchWorker | None = None
         self._progress: ProgressDialog | None = None
-        right_layout.addWidget(self.grid, 1)
+
+        # Wrap grid + empty_hint in a QStackedWidget so swapping between
+        # the two doesn't change the overall layout shape. Previously the
+        # VBox redistributed freed space into readiness/filter chips when
+        # grid hid on empty filter, rendering them as giant rectangles.
+        from PyQt6.QtWidgets import QStackedWidget
+        self._grid_stack = QStackedWidget()
+        self._grid_stack.addWidget(self.grid)          # index 0
+        self._empty_hint = CaptionLabel(
+            "未发现匹配的图片\n\n"
+            "请确认数据集目录结构：\n"
+            "  <根目录>/<类别>/images/*.jpg\n"
+            "  <根目录>/<类别>/labels/*.json\n\n"
+            "或尝试调整筛选条件"
+        )
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._grid_stack.addWidget(self._empty_hint)   # index 1
+        right_layout.addWidget(self._grid_stack, 1)
 
         # 分页栏
         from qfluentwidgets import SpinBox
@@ -241,18 +285,6 @@ class BrowserView(QWidget):
         pager.addWidget(self.next_btn)
         right_layout.addLayout(pager)
 
-        # 空状态提示（覆盖在网格上）
-        self._empty_hint = CaptionLabel(
-            "未发现匹配的图片\n\n"
-            "请确认数据集目录结构：\n"
-            "  <根目录>/<类别>/images/*.jpg\n"
-            "  <根目录>/<类别>/labels/*.json\n\n"
-            "或尝试调整筛选条件"
-        )
-        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_hint.hide()
-        right_layout.addWidget(self._empty_hint)
-
         # 缩略图加载进度条
         self._thumb_bar = IndeterminateProgressBar(self, start=False)
         self._thumb_bar.setFixedHeight(3)
@@ -260,7 +292,32 @@ class BrowserView(QWidget):
         self._thumb_pending = 0
         right_layout.addWidget(self._thumb_bar)
 
-        root.addWidget(right, 1)
+    def _retranslate(self, _lang: str) -> None:
+        """Refresh i18n-driven widget text after language switch."""
+        self.search.setPlaceholderText(i18n.t("filter.search_placeholder"))
+        for mode, chip in self._chips.items():
+            chip.setText(i18n.t(self._chip_i18n[mode]))
+        self._multi_btn.setText(i18n.t("filter.multi"))
+        self._on_selection_changed(self.grid.selected_images())
+        self._delete_btn.setText(i18n.t("filter.delete"))
+
+    def set_catalog_tree(self, tree) -> None:
+        """Give BrowserView a handle to the CategoryTree living in CatalogPanel.
+
+        Rename / merge / split dialogs still need the category name list
+        and the tree is the authoritative source. Called once from
+        DatasetBrowserView after both widgets are constructed.
+        """
+        self._catalog_tree = tree
+
+    def _category_names(self) -> list[str]:
+        """List of categories for dialog population. Prefers the live tree
+        (keeps any user sort applied) but falls back to AppState if the
+        tree handle hasn't been installed yet."""
+        if self._catalog_tree is not None:
+            return self._catalog_tree.get_category_names()
+        ds = self._state.dataset
+        return [c.name for c in ds.categories] if ds else []
 
     # ---------- 状态持久化 ----------
 
@@ -291,12 +348,13 @@ class BrowserView(QWidget):
             if btn.property("filterKey") == self._filter_mode.value:
                 btn.setChecked(True)
                 break
-        # Select category in tree
-        if self._current_category:
-            for i in range(self.tree.count()):
-                item = self.tree.item(i)
+        # Select category in the CatalogPanel tree (owned externally now)
+        if self._current_category and self._catalog_tree is not None:
+            tree = self._catalog_tree
+            for i in range(tree.count()):
+                item = tree.item(i)
                 if item.data(Qt.ItemDataRole.UserRole) == self._current_category:
-                    self.tree.setCurrentRow(i)
+                    tree.setCurrentRow(i)
                     break
         self._apply_filter_and_show()
         # Restore page after filter
@@ -325,7 +383,8 @@ class BrowserView(QWidget):
         elif self._filter_mode is FilterMode.DUPLICATES and not self._state.duplicate_groups:
             self._filter_mode = FilterMode.ALL
             self._chips[FilterMode.ALL].setChecked(True)
-        self.tree.load_dataset(dataset)
+        # Tree + distribution now live in CatalogPanel (owned by the outer
+        # DatasetBrowserView). We only drive the grid-side state here.
         self._update_readiness(dataset)
         self._apply_filter_and_show()
 
@@ -446,13 +505,8 @@ class BrowserView(QWidget):
         self.grid.set_images(page_imgs,
                              quality_map=self._state.quality_issue_paths)
 
-        # 空状态切换
-        if total == 0:
-            self._empty_hint.show()
-            self.grid.hide()
-        else:
-            self._empty_hint.hide()
-            self.grid.show()
+        # 空状态切换 — stack swap keeps the outer layout stable
+        self._grid_stack.setCurrentIndex(1 if total == 0 else 0)
 
         # 更新分页控件
         self.page_spin.blockSignals(True)
@@ -465,15 +519,12 @@ class BrowserView(QWidget):
         self.next_btn.setEnabled(self._page < page_count - 1)
 
     def _on_category_selected(self, category: str) -> None:
-        # Default: reset filter on category switch — otherwise a user who
-        # clicked "未标注" sees empty pages on fully-annotated categories
-        # without realizing the filter is still active. 直觉:类别切换 = 看这类全部。
-        # Settings → "切换类别保留筛选" (review #12) opts into the opposite
-        # behavior for the "过滤未标注 → 遍历类别逐个标" workflow.
+        # Reset filter to "全部" on category switch — users who click a
+        # category while a filter is active would otherwise see empty pages
+        # on fully-annotated categories and not realize the filter is still
+        # engaged. 直觉:类别切换 = 看这类全部。
         self._current_category = category
-        from core.user_settings import load_settings
-        keep = load_settings().keep_filter_on_category_switch
-        if not keep and self._filter_mode is not FilterMode.ALL:
+        if self._filter_mode is not FilterMode.ALL:
             self._filter_mode = FilterMode.ALL
             self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()
@@ -521,9 +572,9 @@ class BrowserView(QWidget):
         # Toggle select-all button label + enabled state
         self._select_all_btn.setEnabled(total_on_page > 0)
         if total_on_page > 0 and n >= total_on_page:
-            self._select_all_btn.setText(self.tr("取消全选"))
+            self._select_all_btn.setText(i18n.t("filter.unselect_all"))
         else:
-            self._select_all_btn.setText(self.tr("全选"))
+            self._select_all_btn.setText(i18n.t("filter.select_all"))
 
     def _on_select_all_toggle(self) -> None:
         """Toggle between select-all-on-current-page and clear-selection."""
@@ -663,7 +714,7 @@ class BrowserView(QWidget):
         if not self._state.dataset:
             return
         from gui.dialogs.category_dialogs import RenameCategoryDialog
-        cats = self.tree.get_category_names()
+        cats = self._category_names()
         dlg = RenameCategoryDialog(name, cats, parent=self.window())
         if not dlg.exec():
             return
@@ -685,7 +736,7 @@ class BrowserView(QWidget):
         if not self._state.dataset:
             return
         from gui.dialogs.category_dialogs import MergeCategoriesDialog
-        cats = self.tree.get_category_names()
+        cats = self._category_names()
         dlg = MergeCategoriesDialog(cats, current=name, parent=self.window())
         if not dlg.exec():
             return
@@ -728,7 +779,7 @@ class BrowserView(QWidget):
             return
 
         from gui.dialogs.category_dialogs import SplitCategoryDialog
-        cats = self.tree.get_category_names()
+        cats = self._category_names()
         preselected = self.get_selected_images()
         dlg = SplitCategoryDialog(
             name, cat_images, cats,

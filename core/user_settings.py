@@ -11,10 +11,6 @@ SETTINGS_PATH = Path.home() / ".dataforge" / "settings.json"
 @dataclass
 class UserSettings:
     theme: str = "light"
-    # When True, switching categories preserves the active filter chip
-    # (e.g. "未标注"); when False (default), filter resets to "全部".
-    # Review #12 — workflow A "过滤未标注 → 遍历每个类别逐个标" wants this on.
-    keep_filter_on_category_switch: bool = False
 
 
 def load_settings() -> UserSettings:
@@ -24,12 +20,7 @@ def load_settings() -> UserSettings:
         return UserSettings()
     if not isinstance(raw, dict):
         return UserSettings()
-    return UserSettings(
-        theme=raw.get("theme", "light"),
-        keep_filter_on_category_switch=raw.get(
-            "keep_filter_on_category_switch", False
-        ),
-    )
+    return UserSettings(theme=raw.get("theme", "light"))
 
 
 def save_settings(settings: UserSettings) -> None:

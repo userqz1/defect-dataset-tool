@@ -88,6 +88,13 @@ class MainWindow(FluentWindow):
         _install_nav_expand_patch()
         super().__init__()
 
+        # Install brand title bar BEFORE theme/qss so stylesheet applies
+        # to it on first paint. Design §1: brand D chip + serif name +
+        # breadcrumb path.
+        from gui.widgets.brand_title_bar import BrandTitleBar
+        self._brand_bar = BrandTitleBar(self)
+        self.setTitleBar(self._brand_bar)
+
         from core.user_settings import load_settings
         s = load_settings()
         if s.theme == "dark":
@@ -99,11 +106,32 @@ class MainWindow(FluentWindow):
         self.setStyleSheet(load_qss())
 
         self.setWindowTitle("数据工坊")
-        self.resize(1280, 800)
+        # Screen-aware initial size — target 1360×820 but cap at 90% of the
+        # available screen so small laptops don't get a too-big window
+        # (or a window that overflows the taskbar). Minimum width 1080
+        # keeps the 3-column body (248 tools + 560 viewer + 272 catalog min)
+        # from horizontal-overflowing; users can close the catalog for
+        # narrower screens.
+        from PyQt6.QtGui import QGuiApplication
+        geom = QGuiApplication.primaryScreen().availableGeometry()
+        w = min(1360, int(geom.width() * 0.9))
+        h = min(820, int(geom.height() * 0.9))
+        self.resize(w, h)
+        self.setMinimumSize(1080, 680)
+        # Center on the primary screen — without this, Qt leaves the window
+        # at whatever the window manager picked (usually top-left on Windows),
+        # which felt wrong on first launch.
+        self.move(
+            geom.x() + (geom.width() - w) // 2,
+            geom.y() + (geom.height() - h) // 2,
+        )
 
         # Shared state
         self._state = AppState(parent=self)
-        self._nav_collapse_threshold = 1100
+        # Title-bar breadcrumbs follow the active dataset.
+        self._state.dataset_changed.connect(
+            lambda ds: self._brand_bar.set_path(ds.root_path if ds else None)
+        )
 
         try:
             self.navigationInterface.panel.returnButton.hide()
@@ -113,6 +141,21 @@ class MainWindow(FluentWindow):
 
         self._build_views()
         self.switchTo(self.home)
+
+        # Design §NavRail is a 60px icon-only rail — *never* auto-expand.
+        # qfluentwidgets otherwise re-expands on menu-button click, nav-item
+        # click (selectable), or hover. We lock it in three ways:
+        #   1. Collapse now, so the first paint is narrow.
+        #   2. Hide the ☰ menu button so users can't toggle it manually.
+        #   3. Monkey-patch panel.expand() to a no-op so nothing else can
+        #      sneak an expand past us (e.g. internal item-click handler).
+        try:
+            panel = self.navigationInterface.panel
+            panel.collapse()
+            panel.menuButton.hide()
+            panel.expand = lambda *a, **kw: None  # type: ignore[assignment]
+        except Exception:
+            logger.debug("nav rail lockdown failed", exc_info=True)
 
     # ---------- Build ----------
 
@@ -132,21 +175,41 @@ class MainWindow(FluentWindow):
         # Browser — top-level dataset browser
         self.browser = DatasetBrowserView(self._state)
 
-        # Settings
-        self.settings_view = SettingsView()
+        # Settings lives as a floating popup (design handoff §Tweaks) —
+        # NOT a routable subInterface. It's parented to MainWindow so popup
+        # geometry + Qt.Popup click-outside handling work.
+        self.settings_view = SettingsView(self)
         self.settings_view.theme_changed.connect(self._on_theme_changed)
+        # The catalog toggle from the popup drives the DatasetBrowserView's
+        # own catalog-visibility signal — DatasetBrowserView already handles
+        # the in-window visibility state.
+        self.settings_view.catalog_toggled.connect(
+            lambda on: self.browser._set_catalog_open(on)
+        )
 
-        # Nav — TOP
-        self.addSubInterface(self.home, FIF.HOME_FILL, "首页",
+        # Nav — TOP (labels via gui.i18n.t — live-updated on language switch)
+        from gui import i18n
+        self.addSubInterface(self.home, FIF.HOME_FILL, i18n.t("nav.home"),
                              position=NavigationItemPosition.TOP)
-        self.addSubInterface(self.organize, FIF.FOLDER_ADD, "整理",
+        self.addSubInterface(self.organize, FIF.FOLDER_ADD, i18n.t("nav.organize"),
                              position=NavigationItemPosition.TOP)
-        self.addSubInterface(self.browser, FIF.PHOTO, "浏览器",
+        self.addSubInterface(self.browser, FIF.PHOTO, i18n.t("nav.browser"),
                              position=NavigationItemPosition.TOP)
 
-        # Nav — BOTTOM
-        self.addSubInterface(self.settings_view, FIF.SETTING, "设置",
-                             position=NavigationItemPosition.BOTTOM)
+        # Nav — BOTTOM: gear button opens the floating Tweaks panel.
+        # selectable=False keeps it an action (no route highlight on click).
+        self.navigationInterface.addItem(
+            routeKey="settings-trigger",
+            icon=FIF.SETTING,
+            text=i18n.t("nav.settings"),
+            onClick=self._open_settings_popup,
+            selectable=False,
+            position=NavigationItemPosition.BOTTOM,
+        )
+        # Re-label nav items when the language flips. qfluentwidgets stores
+        # the display text inside each NavigationTreeWidget item; reach into
+        # the widget map to update in place.
+        i18n.bus.language_changed.connect(self._relabel_nav)
 
     # ---------- Dataset operations ----------
 
@@ -176,6 +239,50 @@ class MainWindow(FluentWindow):
         self.browser.open_directory(root)
         self.switchTo(self.browser)
 
+    # ---------- i18n ----------
+
+    def _relabel_nav(self, _lang: str) -> None:
+        """Re-apply translated labels on the nav panel.
+
+        qfluentwidgets' NavigationPanel stores ``{routeKey: NavigationItem}``
+        in ``panel.items``; each NavigationItem wraps the actual button
+        widget under ``.widget``. The button has a ``setText`` method.
+        """
+        from gui import i18n
+        panel = self.navigationInterface.panel
+        mapping = {
+            self.home.objectName(): i18n.t("nav.home"),
+            self.organize.objectName(): i18n.t("nav.organize"),
+            self.browser.objectName(): i18n.t("nav.browser"),
+            "settings-trigger": i18n.t("nav.settings"),
+        }
+        for key, label in mapping.items():
+            item = panel.items.get(key)
+            w = getattr(item, "widget", None) if item else None
+            if w is not None and hasattr(w, "setText"):
+                try:
+                    w.setText(label)
+                except Exception:
+                    logger.debug("relabel failed for %s", key, exc_info=True)
+
+    # ---------- Settings popup ----------
+
+    def _open_settings_popup(self) -> None:
+        """Show the settings popup at window-bottom-left, right of the rail.
+
+        Design §Tweaks positions the panel at ``left: 68px; bottom: 16px``
+        of the viewport. We follow that literally using the main window's
+        own geometry so it doesn't matter whether the nav panel is using
+        its icon-only or (long-deprecated) expanded width.
+        """
+        self.settings_view.adjustSize()
+        mw_tl_global = self.mapToGlobal(self.rect().topLeft())
+        x = mw_tl_global.x() + 68
+        y = mw_tl_global.y() + self.height() - self.settings_view.height() - 16
+        self.settings_view.move(x, y)
+        self.settings_view.show()
+        self.settings_view.raise_()
+
     # ---------- Navigation ----------
 
     def switchTo(self, interface):
@@ -185,15 +292,15 @@ class MainWindow(FluentWindow):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        # Force collapse on every resize — qfluentwidgets' internal logic
+        # otherwise re-expands the panel at wider widths. Design §NavRail
+        # mandates a constant 60px icon-only rail.
         try:
             panel = self.navigationInterface.panel
-            if self.width() < self._nav_collapse_threshold and not panel.isCollapsed():
+            if not panel.isCollapsed():
                 panel.collapse()
-            elif self.width() >= self._nav_collapse_threshold and panel.isCollapsed():
-                panel.expand(useAni=False)
         except Exception:
-            # qfluentwidgets internal layout — best-effort tweak.
-            logger.debug("nav resize patch failed", exc_info=True)
+            logger.debug("nav resize collapse failed", exc_info=True)
 
     def _on_theme_changed(self, name: str) -> None:
         set_app_theme(name, window=self)

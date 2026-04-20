@@ -56,8 +56,10 @@ class Tokens:
     NODE_SHADOW: str = ""
 
     # ---- Geometry ----
+    # RADIUS: small pills / chips (= design --r-xs 6)
+    # RADIUS_LG: cards / panels (= design --r-lg 14); softer Claude-web look.
     RADIUS: int = 6
-    RADIUS_LG: int = 8
+    RADIUS_LG: int = 14
     GAP_XS: int = 4
     GAP: int = 8
     GAP_LG: int = 12
@@ -80,20 +82,22 @@ class Tokens:
 # ---------- 主题登记表 ----------
 
 LIGHT = Tokens(
-    SIDEBAR="#f5f4ef",
+    # Palette aligned to Claude-web (design handoff): warm ivory canvas,
+    # clay/crimson accent, near-black foreground for tighter contrast.
+    SIDEBAR="#faf9f5",
     CONTENT="#ffffff",
-    BORDER="#e8e5dc",
-    HOVER="#faf9f7",
-    HOVER_STRONG="#ede9de",
-    SURFACE_DIM="#f3f1ea",
-    TEXT="#2d2a26",
-    TEXT_2="#6b6760",
-    TEXT_3="#9a958a",
+    BORDER="#ebe7db",        # ≈ rgba(60,40,20,0.08) on ivory
+    HOVER="#f7f5ee",         # ≈ rgba(60,40,20,0.04)
+    HOVER_STRONG="#efece1",  # ≈ rgba(60,40,20,0.14) hover border tint
+    SURFACE_DIM="#f0eee6",   # shared with search / chip-group / thumb placeholder
+    TEXT="#141413",
+    TEXT_2="#605a52",
+    TEXT_3="#8c857a",
     ACCENT="#c96442",
     ACCENT_SOFT="#f4e8e2",
     SUCCESS="#5a7a3c",
-    WARNING="#b8842b",
-    ERROR="#c0392b",
+    WARNING="#ce8a2c",
+    ERROR="#b5453c",
     NODE_CAT_CLEAN="#4a9a8a",
     NODE_CAT_AUGMENT="#8a6ac0",
     NODE_CAT_SPLIT="#c09840",
@@ -105,20 +109,21 @@ LIGHT = Tokens(
 )
 
 DARK = Tokens(
-    SIDEBAR="#2a2825",
-    CONTENT="#1f1d1b",
-    BORDER="#3a3733",
-    HOVER="#332f2b",
-    HOVER_STRONG="#3d3935",
-    SURFACE_DIM="#262420",
-    TEXT="#ece7df",
-    TEXT_2="#a8a29a",
-    TEXT_3="#7a7570",
-    ACCENT="#e0805a",
+    # Dark palette aligned to Claude-web (design handoff).
+    SIDEBAR="#262624",
+    CONTENT="#1f1e1d",
+    BORDER="#343230",
+    HOVER="#2e2c2a",
+    HOVER_STRONG="#3c3a37",
+    SURFACE_DIM="#30302e",
+    TEXT="#f5f4ee",
+    TEXT_2="#bfb9ae",
+    TEXT_3="#8c8578",
+    ACCENT="#d97757",
     ACCENT_SOFT="#3d2a22",
     SUCCESS="#7a9a4c",
-    WARNING="#d09a3a",
-    ERROR="#e74c3c",
+    WARNING="#e0a84a",
+    ERROR="#d26a60",
     NODE_CAT_CLEAN="#5abaa0",
     NODE_CAT_AUGMENT="#a080e0",
     NODE_CAT_SPLIT="#d0a850",

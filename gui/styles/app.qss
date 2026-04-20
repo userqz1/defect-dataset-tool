@@ -23,6 +23,42 @@ FluentTitleBar {
     border-bottom: 1px solid $BORDER;
 }
 
+/* Brand chip (20×20 clay square w/ italic serif D) — matches design §1 */
+QLabel#brandChip {
+    background-color: $ACCENT;
+    color: white;
+    border-radius: 5px;
+    font-family: "Georgia", "Songti SC", serif;
+    font-style: italic;
+    font-weight: 600;
+    font-size: 13px;
+}
+BodyLabel#brandName {
+    color: $TEXT;
+    font-family: "Georgia", "Songti SC", "Noto Serif SC", serif;
+    font-size: 14px;
+    font-weight: 500;
+}
+QFrame#crumbsBox {
+    background-color: transparent;
+}
+CaptionLabel#crumbMuted {
+    color: $TEXT_2;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 12px;
+}
+CaptionLabel#crumbActive {
+    color: $TEXT;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 12px;
+    font-weight: 500;
+}
+CaptionLabel#crumbSep {
+    color: $TEXT_3;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 12px;
+}
+
 /* 标题栏里的数据集 chip：圆角胶囊，柔和背景 */
 QWidget#datasetChip {
     background-color: $HOVER;
@@ -38,11 +74,15 @@ QLabel#datasetChipPath { color: $TEXT_3; }
     background-color: $CONTENT;
 }
 
-QWidget#overviewView, QWidget#browserView, QWidget#detailView,
-QWidget#qualityView, QWidget#exportView, QWidget#pipelineView,
-QWidget#datasetBrowserView, QWidget#datasetWelcome,
+QWidget#overviewView, QWidget#qualityView, QWidget#exportView,
+QWidget#pipelineView, QWidget#datasetWelcome,
 QStackedWidget#browserStack {
     background-color: $CONTENT;
+}
+/* browser + detail views use the ivory canvas so cards (thumbnails,
+ * distribution chart) float above it — matches Claude-web layering. */
+QWidget#browserView, QWidget#detailView, QWidget#datasetBrowserView {
+    background-color: $SIDEBAR;
 }
 
 NavigationInterface, NavigationInterface > QWidget {
@@ -82,21 +122,31 @@ QLabel#warningsTitle {
  * 3. 按钮族
  * ============================================================ */
 
+/* Filter chip segmented group — chips sit inside a single rail rather than
+ * each carrying its own border/bg. The active chip promotes to the panel
+ * color with a subtle shadow — single strong signal, quiet default. */
+QFrame#filterChipGroup {
+    background-color: $SURFACE_DIM;
+    border-radius: ${RADIUS}px;
+}
 QPushButton#filterChip {
     background-color: transparent;
-    border: 1px solid $BORDER;
+    border: 1px solid transparent;
     border-radius: ${RADIUS}px;
-    padding: 5px 14px;
+    padding: 4px 12px;
     color: $TEXT_2;
 }
 QPushButton#filterChip:hover {
-    background-color: $HOVER;
     color: $TEXT;
 }
 QPushButton#filterChip:checked {
-    background-color: $ACCENT_SOFT;
-    border-color: $ACCENT;
-    color: $ACCENT;
+    background-color: $CONTENT;
+    border-color: $BORDER;
+    color: $TEXT;
+    font-weight: 500;
+}
+QPushButton#filterChip:disabled {
+    color: $TEXT_3;
 }
 
 QPushButton#ghostButton {
@@ -126,16 +176,61 @@ QFrame#toolSidebar {
     background-color: $SIDEBAR;
     border-right: 1px solid $BORDER;
 }
+/* Section header: uppercase (done in Python), tracked, muted — matches the
+ * design handoff's "ANALYZE / 处理" style. */
 CaptionLabel#toolSidebarSection {
     color: $TEXT_3;
     padding: ${GAP_LG}px ${GAP}px ${GAP_XS}px ${GAP}px;
-    font-weight: bold;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
 }
-/* Full-width, left-aligned action rows. Padding/alignment used to be
- * inlined via setStyleSheet inside _ToolButton (review #9). */
-QPushButton#toolSidebarButton {
-    text-align: left;
-    padding-left: 10px;
+/* Tool rows are custom QFrame widgets (QLabel icon + QLabel text inside) —
+ * the old QPushButton version collided icon + text on long CN labels like
+ * "格式转换" / "AI 预标注". Splitting icon/text into dedicated slots via
+ * HBoxLayout keeps them from overlapping regardless of window width. */
+QFrame#toolSidebarButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: ${RADIUS}px;
+}
+QLabel#toolSidebarText {
+    color: $TEXT_2;
+    font-size: 13px;
+}
+QFrame#toolSidebarButton:hover {
+    background-color: $HOVER;
+    border-color: $BORDER;
+}
+QFrame#toolSidebarButton:hover QLabel#toolSidebarText {
+    color: $TEXT;
+}
+/* Featured: elevated white panel w/ subtle border (marquee — e.g. 导出). */
+QFrame#toolSidebarButton[toolKind="featured"] {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+}
+QFrame#toolSidebarButton[toolKind="featured"]:hover {
+    border: 1px solid $HOVER_STRONG;
+}
+QFrame#toolSidebarButton[toolKind="featured"] QLabel#toolSidebarText {
+    color: $TEXT;
+    font-weight: 500;
+}
+/* AI row — accent-soft hover, accent text (differentiated capability). */
+QFrame#toolSidebarButton[toolKind="ai"]:hover {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT_SOFT;
+}
+QFrame#toolSidebarButton[toolKind="ai"]:hover QLabel#toolSidebarText {
+    color: $ACCENT;
+}
+/* Disabled state (cascaded via btnDisabled property). */
+QFrame#toolSidebarButton[btnDisabled="true"] {
+    background-color: transparent;
+}
+QFrame#toolSidebarButton[btnDisabled="true"] QLabel#toolSidebarText {
+    color: $TEXT_3;
 }
 
 QLabel#sectionHeader {
@@ -145,23 +240,138 @@ QLabel#sectionHeader {
 }
 
 QListWidget#categoryTree {
-    background-color: $SIDEBAR;
+    background-color: transparent;
     border: none;
-    padding: 6px;
+    padding: 4px;
     outline: 0;
 }
 QListWidget#categoryTree::item {
-    padding: 8px 10px;
-    border-radius: ${RADIUS}px;
+    padding: 0;
+    margin: 0;
     color: $TEXT;
-    margin-bottom: 1px;
 }
 QListWidget#categoryTree::item:hover {
-    background-color: $HOVER_STRONG;
+    background-color: $HOVER;
 }
+/* selection painted by delegate */
 QListWidget#categoryTree::item:selected {
-    background-color: $ACCENT_SOFT;
-    color: $ACCENT;
+    background-color: transparent;
+    color: $TEXT;
+}
+
+/* ============================================================
+ * 4d. Catalog panel (right-hand 340px column)
+ * ============================================================ */
+
+QFrame#catalogPanel {
+    background-color: $SIDEBAR;
+    border-left: 1px solid $BORDER;
+}
+BodyLabel#catalogTitle {
+    color: $TEXT;
+    font-family: "Georgia", "Songti SC", "Noto Serif SC", serif;
+    font-size: 16px;
+    font-weight: 500;
+}
+CaptionLabel#catalogSubtitle {
+    color: $TEXT_3;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+QPushButton#catalogTab {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: ${RADIUS}px;
+    padding: 3px 10px;
+    color: $TEXT_2;
+    font-size: 11px;
+}
+QPushButton#catalogTab:hover {
+    color: $TEXT;
+}
+QPushButton#catalogTab:checked {
+    background-color: $HOVER_STRONG;
+    color: $TEXT;
+    font-weight: 500;
+}
+
+/* ============================================================
+ * 4c. Distribution chart card (nested inside Catalog panel)
+ * ============================================================ */
+
+QFrame#distributionChart {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+    margin: ${GAP_LG}px ${GAP}px ${GAP}px ${GAP}px;
+}
+CaptionLabel#distributionHead {
+    color: $TEXT_3;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+CaptionLabel#distributionRatio {
+    color: $TEXT_2;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 11px;
+}
+CaptionLabel#distributionRatio[warn="true"] {
+    color: $WARNING;
+}
+CaptionLabel#distributionFoot {
+    color: $TEXT_3;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 10px;
+}
+BodyLabel#distributionCaption {
+    color: $TEXT_2;
+    font-size: 11px;
+}
+
+/* ============================================================
+ * 4b. Dataset bar (Claude-web redesign — serif title + stat strip)
+ * ============================================================ */
+
+QFrame#datasetBar {
+    background-color: $SIDEBAR;
+    border-bottom: 1px solid $BORDER;
+}
+QLabel#datasetName {
+    color: $TEXT;
+    font-family: "Georgia", "Songti SC", "Noto Serif SC", serif;
+    font-size: 17px;
+    font-weight: 500;
+}
+QLabel#datasetPath {
+    color: $TEXT_3;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 11px;
+}
+QLabel#statKey {
+    color: $TEXT_3;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+QLabel#statValue {
+    color: $TEXT;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 15px;
+    font-weight: 500;
+}
+QLabel#statValueWarn {
+    color: $WARNING;
+    font-family: "JetBrains Mono", "Consolas", "SF Mono", monospace;
+    font-size: 15px;
+    font-weight: 500;
+}
+QWidget#statCell {
+    border-left: 1px solid $BORDER;
+}
+QFrame#statStrip > QWidget#statCell:first-child {
+    border-left: none;
 }
 
 /* ============================================================
@@ -197,9 +407,9 @@ QListWidget#shapeList::item:hover {
  * ============================================================ */
 
 QListWidget#thumbnailGrid {
-    background-color: $CONTENT;
+    background-color: $SIDEBAR;  /* ivory canvas, cards float above it */
     border: none;
-    padding: 12px;
+    padding: 16px;
 }
 QListWidget#thumbnailGrid::item {
     border: none;
@@ -214,7 +424,10 @@ QListWidget#thumbnailGrid::item:selected {
 QFrame#thumbCard {
     background-color: $CONTENT;
     border: 1px solid $BORDER;
-    border-radius: ${RADIUS}px;
+    border-radius: ${RADIUS_LG}px;
+}
+QFrame#thumbCard:hover {
+    border: 1px solid $HOVER_STRONG;
 }
 QFrame#thumbCard[selected="true"] {
     border: 2px solid $ACCENT;
@@ -327,6 +540,70 @@ QLabel#readinessGap {
     font-weight: 600;
 }
 
+/* ============================================================
+ * 11b. Settings popup (floating Tweaks panel per design)
+ * ============================================================ */
+
+QFrame#settingsPopup {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+/* Settings popup — Claude-style menu list. */
+BodyLabel#tweakHead {
+    color: $TEXT_3;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding-left: 4px;
+}
+QLabel#tweakClose {
+    color: $TEXT_3;
+    font-size: 11px;
+    border-radius: 4px;
+}
+QLabel#tweakClose:hover {
+    color: $TEXT;
+    background-color: $HOVER;
+}
+QFrame#tweakDivider {
+    background-color: $BORDER;
+    margin: 4px 8px;
+}
+QFrame#tweakRow {
+    background-color: transparent;
+    border-radius: ${RADIUS}px;
+}
+QFrame#tweakRow:hover {
+    background-color: $HOVER;
+}
+QLabel#tweakIcon {
+    color: $TEXT_2;
+    background-color: transparent;
+}
+BodyLabel#tweakKey {
+    color: $TEXT;
+    font-size: 13px;
+    background-color: transparent;
+}
+/* Inline segmented buttons — active state gets soft tan bg (design's
+ * --bg-active ≈ rgba(60,40,20,0.07)). */
+QPushButton#tweakSeg {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: ${RADIUS}px;
+    padding: 3px 9px;
+    color: $TEXT_3;
+    font-size: 11px;
+    min-width: 22px;
+}
+QPushButton#tweakSeg:hover {
+    color: $TEXT;
+}
+QPushButton#tweakSeg:checked {
+    background-color: $HOVER_STRONG;
+    color: $TEXT;
+}
 /* ============================================================
  * 12. 节点编辑器工具箱 / 缩放按钮
  * ============================================================ */
