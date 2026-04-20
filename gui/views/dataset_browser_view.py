@@ -717,33 +717,63 @@ class DatasetBrowserView(QWidget):
     def _on_change_category(self, image, target: str) -> None:
         """Move the current image to `target` category + rescan (review #21).
 
-        Invoked from DetailView's "改分类" button. One-image move via
-        fileops.move_to_category; rescan is forced since mtime-based
-        fingerprint checks might not catch single-file moves.
+        Routed through BatchRunner (review #6) so a slow filesystem (NAS,
+        sync-folder, large label JSON) doesn't freeze the UI on this single
+        move. Records to history.jsonl so it's undoable just like the bulk
+        "移动到类别…" path — previously the bulk version wrote history but
+        this single-image variant didn't, an annoying inconsistency for
+        anyone who relied on the undo button after retagging one image.
         """
         ds = self._state.dataset
         if ds is None or not target:
             return
-        from core import fileops
-        try:
-            fileops.move_to_category([image], ds.root_path, target)
-        except Exception as e:
-            logger.exception("move_to_category failed in DetailView")
-            InfoBar.error(
-                "改分类失败", str(e),
-                parent=self.window(), duration=5000,
+        from core import fileops, history as _hist
+        from gui.workers.batch_runner import BatchRunner
+
+        original_category = image.category
+        original_path = str(image.path)
+
+        def task(cb):
+            return fileops.move_to_category([image], ds.root_path, target,
+                                              progress_cb=cb)
+
+        def handle(result):
+            if result.fail_count:
+                _, err = result.failed[0]
+                InfoBar.error(
+                    "改分类失败", err,
+                    parent=self.window(), duration=5000,
+                    position=InfoBarPosition.TOP,
+                )
+                return
+            try:
+                _hist.append(
+                    ds.root_path,
+                    _hist.HistoryEntry.now(
+                        action="move-to-category",
+                        params={
+                            "target": target,
+                            "image_count": 1,
+                            "images": [original_path],
+                            "original_categories": {original_path: original_category},
+                        },
+                        ok=True,
+                        summary=f"移动 1 张到 {target}",
+                        undoable=True,
+                    ),
+                )
+            except Exception:
+                logger.exception("history append failed for single-image move")
+            InfoBar.success(
+                "",
+                f"已把 {image.path.name} 移到 {target}",
+                parent=self.window(), duration=3000,
                 position=InfoBarPosition.TOP,
             )
-            return
-        InfoBar.success(
-            "",
-            f"已把 {image.path.name} 移到 {target}",
-            parent=self.window(), duration=3000,
-            position=InfoBarPosition.TOP,
-        )
-        # Send back to browser to re-render after rescan settles
-        self._browser_stack.setCurrentWidget(self._browser)
-        self._rescan(force=True)
+            self._browser_stack.setCurrentWidget(self._browser)
+            self._rescan(force=True)
+
+        BatchRunner(self, "改分类").run(task=task, on_done=handle)
 
     def _delete_issue_images(self, images: list) -> None:
         """Batch-trash a set of images (from QualityReviewDialog)."""
@@ -753,7 +783,7 @@ class DatasetBrowserView(QWidget):
         from gui.workers.batch_runner import BatchRunner
 
         def task(cb):
-            return fileops.delete_pairs(images, to_trash=True)
+            return fileops.delete_pairs(images, to_trash=True, progress_cb=cb)
 
         def handle(result):
             n_ok = len(getattr(result, "succeeded", []))
@@ -781,7 +811,8 @@ class DatasetBrowserView(QWidget):
 
         target = "质量问题"
         def task(cb):
-            return fileops.move_to_category(images, ds.root_path, target)
+            return fileops.move_to_category(images, ds.root_path, target,
+                                             progress_cb=cb)
 
         def handle(result):
             n_ok = len(getattr(result, "succeeded", []))

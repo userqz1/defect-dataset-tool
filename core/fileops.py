@@ -79,10 +79,14 @@ def _update_image_path_in_json(json_path: Path, new_image_name: str) -> None:
 
 # ---------- 删除 ----------
 
-def delete_pairs(images: list[ImageInfo], to_trash: bool = True) -> OpResult:
+def delete_pairs(images: list[ImageInfo], to_trash: bool = True,
+                  progress_cb=None) -> OpResult:
     """Delete image + corresponding label JSON. Defaults to Recycle Bin."""
     result = OpResult()
-    for img in images:
+    total = len(images)
+    for i, img in enumerate(images):
+        if progress_cb:
+            progress_cb(i, total, img.path.name)
         try:
             label = img.label_path or label_path_for_image(img.path)
             if to_trash:
@@ -96,6 +100,8 @@ def delete_pairs(images: list[ImageInfo], to_trash: bool = True) -> OpResult:
             result.succeeded.append(img.path)
         except Exception as e:  # noqa: BLE001
             result.failed.append((img.path, str(e)))
+    if progress_cb:
+        progress_cb(total, total, "")
     return result
 
 
@@ -105,13 +111,17 @@ def move_to_category(
     images: list[ImageInfo],
     dataset_root: Path,
     target_category: str,
+    progress_cb=None,
 ) -> OpResult:
     """Move image+label pairs into <dataset_root>/<target_category>/{images,labels}/."""
     result = OpResult()
     target_images_dir = dataset_root / target_category / "images"
     target_images_dir.mkdir(parents=True, exist_ok=True)
 
-    for img in images:
+    total = len(images)
+    for i, img in enumerate(images):
+        if progress_cb:
+            progress_cb(i, total, img.path.name)
         try:
             new_image = target_images_dir / img.path.name
             new_image = _ensure_unique(new_image)
@@ -127,6 +137,8 @@ def move_to_category(
             result.succeeded.append(new_image)
         except Exception as e:  # noqa: BLE001
             result.failed.append((img.path, str(e)))
+    if progress_cb:
+        progress_cb(total, total, "")
     return result
 
 
@@ -287,7 +299,8 @@ def split_category(
     progress_cb=None,
 ) -> OpResult:
     """Move selected images from source category into a new category."""
-    return move_to_category(images, dataset_root, new_name)
+    return move_to_category(images, dataset_root, new_name,
+                             progress_cb=progress_cb)
 
 
 # ---------- 助手 ----------

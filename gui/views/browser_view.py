@@ -609,7 +609,7 @@ class BrowserView(QWidget):
         if not box.exec():
             return
         self._run(
-            lambda cb: fileops.delete_pairs(sel, to_trash=True),
+            lambda cb: fileops.delete_pairs(sel, to_trash=True, progress_cb=cb),
             self.tr("正在删除…"),
         )
 
@@ -628,7 +628,7 @@ class BrowserView(QWidget):
         # try_undo_last can move each file back, not just "some category".
         original_categories = {str(i.path): i.category for i in sel}
         self._run(
-            lambda cb: fileops.move_to_category(sel, root, target),
+            lambda cb: fileops.move_to_category(sel, root, target, progress_cb=cb),
             self.tr("正在移动到 {target}…").format(target=target),
             history={
                 "action": "move-to-category",
