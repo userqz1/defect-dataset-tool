@@ -1,0 +1,12 @@
+# Developer-only dependencies — NOT required to run the app.
+# Install with: pip install -r requirements-dev.txt
+
+# ---- Tests ----
+pytest>=8.0
+
+# ---- Asset regeneration ----
+# icon.ico / icon.png are committed to the repo; they are built once
+# from icon.svg by assets/generate_ico.py. That script now REQUIRES
+# cairosvg (no Pillow fallback) so the shipped icon always matches
+# the SVG design — review point #12.
+cairosvg>=2.7

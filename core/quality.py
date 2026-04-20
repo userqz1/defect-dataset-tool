@@ -68,16 +68,30 @@ def check_one(image_path: Path, opts: QualityOptions) -> tuple[list[str], dict[s
 
 
 def check_images(
-    images: list[ImageInfo],
+    images,
     opts: QualityOptions | None = None,
     progress_cb=None,
+    total: int | None = None,
 ) -> list[QualityIssue]:
-    """Check images for quality issues. Uses ThreadPoolExecutor for speed."""
+    """Check images for quality issues. Uses ThreadPoolExecutor for speed.
+
+    Accepts ``list[ImageInfo]`` or any ``Iterable[ImageInfo]``. For
+    iterables that don't support ``len()`` (generators, chain), pass the
+    expected count via ``total`` so progress_cb has a denominator; if
+    omitted we materialize the iterable into a list.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     opts = opts or QualityOptions()
     issues: list[QualityIssue] = []
-    total = len(images)
+
+    # If caller didn't give a total, try len(); otherwise materialize.
+    if total is None:
+        try:
+            total = len(images)  # type: ignore[arg-type]
+        except TypeError:
+            images = list(images)
+            total = len(images)
     done = 0
 
     workers = min(8, max(1, total // 10))

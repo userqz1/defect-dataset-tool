@@ -36,16 +36,26 @@ def _hash_one(img: ImageInfo) -> tuple[ImageInfo, imagehash.ImageHash | None]:
 
 
 def find_duplicates(
-    images: list[ImageInfo],
+    images,
     threshold: int = 5,
     progress_cb=None,
+    total: int | None = None,
 ) -> list[DuplicateGroup]:
     """Find duplicate images using perceptual hash (pHash).
 
     Uses ThreadPoolExecutor for parallel I/O. Images resized to 128x128
     before hashing (pHash only needs ~32x32, so this is plenty).
+
+    Accepts any ``Iterable[ImageInfo]``. If ``total`` is omitted, falls
+    back to ``len(images)``; for generators pass ``total`` explicitly or
+    the function materializes the iterable.
     """
-    total = len(images)
+    if total is None:
+        try:
+            total = len(images)  # type: ignore[arg-type]
+        except TypeError:
+            images = list(images)
+            total = len(images)
     hashes: list[tuple[ImageInfo, imagehash.ImageHash]] = []
 
     # Parallel hash computation (I/O bound → threads)

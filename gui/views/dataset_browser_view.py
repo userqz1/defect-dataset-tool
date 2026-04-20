@@ -507,12 +507,22 @@ class DatasetBrowserView(QWidget):
         from gui.dialogs.history_dialog import HistoryDialog
         HistoryDialog(ds.root_path, parent=self.window()).exec()
 
-    def _all_images(self) -> list:
-        """Collect all images from current dataset."""
+    def _all_images(self):
+        """Iterate over all images in the current dataset.
+
+        Returns an ``itertools.chain`` — no intermediate list copy, which
+        matters for 50k+ datasets. Use ``_image_count()`` alongside if
+        you need a length (core.quality / core.dedup need it for progress).
+        """
+        from itertools import chain
         ds = self._state.dataset
         if ds is None:
-            return []
-        return [img for cat in ds.categories for img in cat.images]
+            return iter([])
+        return chain.from_iterable(cat.images for cat in ds.categories)
+
+    def _image_count(self) -> int:
+        ds = self._state.dataset
+        return ds.total_images if ds else 0
 
     def _on_dataset_changed(self, ds) -> None:
         """Single rendering path for dataset changes.
@@ -539,8 +549,8 @@ class DatasetBrowserView(QWidget):
 
     def _on_quality_check(self) -> None:
         """Run quality check on all images."""
-        images = self._all_images()
-        if not images:
+        n_images = self._image_count()
+        if n_images == 0:
             return
 
         from gui.dialogs.tool_dialogs import QualityCheckDialog
@@ -578,14 +588,15 @@ class DatasetBrowserView(QWidget):
             )
 
         BatchRunner(self, "质量检查").run(
-            task=lambda cb: check_images(images, opts, progress_cb=cb),
+            task=lambda cb: check_images(self._all_images(), opts,
+                                          progress_cb=cb, total=n_images),
             on_done=handle,
         )
 
     def _on_dedup(self) -> None:
         """Run duplicate detection."""
-        images = self._all_images()
-        if not images:
+        n_images = self._image_count()
+        if n_images == 0:
             return
 
         from gui.dialogs.tool_dialogs import DedupDialog
@@ -612,8 +623,9 @@ class DatasetBrowserView(QWidget):
                 self._delete_duplicates(result_dlg.groups)
 
         BatchRunner(self, "重复检测").run(
-            task=lambda cb: find_duplicates(images, threshold=threshold,
-                                            progress_cb=cb),
+            task=lambda cb: find_duplicates(
+                self._all_images(), threshold=threshold,
+                progress_cb=cb, total=n_images),
             on_done=handle,
         )
 

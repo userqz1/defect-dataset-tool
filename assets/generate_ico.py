@@ -1,17 +1,34 @@
 """One-shot script: render icon.svg → icon.png (512px) + icon.ico (multi-size).
 
-Uses 4x supersampling for crisp anti-aliasing since no SVG renderer is available.
+**Requires cairosvg** — the Pillow-based fallback used to silently drift
+from the SVG design (review #12: font position / beam layout off).
+A mismatched shipped ico is worse than a build-time error, so we fail
+loudly if cairosvg isn't installed.
+
+Install: ``pip install -r requirements-dev.txt``.
+Run once, commit the generated ``icon.png`` + ``icon.ico`` — the app
+loads them as assets, it never regenerates at runtime.
 """
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
 try:
     from PIL import Image
 except ImportError:
-    print("Pillow not installed"); sys.exit(1)
+    sys.exit("Pillow not installed — install requirements-dev.txt first")
+
+try:
+    import cairosvg
+except ImportError:
+    sys.exit(
+        "cairosvg is required to regenerate the icon — it guarantees the\n"
+        "rendered output matches icon.svg. Install via:\n"
+        "    pip install -r requirements-dev.txt\n"
+        "(Fallback renderers were removed in review #12 because they\n"
+        "produced visibly different glyphs from the design.)"
+    )
 
 HERE = Path(__file__).parent
 SVG = HERE / "icon.svg"
@@ -20,32 +37,10 @@ ICO = HERE / "icon.ico"
 
 
 def render_svg_to_png(size: int = 512) -> Image.Image:
-    """Try cairosvg / resvg / inkscape, then fall back to Pillow supersampled."""
-    try:
-        import cairosvg
-        cairosvg.svg2png(url=str(SVG), write_to=str(PNG),
-                         output_width=size, output_height=size)
-        return Image.open(PNG)
-    except ImportError:
-        pass
-
-    for cmd in ["resvg", "inkscape"]:
-        try:
-            if cmd == "resvg":
-                subprocess.run([cmd, str(SVG), str(PNG), "-w", str(size), "-h", str(size)],
-                               check=True, capture_output=True)
-            else:
-                subprocess.run([cmd, str(SVG), f"--export-filename={PNG}",
-                                f"--export-width={size}", f"--export-height={size}"],
-                               check=True, capture_output=True)
-            return Image.open(PNG)
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            continue
-
-    print("No SVG renderer found — using 4x supersampled Pillow fallback.")
-    # Render at 4x then downsample for anti-aliasing
-    big = _draw_icon(size * 4)
-    return big.resize((size, size), Image.LANCZOS)
+    """Render icon.svg at *size* px via cairosvg and return a PIL Image."""
+    cairosvg.svg2png(url=str(SVG), write_to=str(PNG),
+                      output_width=size, output_height=size)
+    return Image.open(PNG)
 
 
 def _draw_icon(size: int, simplified: bool = False) -> Image.Image:
