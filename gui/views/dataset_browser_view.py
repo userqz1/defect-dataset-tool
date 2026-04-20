@@ -115,6 +115,16 @@ class DatasetBrowserView(QWidget):
         self._dedup_btn.clicked.connect(self._on_dedup)
         tbar_lay.addWidget(self._dedup_btn)
 
+        # "处理" dropdown — transform / convert / augment / predict.
+        # All core modules (transform / convert / augment / predictor)
+        # had no GUI entry point before this; review stage 2.
+        self._process_btn = PushButton("处理")
+        self._process_btn.setIcon(FIF.DEVELOPER_TOOLS)
+        self._process_btn.setFixedWidth(90)
+        self._process_btn.setEnabled(False)
+        self._process_btn.clicked.connect(self._show_process_menu)
+        tbar_lay.addWidget(self._process_btn)
+
         tbar_lay.addStretch()
 
         self._history_btn = PushButton("历史")
@@ -154,6 +164,9 @@ class DatasetBrowserView(QWidget):
         self._detail.back_requested.connect(
             lambda: self._browser_stack.setCurrentWidget(self._browser)
         )
+        # In-detail "改分类" (review #21) — DetailView emits, outer view
+        # performs fileops.move_to_category and triggers force rescan.
+        self._detail.change_category_requested.connect(self._on_change_category)
 
         self._browser_stack.addWidget(self._browser)
         self._browser_stack.addWidget(self._detail)
@@ -455,7 +468,8 @@ class DatasetBrowserView(QWidget):
     def _set_tools_enabled(self, enabled: bool) -> None:
         """Enable/disable all toolbar buttons."""
         for btn in (self._refresh_btn, self._export_btn, self._quality_btn,
-                    self._dedup_btn, self._history_btn, self._stats_btn):
+                    self._dedup_btn, self._process_btn,
+                    self._history_btn, self._stats_btn):
             btn.setEnabled(enabled)
         # Undo button is independent — gated on whether a reversible op
         # exists in history, not just on dataset presence.
@@ -504,6 +518,196 @@ class DatasetBrowserView(QWidget):
                             parent=self.window(), duration=4000,
                             position=InfoBarPosition.TOP)
 
+    # -- 处理 (transform / convert / augment / predict) ----------------
+
+    def _show_process_menu(self) -> None:
+        """Open the 处理 dropdown menu anchored under the button."""
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+
+        transform_menu = menu.addMenu("变换")
+        transform_menu.addAction("缩放…", self._on_resize)
+        transform_menu.addAction("裁剪…", self._on_crop)
+        transform_menu.addAction("旋转…", self._on_rotate)
+        transform_menu.addAction("翻转…", self._on_flip)
+        menu.addAction("格式转换…", self._on_convert)
+        menu.addAction("数据增强…", self._on_augment)
+        menu.addAction("AI 预标注…", self._on_predict)
+
+        # Anchor below the button
+        pos = self._process_btn.mapToGlobal(
+            self._process_btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _run_transform(self, dlg_cls, op_fn, dlg_title_for_runner: str) -> None:
+        """Shared plumbing for 4 transforms — dialog → BatchRunner."""
+        n = self._image_count()
+        if n == 0:
+            return
+        dlg = dlg_cls(n, parent=self.window())
+        if not dlg.exec():
+            return
+        opts = dlg.options()
+        paths = [img.path for img in self._all_images()]
+        from core.transform import batch_apply
+        from gui.workers.batch_runner import BatchRunner
+
+        def handle(result):
+            ok = len(getattr(result, "succeeded", []))
+            fail = len(getattr(result, "failed", []))
+            if fail:
+                InfoBar.warning(
+                    dlg_title_for_runner + "完成",
+                    f"成功 {ok} · 失败 {fail} · 可能需刷新",
+                    parent=self.window(), duration=5000,
+                    position=InfoBarPosition.TOP,
+                )
+            else:
+                InfoBar.success(
+                    dlg_title_for_runner + "完成",
+                    f"处理 {ok} 张 · 点刷新查看",
+                    parent=self.window(), duration=4000,
+                    position=InfoBarPosition.TOP,
+                )
+
+        BatchRunner(self, dlg_title_for_runner).run(
+            task=lambda cb: batch_apply(paths, op_fn, opts, progress_cb=cb),
+            on_done=handle,
+        )
+
+    def _on_resize(self) -> None:
+        from core.transform import resize_one
+        from gui.dialogs.batch_ops import ResizeDialog
+        self._run_transform(ResizeDialog, resize_one, "批量缩放")
+
+    def _on_crop(self) -> None:
+        from core.transform import crop_one
+        from gui.dialogs.batch_ops import CropDialog
+        self._run_transform(CropDialog, crop_one, "批量裁剪")
+
+    def _on_rotate(self) -> None:
+        from core.transform import rotate_one
+        from gui.dialogs.batch_ops import RotateDialog
+        self._run_transform(RotateDialog, rotate_one, "批量旋转")
+
+    def _on_flip(self) -> None:
+        from core.transform import flip_one
+        from gui.dialogs.batch_ops import FlipDialog
+        self._run_transform(FlipDialog, flip_one, "批量翻转")
+
+    def _on_convert(self) -> None:
+        n = self._image_count()
+        if n == 0:
+            return
+        from gui.dialogs.batch_ops import ConvertDialog
+        dlg = ConvertDialog(n, parent=self.window())
+        if not dlg.exec():
+            return
+        opts = dlg.options()
+        paths = [img.path for img in self._all_images()]
+
+        from core.convert import convert_batch
+        from gui.workers.batch_runner import BatchRunner
+
+        def handle(result):
+            ok = len(getattr(result, "succeeded", []))
+            fail = len(getattr(result, "failed", []))
+            msg = f"成功 {ok} · 失败 {fail}" if fail else f"转换 {ok} 张 · 点刷新查看"
+            (InfoBar.warning if fail else InfoBar.success)(
+                "格式转换完成", msg,
+                parent=self.window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+
+        BatchRunner(self, "格式转换").run(
+            task=lambda cb: convert_batch(paths, opts, progress_cb=cb),
+            on_done=handle,
+        )
+
+    def _on_augment(self) -> None:
+        n = self._image_count()
+        if n == 0:
+            return
+        from gui.dialogs.batch_ops import AugmentDialog
+        dlg = AugmentDialog(n, parent=self.window())
+        if not dlg.exec():
+            return
+        cfg = dlg.options()
+        out_dir = cfg["out_dir"]
+        aug_opts = cfg["opts"]
+        paths = [img.path for img in self._all_images()]
+
+        from core.augment import augment_batch
+        from gui.workers.batch_runner import BatchRunner
+
+        def handle(result):
+            InfoBar.success(
+                "数据增强完成",
+                f"生成 {result.count} 张增强图片到 "
+                f"{out_dir.name if out_dir else ''}",
+                parent=self.window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+
+        BatchRunner(self, "数据增强").run(
+            task=lambda cb: augment_batch(paths, out_dir, aug_opts, progress_cb=cb),
+            on_done=handle,
+        )
+
+    def _on_predict(self) -> None:
+        n_all = self._image_count()
+        if n_all == 0:
+            return
+        # Count un-labeled to set dialog header
+        all_imgs = list(self._all_images())
+        unlabeled = [img for img in all_imgs if not img.has_label]
+        from gui.dialogs.batch_ops import PredictDialog
+        dlg = PredictDialog(len(unlabeled), parent=self.window())
+        if not dlg.exec():
+            return
+        cfg = dlg.options()
+
+        from core.predictor import YoloPredictor, predict_batch
+        from gui.workers.batch_runner import BatchRunner
+
+        predictor = YoloPredictor(
+            model_name=cfg["model_name"], conf=cfg["conf"])
+        if not predictor.is_available():
+            InfoBar.error(
+                "AI 预标注失败",
+                "ultralytics 未安装,请 pip install ultralytics 后重试",
+                parent=self.window(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        # Scope: unlabeled only unless overwrite checked
+        target_paths = ([img.path for img in all_imgs]
+                        if cfg["overwrite"]
+                        else [img.path for img in unlabeled])
+        if not target_paths:
+            InfoBar.info("", "没有待处理的图片(全部已标注)",
+                         parent=self.window(), duration=3000,
+                         position=InfoBarPosition.TOP)
+            return
+
+        def handle(result):
+            msg = (f"成功 {len(result.written)} · "
+                   f"跳过 {len(result.skipped)} · "
+                   f"失败 {len(result.failed)}")
+            (InfoBar.warning if result.failed else InfoBar.success)(
+                "AI 预标注完成", msg + " · 点刷新查看",
+                parent=self.window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+
+        BatchRunner(self, "AI 预标注").run(
+            task=lambda cb: predict_batch(
+                target_paths, predictor,
+                overwrite=cfg["overwrite"], progress_cb=cb),
+            on_done=handle,
+        )
+
     def _on_history(self) -> None:
         """Show the operation history for the current dataset."""
         ds = self._state.dataset
@@ -511,6 +715,37 @@ class DatasetBrowserView(QWidget):
             return
         from gui.dialogs.history_dialog import HistoryDialog
         HistoryDialog(ds.root_path, parent=self.window()).exec()
+
+    def _on_change_category(self, image, target: str) -> None:
+        """Move the current image to `target` category + rescan (review #21).
+
+        Invoked from DetailView's "改分类" button. One-image move via
+        fileops.move_to_category; rescan is forced since mtime-based
+        fingerprint checks might not catch single-file moves.
+        """
+        ds = self._state.dataset
+        if ds is None or not target:
+            return
+        from core import fileops
+        try:
+            fileops.move_to_category([image], ds.root_path, target)
+        except Exception as e:
+            logger.exception("move_to_category failed in DetailView")
+            InfoBar.error(
+                "改分类失败", str(e),
+                parent=self.window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        InfoBar.success(
+            "",
+            f"已把 {image.path.name} 移到 {target}",
+            parent=self.window(), duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+        # Send back to browser to re-render after rescan settles
+        self._browser_stack.setCurrentWidget(self._browser)
+        self._rescan(force=True)
 
     def _on_add_to_split(self, bucket: str, images: list) -> None:
         """Right-click → "加入手动划分 → Train/Val/Test" handler (review #9).

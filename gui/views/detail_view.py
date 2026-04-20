@@ -70,6 +70,10 @@ class _ImageLoader(QThread):
 
 class DetailView(QWidget):
     back_requested = pyqtSignal()  # 用户点返回
+    # Review #21: change the current image's category without returning
+    # to the grid. Emits (ImageInfo, new_category_name). The outer view
+    # (DatasetBrowserView) owns fileops + rescan.
+    change_category_requested = pyqtSignal(object, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -179,6 +183,12 @@ class DetailView(QWidget):
         top_layout.addWidget(self.delete_shape_btn)
         top_layout.addWidget(self.save_btn)
 
+        # "改分类" — inline category reassign for the current image
+        self.move_cat_btn = ToolButton(FIF.FOLDER)
+        self.move_cat_btn.setToolTip("改分类(把当前图移到其他类别)")
+        self.move_cat_btn.clicked.connect(self._on_move_category)
+        top_layout.addWidget(self.move_cat_btn)
+
         self.help_btn = ToolButton(FIF.HELP)
         self.help_btn.setToolTip("快捷键帮助")
         self.help_btn.clicked.connect(self._show_shortcuts)
@@ -259,6 +269,39 @@ class DetailView(QWidget):
         if not self._confirm_discard():
             return
         self.back_requested.emit()
+
+    def _on_move_category(self) -> None:
+        """Reassign the current image's category without leaving DetailView.
+
+        Discovers existing categories from the image list we already have
+        (avoids needing a direct AppState reference), then delegates
+        fileops + rescan to the outer view via change_category_requested.
+        """
+        if not self._images or self._index < 0:
+            return
+        current = self._images[self._index]
+        # Categories = unique set from the in-view image list, minus the
+        # current one (moving to self is a no-op).
+        cats = sorted({img.category for img in self._images
+                        if img.category and img.category != current.category})
+        if not cats:
+            from qfluentwidgets import MessageBox as _MB
+            box = _MB("无其他类别", "当前数据集只有一个类别", self.window())
+            box.cancelButton.hide()
+            box.exec()
+            return
+
+        if not self._confirm_discard():
+            return
+
+        from gui.dialogs.op_dialogs import MoveToCategoryDialog
+        dlg = MoveToCategoryDialog(cats, self.window())
+        if not dlg.exec():
+            return
+        target = dlg.target()
+        if not target or target == current.category:
+            return
+        self.change_category_requested.emit(current, target)
 
     def _confirm_discard(self) -> bool:
         """Return True if it's OK to discard unsaved changes (or none)."""
