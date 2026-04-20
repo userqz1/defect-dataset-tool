@@ -364,6 +364,16 @@ class DetailView(QWidget):
         self._refresh_shape_list()
         if self.edit_btn.isChecked():
             self._refresh_label_combo()
+        # Remember the label file's mtime at load-time so _on_save can
+        # detect conflict: if the file changed externally (another editor,
+        # another DataForge instance) between load and save, we warn
+        # before overwriting. Review #22.
+        self._label_mtime_at_load: float | None = None
+        try:
+            if img.has_label and img.label_path and img.label_path.is_file():
+                self._label_mtime_at_load = img.label_path.stat().st_mtime
+        except OSError:
+            self._label_mtime_at_load = None
         self._dirty = False
 
     def _show_shortcuts(self) -> None:
@@ -445,6 +455,29 @@ class DetailView(QWidget):
         label_path = img.label_path
         if label_path is None:
             label_path = self._infer_label_path(img.path)
+
+        # Review #22: if the label file changed since we loaded it, ask
+        # before overwriting. Common causes: external editor, a second
+        # DataForge instance, or sync daemon. Ignore when we've never
+        # loaded a label (new annotation) or the file vanished.
+        if (self._label_mtime_at_load is not None
+                and label_path.is_file()):
+            try:
+                disk_mtime = label_path.stat().st_mtime
+            except OSError:
+                disk_mtime = self._label_mtime_at_load
+            if disk_mtime > self._label_mtime_at_load + 0.001:
+                box = MessageBox(
+                    "文件已被外部修改",
+                    f"{label_path.name} 在打开后被其他程序改动过。\n"
+                    "继续保存会覆盖外部修改 — 是否继续?",
+                    self.window(),
+                )
+                box.yesButton.setText("覆盖保存")
+                box.cancelButton.setText("取消")
+                if not box.exec():
+                    return
+
         try:
             write_annotation(self._annotation, label_path, img.path)
         except Exception as e:  # noqa: BLE001
@@ -458,6 +491,12 @@ class DetailView(QWidget):
         img.has_label = True
         img.label_path = label_path
         self._dirty = False
+        # Refresh the conflict-detection baseline to the file we just
+        # wrote — any further external edits show up on the next save.
+        try:
+            self._label_mtime_at_load = label_path.stat().st_mtime
+        except OSError:
+            pass
         InfoBar.success(
             title="已保存", content=str(label_path.name),
             isClosable=True, position=InfoBarPosition.TOP,

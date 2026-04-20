@@ -239,12 +239,16 @@ class DatasetBrowserView(QWidget):
         self._stats_label.setText("扫描中…")
 
         from gui.dialogs.op_dialogs import ProgressDialog
-        progress = ProgressDialog("扫描数据集", parent=self.window())
+        # Cancelable: picking the wrong directory (C:\Windows, a NAS root…)
+        # used to lock the UI until the full walk finished. Review #19.
+        progress = ProgressDialog("扫描数据集", parent=self.window(),
+                                   cancelable=True)
         progress.show()
 
         from gui.workers.scan_worker import ScanWorker
         worker = ScanWorker(root, parent=self, force_rescan=force)
         self._scan_worker = worker
+        progress.canceled.connect(worker.cancel)
 
         # Show which phase is running so 5k-image scans don't look like
         # they're looping — ScanWorker emits "scan" → "annotate" → "analyze".
@@ -294,10 +298,20 @@ class DatasetBrowserView(QWidget):
             self._open_btn.setEnabled(True)
             self._stats_label.setText(f"失败: {msg}")
 
+        def on_canceled():
+            self._scan_worker = None
+            progress.accept()
+            self._open_btn.setEnabled(True)
+            self._stats_label.setText("已取消扫描")
+            InfoBar.info("", "扫描已取消",
+                         parent=self.window(), duration=3000,
+                         position=InfoBarPosition.TOP)
+
         worker.phase.connect(on_phase)
         worker.progress.connect(on_progress)
         worker.finished_ok.connect(on_done)
         worker.failed.connect(on_fail)
+        worker.canceled.connect(on_canceled)
         worker.start()
 
     def _on_refresh(self) -> None:

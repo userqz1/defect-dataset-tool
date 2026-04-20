@@ -37,3 +37,29 @@ def clear_recent() -> None:
         RECENT_PATH.unlink()
     except OSError:
         pass
+
+
+def relocate(old_path: str, new_path: str) -> list[str]:
+    """Replace ``old_path`` with ``new_path`` in the recent list.
+
+    Review #17: users who external-renamed the dataset root (or had a NAS
+    disconnect and come back with a different mount point) can now point
+    the entry at the real location instead of losing it.
+
+    Preserves the entry's position in the list. If ``new_path`` already
+    appeared elsewhere, removes the duplicate so the relocated entry wins.
+    """
+    items = load_recent()
+    if old_path not in items:
+        return items
+    old_idx = items.index(old_path)
+    items = [p for p in items if p != old_path and p != new_path]
+    items.insert(old_idx, new_path)
+    items = items[:MAX_RECENT]
+    try:
+        RECENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        RECENT_PATH.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return items

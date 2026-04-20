@@ -31,11 +31,16 @@ class ScanResult:
         self.ext_stats = ext_stats
 
 
+class _ScanCancelled(Exception):
+    """Raised inside progress_cb to unwind scan_dataset on user cancel."""
+
+
 class ScanWorker(QThread):
     progress = pyqtSignal(int, int, str)   # done, total, current name
     phase = pyqtSignal(str)                # "scan" | "annotate" | "analyze"
     finished_ok = pyqtSignal(object)       # ScanResult
     failed = pyqtSignal(str)
+    canceled = pyqtSignal()                # user canceled mid-scan
 
     def __init__(self, root: Path, parent: QObject | None = None,
                  force_rescan: bool = False) -> None:
@@ -51,7 +56,21 @@ class ScanWorker(QThread):
         super().__init__(parent)
         self._root = root
         self._force_rescan = force_rescan
+        self._cancel_requested = False
         self.finished.connect(self.deleteLater)
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation. The next progress_cb call
+        raises _ScanCancelled, unwinding core.dataset.scan_dataset and
+        landing in this worker's except branch so ``canceled`` is emitted.
+        """
+        self._cancel_requested = True
+
+    def _cb(self, d: int, t: int, c: str) -> None:
+        """Progress callback wrapper that checks the cancel flag."""
+        if self._cancel_requested:
+            raise _ScanCancelled()
+        self.progress.emit(d, t, c)
 
     def run(self) -> None:
         # Phase 0: try cache (non-fatal — stale/corrupt cache → rescan)
@@ -74,10 +93,10 @@ class ScanWorker(QThread):
             # Still compute extended stats even for cached dataset
             self.phase.emit("analyze")
             try:
-                ext = compute_extended_stats(
-                    cached,
-                    progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
-                )
+                ext = compute_extended_stats(cached, progress_cb=self._cb)
+            except _ScanCancelled:
+                self.canceled.emit()
+                return
             except Exception:
                 logger.exception("extended stats failed on cached dataset")
                 ext = None
@@ -87,10 +106,10 @@ class ScanWorker(QThread):
         # Phase 1: filesystem scan (fatal — no dataset → no UI)
         try:
             self.phase.emit("scan")
-            dataset = scan_dataset(
-                self._root,
-                progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
-            )
+            dataset = scan_dataset(self._root, progress_cb=self._cb)
+        except _ScanCancelled:
+            self.canceled.emit()
+            return
         except Exception as e:  # noqa: BLE001
             logger.exception("scan_dataset failed for %s", self._root)
             self.failed.emit(str(e))
@@ -99,10 +118,10 @@ class ScanWorker(QThread):
         # Phase 2: parse annotation counts (non-fatal — 0 counts better than no UI)
         try:
             self.phase.emit("annotate")
-            count_annotations(
-                dataset,
-                progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
-            )
+            count_annotations(dataset, progress_cb=self._cb)
+        except _ScanCancelled:
+            self.canceled.emit()
+            return
         except Exception:
             logger.exception("count_annotations failed — continuing with 0 counts")
 
@@ -116,10 +135,10 @@ class ScanWorker(QThread):
         ext = None
         try:
             self.phase.emit("analyze")
-            ext = compute_extended_stats(
-                dataset,
-                progress_cb=lambda d, t, c: self.progress.emit(d, t, c),
-            )
+            ext = compute_extended_stats(dataset, progress_cb=self._cb)
+        except _ScanCancelled:
+            self.canceled.emit()
+            return
         except Exception:
             logger.exception("compute_extended_stats failed")
 

@@ -31,17 +31,20 @@ from gui.theme import T
 class _DatasetCard(QFrame):
     """Clickable card representing a recent dataset."""
 
-    clicked = pyqtSignal(str)           # root_path
-    remove_requested = pyqtSignal(str)  # root_path
+    clicked = pyqtSignal(str)             # root_path
+    remove_requested = pyqtSignal(str)    # root_path
+    relocate_requested = pyqtSignal(str)  # root_path — review #17
 
     def __init__(self, root_path: str, name: str, updated_at: str,
                  exists: bool, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._root = root_path
+        self._exists = exists
         self.setObjectName("formatCard")
+        # Missing entries stay clickable for the context menu (relocate
+        # lives there). A left-click on a missing card is a no-op.
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(72)
-        self.setEnabled(exists)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(T.PAD_LG, T.GAP, T.PAD_LG, T.GAP)
@@ -68,11 +71,16 @@ class _DatasetCard(QFrame):
         lay.addLayout(info)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+        if event.button() == Qt.MouseButton.LeftButton and self._exists:
             self.clicked.emit(self._root)
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
+        if not self._exists:
+            # Missing entries get a prominent relocate action at the top
+            menu.addAction("重新定位…",
+                           lambda: self.relocate_requested.emit(self._root))
+            menu.addSeparator()
         menu.addAction("从列表移除", lambda: self.remove_requested.emit(self._root))
         menu.exec(event.globalPos())
 
@@ -144,6 +152,7 @@ class DatasetWelcome(QWidget):
             )
             card.clicked.connect(self.open_dataset.emit)
             card.remove_requested.connect(self._on_remove)
+            card.relocate_requested.connect(self._on_relocate)
             self._list_lay.addWidget(card)
 
     def _on_open_dir(self) -> None:
@@ -163,4 +172,22 @@ class DatasetWelcome(QWidget):
             )
         except OSError:
             pass
+        self._load()
+
+    def _on_relocate(self, old_path: str) -> None:
+        """Point a missing recent entry at a new directory (review #17).
+
+        File picker starts at the old parent when that still exists, so
+        a renamed sibling directory is one click away.
+        """
+        from PyQt6.QtWidgets import QFileDialog
+        from core.recent import relocate
+        start = str(Path(old_path).parent) if Path(old_path).parent.exists() \
+                else str(Path.home())
+        new_path = QFileDialog.getExistingDirectory(
+            self, f"为 {Path(old_path).name} 选择新位置", start,
+        )
+        if not new_path:
+            return
+        relocate(old_path, new_path)
         self._load()

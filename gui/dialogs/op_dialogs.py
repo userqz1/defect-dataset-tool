@@ -40,9 +40,18 @@ class MoveToCategoryDialog(_OpDialogBase):
 
 
 class ProgressDialog(_OpDialogBase):
-    """Fluent 风格的进度对话框（不可取消，由调用方关闭）。"""
+    """Fluent 风格的进度对话框。
 
-    def __init__(self, title: str, parent=None) -> None:
+    Pass ``cancelable=True`` to show a working "取消" button and receive
+    ``canceled`` via the dialog's signal. Default stays non-cancelable
+    for ops that can't be safely interrupted (most batch ops that write
+    files).
+    """
+
+    from PyQt6.QtCore import pyqtSignal as _pyqtSignal
+    canceled = _pyqtSignal()
+
+    def __init__(self, title: str, parent=None, cancelable: bool = False) -> None:
         super().__init__(title, parent)
         from qfluentwidgets import IndeterminateProgressBar, ProgressBar
 
@@ -57,8 +66,12 @@ class ProgressDialog(_OpDialogBase):
         self.viewLayout.addWidget(self.indet)
 
         self.yesButton.hide()
-        self.cancelButton.hide()
-        self.buttonGroup.setFixedHeight(0)
+        if cancelable:
+            self.cancelButton.setText("取消")
+            self.cancelButton.clicked.connect(self.canceled.emit)
+        else:
+            self.cancelButton.hide()
+            self.buttonGroup.setFixedHeight(0)
         self.widget.setMinimumWidth(420)
         self._has_total = False
 
