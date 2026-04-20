@@ -44,22 +44,30 @@ class HistoryEntry:
     split-category, move-to-category, batch-rename, delete-duplicates).
     ``params`` carries the inputs the caller would need to replay the op;
     ``summary`` is the one-line Chinese description shown in the UI.
+    ``undoable`` flags whether ``try_undo_last`` knows how to reverse this
+    entry — today only ``move-to-category`` and ``rename-category``. Ops
+    that go through Recycle Bin (delete-duplicates) or lose source→target
+    grouping (merge-categories) stay ``False`` until a proper snapshot
+    model exists.
     """
     timestamp: str
     action: str
     params: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
     summary: str = ""
+    undoable: bool = False
 
     @classmethod
     def now(cls, action: str, params: dict[str, Any],
-            ok: bool = True, summary: str = "") -> "HistoryEntry":
+            ok: bool = True, summary: str = "",
+            undoable: bool = False) -> "HistoryEntry":
         return cls(
             timestamp=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             action=action,
             params=params,
             ok=ok,
             summary=summary,
+            undoable=undoable,
         )
 
 
@@ -136,6 +144,7 @@ def read_recent(root: Path, limit: int = 100) -> list[HistoryEntry]:
             params=obj.get("params") or {},
             ok=bool(obj.get("ok", True)),
             summary=str(obj.get("summary", "")),
+            undoable=bool(obj.get("undoable", False)),
         ))
     entries.reverse()  # newest first
     return entries
@@ -149,3 +158,148 @@ def clear(root: Path) -> None:
             path.unlink()
     except OSError:
         logger.exception("history clear failed at %s", path)
+
+
+# ---------- Undo MVP (single-step, reversible ops only) ----------
+#
+# This is intentionally NOT a full undo stack. It finds the most recent
+# ``undoable=True`` entry and tries to reverse just that one op. If the
+# user has moved on to other ops since, those other ops aren't rolled
+# back — the undo targets the last reversible thing.
+#
+# Supported ops today:
+#   - ``move-to-category`` — reads ``original_categories`` map (path →
+#     source category) and moves each image back. Requires the caller
+#     to populate that map at record time.
+#   - ``rename-category`` — swaps old/new name, pure filesystem rename.
+#
+# Not yet supported (stay ``undoable=False``):
+#   - ``delete-duplicates`` (Recycle-Bin restore is OS-specific)
+#   - ``merge-categories`` (source→target grouping isn't captured)
+#   - ``split-category`` (same)
+# These will be added when we design a proper BeforeState snapshot model.
+
+
+def find_last_undoable(root: Path) -> "HistoryEntry | None":
+    """Most recent successful, undoable entry that hasn't already been undone.
+
+    An undo writes a companion ``undo-<action>`` entry carrying the
+    ``undone_timestamp`` of the entry it reversed; those reversed entries
+    are skipped here so clicking 撤销 twice doesn't ping-pong.
+    """
+    entries = read_recent(root, limit=100)
+    consumed: set[str] = set()
+    for e in entries:
+        if e.action.startswith("undo-"):
+            ts = e.params.get("undone_timestamp")
+            if ts:
+                consumed.add(str(ts))
+    for e in entries:
+        if e.ok and e.undoable and e.timestamp not in consumed:
+            return e
+    return None
+
+
+def try_undo_last(root: Path) -> tuple[bool, str]:
+    """Reverse the last undoable op. Returns ``(ok, message)``.
+
+    The undo itself is logged as a new entry with ``undoable=False`` so
+    re-clicking the button doesn't ping-pong between op and anti-op.
+    """
+    entry = find_last_undoable(root)
+    if entry is None:
+        return False, "没有可撤销的操作"
+
+    root = Path(root)
+    if entry.action == "move-to-category":
+        return _undo_move_to_category(root, entry)
+    if entry.action == "rename-category":
+        return _undo_rename_category(root, entry)
+    return False, f"不支持撤销 {entry.action}"
+
+
+def _undo_move_to_category(root: Path, entry: HistoryEntry) -> tuple[bool, str]:
+    # Delayed import to keep core.history GUI-free and fileops import cheap.
+    from .fileops import label_path_for_image
+    import shutil
+
+    target = entry.params.get("target", "")
+    original = entry.params.get("original_categories") or {}
+    if not target or not original:
+        return False, "撤销所需数据不完整(缺 original_categories)"
+
+    moved_back = 0
+    failed: list[tuple[str, str]] = []
+    for src_str, orig_cat in original.items():
+        filename = Path(src_str).name
+        current = root / target / "images" / filename
+        if not current.exists():
+            failed.append((src_str, "当前位置找不到文件"))
+            continue
+        dst_dir = root / orig_cat / "images"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / filename
+        try:
+            shutil.move(str(current), str(dst))
+            # Move the label too if one exists
+            label_src = label_path_for_image(current)
+            if label_src and label_src.is_file():
+                label_dst_dir = root / orig_cat / "labels"
+                label_dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(label_src), str(label_dst_dir / label_src.name))
+            moved_back += 1
+        except (OSError, shutil.Error) as e:
+            failed.append((src_str, str(e)))
+
+    # Record the undo itself (undoable=False so we don't bounce).
+    # ``undone_timestamp`` points back at the entry we reversed so
+    # find_last_undoable can skip it on the next click.
+    append(root, HistoryEntry.now(
+        action="undo-move-to-category",
+        params={
+            "undone_timestamp": entry.timestamp,
+            "restored": moved_back,
+            "failed": len(failed),
+            "original_target": target,
+        },
+        ok=not failed,
+        summary=f"撤销: 将 {moved_back} 张图片移回原类别"
+                + (f"（{len(failed)} 失败）" if failed else ""),
+        undoable=False,
+    ))
+    if failed:
+        return False, f"已恢复 {moved_back} 张,但 {len(failed)} 张失败"
+    return True, f"已撤销移动,{moved_back} 张图片回到原类别"
+
+
+def _undo_rename_category(root: Path, entry: HistoryEntry) -> tuple[bool, str]:
+    old = entry.params.get("old")
+    new = entry.params.get("new")
+    if not old or not new:
+        return False, "撤销所需数据不完整(缺 old/new)"
+
+    src = root / new
+    dst = root / old
+    if not src.is_dir():
+        return False, f"找不到类别目录 {new}"
+    if dst.exists():
+        return False, f"原名称 {old} 已被其他类别占用"
+    try:
+        src.rename(dst)
+    except OSError as e:
+        return False, f"重命名失败: {e}"
+
+    append(root, HistoryEntry.now(
+        action="undo-rename-category",
+        params={
+            "undone_timestamp": entry.timestamp,
+            "restored_from": new,
+            "restored_to": old,
+        },
+        ok=True,
+        summary=f"撤销: 类别 {new} → {old}",
+        undoable=False,
+    ))
+    return True, f"已撤销: 类别 {new} 改回 {old}"
+
+

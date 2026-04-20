@@ -85,6 +85,15 @@ class DatasetBrowserView(QWidget):
         self._refresh_btn.clicked.connect(self._on_refresh)
         tbar_lay.addWidget(self._refresh_btn)
 
+        # Undo MVP: reverses only the most recent reversible op
+        # (move-to-category / rename-category). Other ops stay as audit log.
+        self._undo_btn = PushButton("撤销")
+        self._undo_btn.setIcon(FIF.CANCEL)
+        self._undo_btn.setFixedWidth(80)
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self._on_undo)
+        tbar_lay.addWidget(self._undo_btn)
+
         self._export_btn = PushButton("导出")
         self._export_btn.setIcon(FIF.SHARE)
         self._export_btn.setFixedWidth(80)
@@ -430,6 +439,52 @@ class DatasetBrowserView(QWidget):
         for btn in (self._refresh_btn, self._export_btn, self._quality_btn,
                     self._dedup_btn, self._history_btn, self._stats_btn):
             btn.setEnabled(enabled)
+        # Undo button is independent — gated on whether a reversible op
+        # exists in history, not just on dataset presence.
+        self._refresh_undo_enabled()
+
+    def _refresh_undo_enabled(self) -> None:
+        """Poll history for a reversible entry; called after dataset_changed."""
+        ds = self._state.dataset
+        if ds is None:
+            self._undo_btn.setEnabled(False)
+            return
+        from core.history import find_last_undoable
+        try:
+            entry = find_last_undoable(ds.root_path)
+        except Exception:
+            logger.exception("find_last_undoable failed")
+            entry = None
+        self._undo_btn.setEnabled(entry is not None)
+        if entry is not None:
+            self._undo_btn.setToolTip(f"撤销: {entry.summary}")
+        else:
+            self._undo_btn.setToolTip("没有可撤销的操作")
+
+    def _on_undo(self) -> None:
+        """Reverse the last undoable op via core.history.try_undo_last."""
+        ds = self._state.dataset
+        if ds is None:
+            return
+        from core.history import try_undo_last
+        try:
+            ok, msg = try_undo_last(ds.root_path)
+        except Exception as e:
+            logger.exception("try_undo_last raised")
+            InfoBar.error("撤销失败", str(e),
+                          parent=self.window(), duration=5000,
+                          position=InfoBarPosition.TOP)
+            return
+        if ok:
+            InfoBar.success("撤销成功", msg,
+                            parent=self.window(), duration=4000,
+                            position=InfoBarPosition.TOP)
+            # Force rescan — disk changed, index cache is now stale
+            self._rescan(force=True)
+        else:
+            InfoBar.warning("撤销失败", msg,
+                            parent=self.window(), duration=4000,
+                            position=InfoBarPosition.TOP)
 
     def _on_history(self) -> None:
         """Show the operation history for the current dataset."""

@@ -599,6 +599,9 @@ class BrowserView(QWidget):
         if not target:
             return
         root = self._state.dataset.root_path
+        # original_categories captures per-image source category so
+        # try_undo_last can move each file back, not just "some category".
+        original_categories = {str(i.path): i.category for i in sel}
         self._run(
             lambda cb: fileops.move_to_category(sel, root, target),
             self.tr("正在移动到 {target}…").format(target=target),
@@ -607,10 +610,11 @@ class BrowserView(QWidget):
                 "params": {
                     "target": target,
                     "image_count": len(sel),
-                    # capture source paths for future undo
                     "images": [str(i.path) for i in sel],
+                    "original_categories": original_categories,
                 },
                 "summary": f"移动 {len(sel)} 张到 {target}",
+                "undoable": True,
             },
         )
 
@@ -645,6 +649,7 @@ class BrowserView(QWidget):
                 "action": "rename-category",
                 "params": {"old": name, "new": new_name},
                 "summary": f"重命名类别 {name} → {new_name}",
+                "undoable": True,
             },
         )
 
@@ -804,6 +809,10 @@ class BrowserView(QWidget):
                     params=hist.get("params", {}),
                     ok=ok,
                     summary=summary,
+                    # undo MVP (#6): caller flags whether this op is
+                    # reversible by try_undo_last. Default False keeps
+                    # current behavior for merge/split/delete/etc.
+                    undoable=bool(hist.get("undoable", False)) and ok,
                 ),
             )
         except Exception:

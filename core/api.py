@@ -82,6 +82,15 @@ from .splitter import SplitOptions, SplitResult, split_dataset
 from .annotation_formats import parse_annotation
 from .annotation_writer import write_annotation
 
+# ---- History / undo MVP ----
+from .history import (
+    HistoryEntry,
+    append as history_append,
+    find_last_undoable,
+    read_recent as read_history,
+    try_undo_last,
+)
+
 
 # ---- Convenience: schema-driven export dispatcher ----
 # (Replaces the v0.1 ``core.exporter.registry.run_export`` helper now that
@@ -144,6 +153,9 @@ __all__ = [
     "SplitOptions", "SplitResult", "split_dataset",
     # Annotation I/O
     "parse_annotation", "write_annotation",
+    # History / undo
+    "HistoryEntry", "history_append", "read_history",
+    "find_last_undoable", "try_undo_last",
     # Export dispatcher
     "run_export",
     # Pipeline
