@@ -453,16 +453,15 @@ class BrowserView(QWidget):
     # ---------- 内部 ----------
 
     def _all_images(self) -> list[ImageInfo]:
-        if not self._state.dataset:
+        ds = self._state.dataset
+        if not ds:
             return []
         if self._current_category:
-            for cat in self._state.dataset.categories:
-                if cat.name == self._current_category:
-                    return list(cat.images)
-            return []
+            cat = ds.category_by_name(self._current_category)
+            return list(cat.images) if cat else []
         # 全部
         out: list[ImageInfo] = []
-        for cat in self._state.dataset.categories:
+        for cat in ds.categories:
             out.extend(cat.images)
         return out
 
@@ -760,12 +759,9 @@ class BrowserView(QWidget):
         """
         if not self._state.dataset:
             return
-        # Collect all images belonging to this category
-        cat_images: list[ImageInfo] = []
-        for c in self._state.dataset.categories:
-            if c.name == name:
-                cat_images = list(c.images)
-                break
+        # Collect all images belonging to this category (O(1) via by_name idx)
+        cat = self._state.dataset.category_by_name(name)
+        cat_images = list(cat.images) if cat else []
         if not cat_images:
             box = MessageBox(
                 self.tr("拆分类别"),

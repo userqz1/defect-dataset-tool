@@ -215,47 +215,71 @@ def execute_with_checks(
 ) -> IngestResult:
     """Copy + scan + quality + dedup, all in one pass.
 
-    The default integration for the organize view (v1.2 §6.4):
-    1. ``execute`` — copy files into standard layout
-    2. ``scan_dataset`` — build an indexed Dataset on the target
-    3. (optional) ``check_images`` — quality issues
-    4. (optional) ``find_duplicates`` — near-duplicate groups
-
-    Progress is reported per-phase with the phase name prefix (e.g.
-    ``"复制 · foo.jpg"``, ``"质检 · bar.jpg"``). The caller's progress
-    dialog resets its bar at each phase transition — this is intentional,
-    because the phases have different total counts (copy = N images,
-    quality + dedup = only the successfully copied subset).
+    Progress is weighted across phases so the bar moves monotonically
+    from 0→100% instead of the prior "fill, empty, fill, empty" stutter
+    (review #6). Weights: copy 50% / scan 5% / quality 25% / dedup 20%
+    (scan is cheap; the other three scale with image count). Each phase
+    maps its own (done, total) onto its slice; the wrapper then emits
+    ``(weighted_done, 100, prefixed_name)`` so a UI dialog sees one
+    smooth progression.
     """
-    def _phased(prefix: str):
+    # Phase weights — tuned so "copy" dominates visually because it's
+    # I/O-bound and slowest per image. Absent phases (flags off) are
+    # redistributed so active phases still end at 100.
+    w_copy = 50
+    w_scan = 5
+    w_qual = 25 if run_quality else 0
+    w_ddup = 20 if run_dedup else 0
+    w_total = w_copy + w_scan + w_qual + w_ddup
+
+    phase_offset = {"copy": 0, "scan": w_copy,
+                    "qual": w_copy + w_scan,
+                    "ddup": w_copy + w_scan + w_qual}
+    phase_w = {"copy": w_copy, "scan": w_scan,
+               "qual": w_qual, "ddup": w_ddup}
+
+    def _phased(phase: str, prefix: str):
+        """Return a progress_cb that maps (d, t) to the phase's slice."""
         if progress_cb is None:
             return None
-        return lambda d, t, n: progress_cb(d, t, f"{prefix} · {n}" if n else prefix)
+        base = phase_offset[phase]
+        span = phase_w[phase]
+
+        def cb(d: int, t: int, n: str) -> None:
+            frac = (d / t) if t else 1.0
+            weighted = int(base + span * frac)
+            progress_cb(min(weighted, w_total), w_total,
+                         f"{prefix} · {n}" if n else prefix)
+        return cb
 
     # Phase 1: copy
-    result = execute(pv, target_root, copy=copy, progress_cb=_phased("复制"))
+    result = execute(pv, target_root, copy=copy, progress_cb=_phased("copy", "复制"))
 
-    # Phase 2: scan (cheap, just one callback tick)
+    # Phase 2: scan — single-shot "start" tick + jump to end of slice.
     if progress_cb:
-        progress_cb(0, 1, "扫描数据集")
+        progress_cb(w_copy, w_total, "扫描数据集")
     from ..dataset import scan_dataset
     ds = scan_dataset(Path(target_root))
     result.dataset = ds
 
     all_images = [img for c in ds.categories for img in c.images]
     if not all_images:
-        return result  # nothing to check
+        if progress_cb:
+            progress_cb(w_total, w_total, "")
+        return result
 
     # Phase 3: quality
     if run_quality:
         from ..quality import check_images
-        result.quality_issues = check_images(all_images, progress_cb=_phased("质检"))
+        result.quality_issues = check_images(
+            all_images, progress_cb=_phased("qual", "质检"))
 
     # Phase 4: dedup
     if run_dedup:
         from ..dedup import find_duplicates
-        result.duplicate_groups = find_duplicates(all_images, progress_cb=_phased("去重"))
+        result.duplicate_groups = find_duplicates(
+            all_images, progress_cb=_phased("ddup", "去重"))
 
     if progress_cb:
-        progress_cb(1, 1, "")
+        progress_cb(w_total, w_total, "")
     return result

@@ -266,6 +266,11 @@ CaptionLabel#catalogSubtitle {
     font-weight: 600;
     letter-spacing: 1px;
 }
+CaptionLabel#catalogCocoHint {
+    color: $WARNING;
+    font-size: 11px;
+    padding-top: 4px;
+}
 QPushButton#catalogTab {
     background-color: transparent;
     border: 1px solid transparent;

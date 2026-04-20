@@ -61,8 +61,17 @@ class CatalogPanel(QFrame):
         self._title.setObjectName("catalogTitle")
         self._subtitle = CaptionLabel(f"{i18n.t('catalog.subtitle')} · —")
         self._subtitle.setObjectName("catalogSubtitle")
+        # COCO layout warning — multi-class images get bucketed under their
+        # first shape's label by core.dataset._scan_coco. Surface this so
+        # users don't trust class filters as exact (review #5). Hidden by
+        # default; .set_dataset() shows it when ds.layout == "coco".
+        self._coco_hint = CaptionLabel("⚠ 多类图按首类归并,筛选可能不精确")
+        self._coco_hint.setObjectName("catalogCocoHint")
+        self._coco_hint.setWordWrap(True)
+        self._coco_hint.hide()
         head_text.addWidget(self._title)
         head_text.addWidget(self._subtitle)
+        head_text.addWidget(self._coco_hint)
         head_lay.addLayout(head_text, 1)
 
         close_btn = ToolButton(FIF.CLOSE)
@@ -132,6 +141,7 @@ class CatalogPanel(QFrame):
         self._distribution.set_dataset(ds)
         self._refresh_subtitle(ds)
         self._resort(self._sort)
+        self._coco_hint.setVisible(ds.layout == "coco")
 
     def clear(self) -> None:
         self._dataset = None

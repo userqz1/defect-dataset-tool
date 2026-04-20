@@ -45,3 +45,19 @@ class Dataset:
     total_annotations: int = 0
     layout: str = "standard"  # standard / flat / single / recursive / empty
     fingerprint: str = ""  # sha1(scanned_at + top-level mtimes); empty = uncached
+
+    def category_by_name(self, name: str) -> "Category | None":
+        """O(1) lookup for a category by name.
+
+        BrowserView's filter / search paths repeatedly ask "give me all
+        images in category X" (review #8). A linear scan is fine for 10
+        classes and a noticeable drag at 100+. Lazy-build the index on
+        first call and cache it on the instance; ``_by_name`` is
+        intentionally NOT part of the dataclass fields so it stays out
+        of scheme/project serialization.
+        """
+        idx = getattr(self, "_by_name", None)
+        if idx is None or len(idx) != len(self.categories):
+            idx = {c.name: c for c in self.categories}
+            object.__setattr__(self, "_by_name", idx)
+        return idx.get(name)
