@@ -849,11 +849,15 @@ class BrowserView(QWidget):
             except Exception:
                 logger.exception("index cache clear failed")
         # Append to operation history BEFORE surfacing UI feedback, so a
-        # blocking dialog can't silently drop the log entry.
+        # blocking dialog can't silently drop the log entry. Forward the
+        # result's moves map (populated by fileops.move_to_category, empty
+        # for other ops) so try_undo_last can locate files that landed
+        # with _ensure_unique renames.
         self._record_history(
             ok=result.fail_count == 0,
             ok_count=getattr(result, "ok_count", 0),
             fail_count=getattr(result, "fail_count", 0),
+            moves=getattr(result, "moves", None),
         )
         if result.fail_count:
             details = "\n".join(f"{p}\n  → {err}" for p, err in result.failed[:200])
@@ -879,7 +883,8 @@ class BrowserView(QWidget):
         box.exec()
 
     def _record_history(self, ok: bool, ok_count: int = 0,
-                         fail_count: int = 0, error: str = "") -> None:
+                         fail_count: int = 0, error: str = "",
+                         moves: dict[str, str] | None = None) -> None:
         """Append a single JSONL entry for the just-finished metadata op.
 
         No-op when the caller didn't pass ``history=`` to _run (pure image
@@ -896,12 +901,17 @@ class BrowserView(QWidget):
             summary = f"{summary}（失败：{error}）"
         elif fail_count:
             summary = f"{summary}（{ok_count} 成功 / {fail_count} 失败）"
+        # Merge actual landed paths (review #11) so undo can find files
+        # that _ensure_unique renamed on conflict.
+        params = dict(hist.get("params", {}))
+        if moves:
+            params["moves"] = moves
         try:
             _hist.append(
                 self._state.dataset.root_path,
                 _hist.HistoryEntry.now(
                     action=hist.get("action", "unknown"),
-                    params=hist.get("params", {}),
+                    params=params,
                     ok=ok,
                     summary=summary,
                     # undo MVP (#6): caller flags whether this op is

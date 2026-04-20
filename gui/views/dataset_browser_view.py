@@ -763,6 +763,9 @@ class DatasetBrowserView(QWidget):
                             "image_count": 1,
                             "images": [original_path],
                             "original_categories": {original_path: original_category},
+                            # review #11: landed path so undo can find the
+                            # file even if _ensure_unique renamed it.
+                            "moves": dict(getattr(result, "moves", {}) or {}),
                         },
                         ok=True,
                         summary=f"移动 1 张到 {target}",

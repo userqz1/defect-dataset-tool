@@ -225,14 +225,23 @@ def _undo_move_to_category(root: Path, entry: HistoryEntry) -> tuple[bool, str]:
 
     target = entry.params.get("target", "")
     original = entry.params.get("original_categories") or {}
+    # review #11: fileops.move_to_category writes a source→landed map into
+    # OpResult.moves to record _ensure_unique renames. Use it when present;
+    # fall back to "<target>/images/<original_filename>" only for legacy
+    # history entries that predate the moves field.
+    moves = entry.params.get("moves") or {}
     if not target or not original:
         return False, "撤销所需数据不完整(缺 original_categories)"
 
     moved_back = 0
     failed: list[tuple[str, str]] = []
     for src_str, orig_cat in original.items():
-        filename = Path(src_str).name
-        current = root / target / "images" / filename
+        landed_str = moves.get(src_str)
+        if landed_str:
+            current = Path(landed_str)
+        else:
+            current = root / target / "images" / Path(src_str).name
+        filename = current.name
         if not current.exists():
             failed.append((src_str, "当前位置找不到文件"))
             continue

@@ -14,7 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush, QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPen,
+)
 from PyQt6.QtWidgets import QFrame, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel
 from qfluentwidgets.window.fluent_window import FluentTitleBar
@@ -68,14 +70,19 @@ class _BrandChip(QWidget):
         hr = QRectF(1, 1, rect.width() - 2, rect.height() * 0.45)
         p.drawRoundedRect(hr, 4.0, 4.0)
 
-        # Italic serif 'D'
+        # Italic serif 'D'. Walk the fallback stack via QFontDatabase —
+        # ``QFont(family).exactMatch()`` returns False in most Qt builds
+        # when no point size is set, which makes the old probe always
+        # fall through to the last entry (review #12). Checking
+        # ``families()`` membership is the reliable way.
         font = QFont()
-        # Georgia on Windows is the reliable italic-serif; fall back to
-        # Songti SC on zh-CN installs that somehow lack Georgia.
+        installed = set(QFontDatabase.families())
         for family in ("Georgia", "Songti SC", "Noto Serif SC", "Times New Roman"):
-            font.setFamily(family)
-            if QFont(family).exactMatch():
+            if family in installed:
+                font.setFamily(family)
                 break
+        else:
+            font.setFamily("serif")
         font.setPointSize(11)
         font.setWeight(QFont.Weight.DemiBold)
         font.setItalic(True)

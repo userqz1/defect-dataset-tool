@@ -90,48 +90,51 @@ def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
 
     Thread-safe: coalesces concurrent misses on the same path via an
     inflight-events map, so a 500MB COCO file is parsed at most once
-    per mtime even under 8-way parallel ingest.
+    per mtime even under 8-way parallel ingest. The waiter-wakeup-miss
+    path (cache was evicted while waiters slept) also re-enters the
+    ownership race instead of every waiter parsing independently
+    (review #7 — with a cache of size 8 and 8 waiters this edge case
+    isn't rare when ingesting multiple COCO datasets back-to-back).
     """
     try:
         mtime = json_path.stat().st_mtime_ns
     except OSError:
         return None
 
-    is_owner = False
-    with _COCO_CACHE_LOCK:
-        cached = _COCO_CACHE.get(json_path)
-        if cached and cached[0] == mtime:
-            return cached[1]
-        inflight = _COCO_CACHE_INFLIGHT.get(json_path)
-        if inflight is None:
-            inflight = _threading.Event()
-            _COCO_CACHE_INFLIGHT[json_path] = inflight
-            is_owner = True
+    while True:
+        is_owner = False
+        with _COCO_CACHE_LOCK:
+            cached = _COCO_CACHE.get(json_path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            inflight = _COCO_CACHE_INFLIGHT.get(json_path)
+            if inflight is None:
+                inflight = _threading.Event()
+                _COCO_CACHE_INFLIGHT[json_path] = inflight
+                is_owner = True
 
-    if not is_owner:
-        # Another thread is already parsing this file; block until it's done,
-        # then re-read the cache it populated.
+        if is_owner:
+            # Parse outside the lock (I/O + JSON decode can be slow).
+            try:
+                idx = parse_coco(json_path)
+            finally:
+                with _COCO_CACHE_LOCK:
+                    if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
+                        _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
+                    _COCO_CACHE[json_path] = (mtime, idx)
+                    _COCO_CACHE_INFLIGHT.pop(json_path, None)
+                inflight.set()
+            return idx
+
+        # Waiter: block until the owner publishes, then consult the cache.
         inflight.wait()
         with _COCO_CACHE_LOCK:
             cached = _COCO_CACHE.get(json_path)
             if cached and cached[0] == mtime:
                 return cached[1]
-        # Cache miss after waiter wakeup (evicted or owner failed) —
-        # fall through and parse ourselves, without claiming ownership
-        # (rare edge case, accept duplicate parse vs. retry-loop complexity).
-        return parse_coco(json_path)
-
-    # Owner: parse outside the lock (I/O + JSON decode can be slow).
-    try:
-        idx = parse_coco(json_path)
-    finally:
-        with _COCO_CACHE_LOCK:
-            if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
-                _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
-            _COCO_CACHE[json_path] = (mtime, idx)
-            _COCO_CACHE_INFLIGHT.pop(json_path, None)
-        inflight.set()
-    return idx
+        # Cache miss after wakeup — owner failed or LRU evicted our entry.
+        # Loop back and race for ownership instead of every waker parsing
+        # the same 500MB JSON in parallel.
 
 
 def detect_format(label_path: Path) -> str:
@@ -180,8 +183,14 @@ def parse_yolo(
 ) -> ParseResult:
     """Parse a YOLO .txt label file. Each line: 'cls cx cy w h' (normalized 0-1).
 
-    Without image size, points are kept as normalized (0..1) values; consumers
-    that need pixel coords should pass image_path.
+    Returns ``ParseResult`` with:
+
+    - ``coord_space="pixel"`` when an ``image_path`` is supplied (and the
+      image opens) — points are denormalized to pixel coords.
+    - ``coord_space="normalized"`` when no image is supplied or the open
+      fails — points stay in the raw 0..1 space. Consumers MUST check
+      this field before writing the result back out; treating normalized
+      points as pixels silently corrupts data (review #4).
     """
     try:
         text = label_path.read_text(encoding="utf-8")
@@ -189,7 +198,12 @@ def parse_yolo(
         return ParseResult(None, f"read failed: {e}")
 
     size = _image_size(image_path)
-    iw, ih = size if size else (1, 1)
+    if size is not None:
+        iw, ih = size
+        coord_space = "pixel"
+    else:
+        iw, ih = 1, 1
+        coord_space = "normalized"
 
     shapes: list[Shape] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -204,7 +218,7 @@ def parse_yolo(
             cx, cy, w, h = (float(x) for x in parts[1:5])
         except ValueError:
             continue
-        # 反归一化到像素坐标（若有 image size）
+        # 反归一化到像素坐标（若有 image size）；否则留作归一化。
         cxp, cyp = cx * iw, cy * ih
         wp, hp = w * iw, h * ih
         x1, y1 = cxp - wp / 2, cyp - hp / 2
@@ -218,7 +232,8 @@ def parse_yolo(
         )
 
     return ParseResult(
-        Annotation(image_path=image_path or label_path.with_suffix(".jpg"), shapes=shapes)
+        Annotation(image_path=image_path or label_path.with_suffix(".jpg"), shapes=shapes),
+        coord_space=coord_space,
     )
 
 

@@ -134,6 +134,29 @@ class TestParseYolo:
         r = parse_yolo(tmp_path / "nonexistent.txt")
         assert not r.ok
 
+    def test_coord_space_pixel_when_image_given(self, tmp_path):
+        """With image_path, coords denormalize to pixel space (review #4)."""
+        img_p = _touch(tmp_path / "a.jpg", _make_png())
+        p = _touch(tmp_path / "a.txt", "0 0.5 0.5 1.0 1.0\n")
+        r = parse_yolo(p, image_path=img_p)
+        assert r.ok
+        assert r.coord_space == "pixel"
+
+    def test_coord_space_normalized_without_image(self, tmp_path):
+        """Without image_path, coords stay 0..1 and the flag flags it.
+
+        Downstream writers must check coord_space to avoid treating 0.5 as
+        "0.5 pixels" and silently writing a corrupt annotation.
+        """
+        p = _touch(tmp_path / "a.txt", "0 0.5 0.5 0.2 0.3\n")
+        r = parse_yolo(p)
+        assert r.ok
+        assert r.coord_space == "normalized"
+        s = r.annotation.shapes[0]
+        # Points are in 0..1 space, not pixels
+        for x, y in s.points:
+            assert 0 <= x <= 1 and 0 <= y <= 1
+
 
 class TestLoadYoloClasses:
     def test_from_classes_txt(self, tmp_path):

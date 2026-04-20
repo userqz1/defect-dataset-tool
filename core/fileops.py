@@ -19,6 +19,11 @@ from .models import ImageInfo
 class OpResult:
     succeeded: list[Path] = field(default_factory=list)
     failed: list[tuple[Path, str]] = field(default_factory=list)
+    # Per-operation source→destination map for ops that rename on land
+    # (move_to_category uses _ensure_unique and may append _1 on conflict).
+    # Undo needs this to locate the actually-landed file, not the original
+    # filename (review #11). Other ops leave this empty.
+    moves: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok_count(self) -> int:
@@ -123,9 +128,13 @@ def move_to_category(
         if progress_cb:
             progress_cb(i, total, img.path.name)
         try:
+            src_path_str = str(img.path)
             new_image = target_images_dir / img.path.name
             new_image = _ensure_unique(new_image)
             shutil.move(str(img.path), str(new_image))
+            # Record source→landed so undo can find the file even if
+            # _ensure_unique renamed foo.jpg → foo_1.jpg on conflict.
+            result.moves[src_path_str] = str(new_image)
 
             label = img.label_path or label_path_for_image(img.path)
             if label and label.is_file():

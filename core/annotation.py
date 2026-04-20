@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .models import Annotation, Shape
 
@@ -12,6 +13,13 @@ from .models import Annotation, Shape
 class ParseResult:
     annotation: Annotation | None
     error: str | None = None
+    # Coordinate space of Shape.points in the returned Annotation.
+    # LabelMe / COCO / VOC always emit pixel coords; YOLO needs the image's
+    # pixel size to denormalize — callers that invoke parse_yolo without an
+    # image_path get "normalized" (0..1) points and must scale themselves.
+    # Checking this field on read is a guard against writing the wrong
+    # coord space back to disk (review #4).
+    coord_space: Literal["pixel", "normalized"] = "pixel"
 
     @property
     def ok(self) -> bool:

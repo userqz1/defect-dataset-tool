@@ -36,13 +36,19 @@ class _ImageLoader(QThread):
     """Load image + parse annotation off the main thread.
 
     Emits QImage (thread-safe), NOT QPixmap. The main-thread slot
-    must do QPixmap.fromImage() itself.
+    must do QPixmap.fromImage() itself. Each loader carries a
+    ``generation`` token so the slot can drop stale results — cancel()
+    is best-effort (wait(500) may time out while reading large TIFFs)
+    and a late ``done`` signal would otherwise clobber the viewer with
+    the wrong image. Review #9.
     """
-    done = pyqtSignal(object, object, object)  # (QImage, Annotation|None, ImageInfo)
+    # Payload: (QImage, Annotation|None, ImageInfo, generation)
+    done = pyqtSignal(object, object, object, int)
 
-    def __init__(self, img: ImageInfo, parent=None):
+    def __init__(self, img: ImageInfo, generation: int, parent=None):
         super().__init__(parent)
         self._img = img
+        self._gen = generation
         self._cancelled = False
 
     def cancel(self):
@@ -65,7 +71,7 @@ class _ImageLoader(QThread):
                 annotation = result.annotation
 
         if not self._cancelled:
-            self.done.emit(image, annotation, self._img)
+            self.done.emit(image, annotation, self._img, self._gen)
 
 
 class DetailView(QWidget):
@@ -86,6 +92,9 @@ class DetailView(QWidget):
         # mtime baseline for review #22 conflict check; per-method annotation
         # had no runtime effect (PEP 526 only applies at class/module scope).
         self._label_mtime_at_load: float | None = None
+        # review #9: increments on every _load_current; _on_image_loaded
+        # ignores any (stale) result whose generation != current.
+        self._load_generation: int = 0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -334,16 +343,23 @@ class DetailView(QWidget):
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
 
-        # 图片 + 标注异步加载
+        # 图片 + 标注异步加载 — bump generation so any stale ``done``
+        # signal from a still-running old loader is ignored (review #9).
+        self._load_generation += 1
         if hasattr(self, "_loader") and self._loader and self._loader.isRunning():
             self._loader.cancel()
             self._loader.wait(500)
-        self._loader = _ImageLoader(img, parent=self)
+        self._loader = _ImageLoader(img, self._load_generation, parent=self)
         self._loader.done.connect(self._on_image_loaded)
         self._loader.start()
 
-    def _on_image_loaded(self, qimage: QImage, annotation, img: ImageInfo) -> None:
-        """Worker 完成后在主线程设置 viewer。QImage→QPixmap 必须在主线程。"""
+    def _on_image_loaded(self, qimage: QImage, annotation, img: ImageInfo,
+                          generation: int) -> None:
+        """Worker 完成后在主线程设置 viewer。QImage→QPixmap 必须在主线程."""
+        # Drop late deliveries: a slow load that finishes after the user
+        # pressed next/prev would otherwise paint the wrong image.
+        if generation != self._load_generation:
+            return
         if not qimage.isNull():
             self.viewer.load_pixmap(QPixmap.fromImage(qimage))
         self._annotation = annotation
