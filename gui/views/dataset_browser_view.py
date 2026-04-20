@@ -166,6 +166,11 @@ class DatasetBrowserView(QWidget):
             lambda: self._rescan(force=True)
         )
 
+        # "加入手动划分 → Train/Val/Test" was emitting into the void before
+        # (review #9). Hook it to SplitState so the selection actually
+        # persists across sessions.
+        self._browser.add_to_split.connect(self._on_add_to_split)
+
         # Listen to AppState for dataset changes from other sources
         self._state.dataset_changed.connect(self._on_dataset_changed)
 
@@ -506,6 +511,54 @@ class DatasetBrowserView(QWidget):
             return
         from gui.dialogs.history_dialog import HistoryDialog
         HistoryDialog(ds.root_path, parent=self.window()).exec()
+
+    def _on_add_to_split(self, bucket: str, images: list) -> None:
+        """Right-click → "加入手动划分 → Train/Val/Test" handler (review #9).
+
+        Writes image paths into Project.split_state.manual_<bucket> and
+        saves the project. Duplicates are de-duped; images already in
+        other buckets get moved (a path can only live in one bucket at a
+        time or SplitOptions(mode=manual) would double-count it).
+        """
+        project = self._state.project
+        if project is None:
+            return
+        if bucket not in ("train", "val", "test"):
+            return
+        ss = project.split_state
+        lists = {
+            "train": ss.manual_train,
+            "val": ss.manual_val,
+            "test": ss.manual_test,
+        }
+        target = lists[bucket]
+        # Strip from other buckets first — a given path belongs to exactly one.
+        new_paths = [str(i.path) for i in images]
+        for key, lst in lists.items():
+            if key == bucket:
+                continue
+            lst[:] = [p for p in lst if p not in new_paths]
+        # Dedupe + append to target bucket, preserving insertion order.
+        seen = set(target)
+        for p in new_paths:
+            if p not in seen:
+                target.append(p)
+                seen.add(p)
+
+        from core.project import save_project
+        try:
+            save_project(project)
+        except Exception:
+            logger.exception("save_project failed after add_to_split")
+
+        bucket_cn = {"train": "训练集", "val": "验证集", "test": "测试集"}[bucket]
+        InfoBar.success(
+            "",
+            f"已加入 {bucket_cn}:{len(new_paths)} 张 "
+            f"(当前合计 {len(target)} 张)",
+            parent=self.window(), duration=3500,
+            position=InfoBarPosition.TOP,
+        )
 
     def _all_images(self):
         """Iterate over all images in the current dataset.

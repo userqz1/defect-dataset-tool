@@ -6,6 +6,7 @@ unknown fields), but fall back to a clean serialization if no original exists.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -70,6 +71,9 @@ def write_labelme(annotation: Annotation, label_path: Path, image_path: Path) ->
 
 # ---------- YOLO ----------
 
+_CLASSES_TXT_LOCK = threading.Lock()
+
+
 def write_yolo(annotation: Annotation, label_path: Path, image_path: Path) -> None:
     iw, ih = _image_size(image_path)
     if iw <= 0 or ih <= 0:
@@ -78,13 +82,14 @@ def write_yolo(annotation: Annotation, label_path: Path, image_path: Path) -> No
     name_to_idx = {n: i for i, n in enumerate(classes)}
 
     lines: list[str] = []
+    new_classes: list[str] = []  # labels seen in this annotation that aren't in classes.txt
     for s in annotation.shapes:
         if not s.points or len(s.points) < 2:
             continue
-        # 注册新类别 → 追加到 classes.txt
         if s.label not in name_to_idx:
             name_to_idx[s.label] = len(name_to_idx)
             classes.append(s.label)
+            new_classes.append(s.label)
         idx = name_to_idx[s.label]
         xs = [p[0] for p in s.points]
         ys = [p[1] for p in s.points]
@@ -100,9 +105,22 @@ def write_yolo(annotation: Annotation, label_path: Path, image_path: Path) -> No
 
     label_path.parent.mkdir(parents=True, exist_ok=True)
     label_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    # 同步 classes.txt
-    classes_path = label_path.parent / "classes.txt"
-    classes_path.write_text("\n".join(classes) + "\n", encoding="utf-8")
+
+    # classes.txt — review #25:
+    # 1) Only rewrite when this annotation introduces a new label (most saves
+    #    are pure edits of existing classes → no file touch at all).
+    # 2) Under a lock, re-read the file so we don't blow away labels another
+    #    thread appended while we were working.
+    # 3) Append to the existing list — preserves user's manual ordering /
+    #    deletes / comments were they to hand-edit classes.txt between saves.
+    if new_classes:
+        classes_path = label_path.parent / "classes.txt"
+        with _CLASSES_TXT_LOCK:
+            disk_classes = load_yolo_classes(label_path.parent)
+            for lbl in new_classes:
+                if lbl not in disk_classes:
+                    disk_classes.append(lbl)
+            classes_path.write_text("\n".join(disk_classes) + "\n", encoding="utf-8")
 
 
 # ---------- Pascal VOC ----------

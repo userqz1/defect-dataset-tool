@@ -230,8 +230,17 @@ class OrganizeView(QWidget):
                             position=InfoBarPosition.TOP)
             return
 
-        from core.ingest import RULES, preview
-        rule = RULES[self._rule_key()]
+        # Review #23: the default RULES["by_subdir"] is a module-level
+        # singleton with source_root=None, which made images directly
+        # under the user's picked root look like they belonged to a
+        # category named after the root directory itself. Build a fresh
+        # rule instance so source_root points at the real selection.
+        from core.ingest import BySubdirRule, RULES, preview
+        rule_key = self._rule_key()
+        if rule_key == "by_subdir":
+            rule = BySubdirRule(source_root=self._source_dir)
+        else:
+            rule = RULES[rule_key]
         self._preview = preview(self._discovered, rule)
 
         # Fill table

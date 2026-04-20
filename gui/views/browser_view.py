@@ -676,24 +676,42 @@ class BrowserView(QWidget):
         )
 
     def _do_split_category(self, name: str) -> None:
+        """Right-click → 拆分类别. Dialog now embeds its own picker
+        (review #13) so the user doesn't have to pre-select in the grid.
+        Any current grid selection is preselected in the list for
+        convenience.
+        """
         if not self._state.dataset:
             return
-        sel = self.get_selected_images()
-        if not sel:
+        # Collect all images belonging to this category
+        cat_images: list[ImageInfo] = []
+        for c in self._state.dataset.categories:
+            if c.name == name:
+                cat_images = list(c.images)
+                break
+        if not cat_images:
             box = MessageBox(
                 self.tr("拆分类别"),
-                self.tr("请先在网格中勾选要拆出的图片"),
+                self.tr("该类别没有图片可拆分"),
                 self.window(),
             )
             box.cancelButton.hide()
             box.exec()
             return
+
         from gui.dialogs.category_dialogs import SplitCategoryDialog
         cats = self.tree.get_category_names()
-        dlg = SplitCategoryDialog(name, len(sel), cats, parent=self.window())
+        preselected = self.get_selected_images()
+        dlg = SplitCategoryDialog(
+            name, cat_images, cats,
+            preselected=preselected, parent=self.window(),
+        )
         if not dlg.exec():
             return
         new_name = dlg.new_name()
+        sel = dlg.selected_images()
+        if not sel:
+            return  # defensive; the dialog's OK button is disabled without selection
         root = self._state.dataset.root_path
         self._run(
             lambda cb: fileops.split_category(root, name, new_name, sel, progress_cb=cb),
