@@ -43,9 +43,12 @@ class DatasetBrowserView(QWidget):
         self._scan_worker = None
         self._export_worker = None
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        root_lay = QVBoxLayout(self)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+        # `lay` kept as local alias so the existing topbar block below
+        # (path + stats + open_btn) stays identical structurally.
+        lay = root_lay
 
         # -- Top bar: path + stats + open button --
         topbar = QFrame()
@@ -70,84 +73,48 @@ class DatasetBrowserView(QWidget):
 
         lay.addWidget(topbar)
 
-        # -- Toolbar: quick-access tools --
-        toolbar = QFrame()
-        toolbar.setObjectName("detailTopBar")
-        toolbar.setFixedHeight(38)
-        tbar_lay = QHBoxLayout(toolbar)
-        tbar_lay.setContentsMargins(T.PAD_LG, 0, T.PAD_LG, 0)
-        tbar_lay.setSpacing(T.GAP)
-
-        self._refresh_btn = PushButton("刷新")
-        self._refresh_btn.setIcon(FIF.SYNC)
-        self._refresh_btn.setFixedWidth(80)
-        self._refresh_btn.setEnabled(False)
-        self._refresh_btn.clicked.connect(self._on_refresh)
-        tbar_lay.addWidget(self._refresh_btn)
-
-        # Undo MVP: reverses only the most recent reversible op
-        # (move-to-category / rename-category). Other ops stay as audit log.
-        self._undo_btn = PushButton("撤销")
-        self._undo_btn.setIcon(FIF.CANCEL)
-        self._undo_btn.setFixedWidth(80)
-        self._undo_btn.setEnabled(False)
-        self._undo_btn.clicked.connect(self._on_undo)
-        tbar_lay.addWidget(self._undo_btn)
-
-        self._export_btn = PushButton("导出")
-        self._export_btn.setIcon(FIF.SHARE)
-        self._export_btn.setFixedWidth(80)
-        self._export_btn.setEnabled(False)
-        self._export_btn.clicked.connect(self._on_export)
-        tbar_lay.addWidget(self._export_btn)
-
-        self._quality_btn = PushButton("质检")
-        self._quality_btn.setIcon(FIF.SEARCH)
-        self._quality_btn.setFixedWidth(80)
-        self._quality_btn.setEnabled(False)
-        self._quality_btn.clicked.connect(self._on_quality_check)
-        tbar_lay.addWidget(self._quality_btn)
-
-        self._dedup_btn = PushButton("去重")
-        self._dedup_btn.setIcon(FIF.COPY)
-        self._dedup_btn.setFixedWidth(80)
-        self._dedup_btn.setEnabled(False)
-        self._dedup_btn.clicked.connect(self._on_dedup)
-        tbar_lay.addWidget(self._dedup_btn)
-
-        # "处理" dropdown — transform / convert / augment / predict.
-        # All core modules (transform / convert / augment / predictor)
-        # had no GUI entry point before this; review stage 2.
-        self._process_btn = PushButton("处理")
-        self._process_btn.setIcon(FIF.DEVELOPER_TOOLS)
-        self._process_btn.setFixedWidth(90)
-        self._process_btn.setEnabled(False)
-        self._process_btn.clicked.connect(self._show_process_menu)
-        tbar_lay.addWidget(self._process_btn)
-
-        tbar_lay.addStretch()
-
-        self._history_btn = PushButton("历史")
-        self._history_btn.setIcon(FIF.HISTORY)
-        self._history_btn.setFixedWidth(80)
-        self._history_btn.setEnabled(False)
-        self._history_btn.clicked.connect(self._on_history)
-        tbar_lay.addWidget(self._history_btn)
-
-        self._stats_btn = PushButton("统计")
-        self._stats_btn.setIcon(FIF.PIE_SINGLE)
-        self._stats_btn.setFixedWidth(80)
-        self._stats_btn.setEnabled(False)
-        self._stats_btn.clicked.connect(self._on_stats)
-        tbar_lay.addWidget(self._stats_btn)
-
-        lay.addWidget(toolbar)
+        # -- Vertical ToolSidebar (replaces the old horizontal toolbar) --
+        # User feedback: the horizontal row crammed 6+ buttons into a
+        # single line and forced "处理" into a dropdown. Vertical layout
+        # gives every action its own first-class row.
+        from gui.widgets.tool_sidebar import ToolSidebar
+        self._tool_sidebar = ToolSidebar()
+        self._tool_sidebar.refresh_requested.connect(self._on_refresh)
+        self._tool_sidebar.undo_requested.connect(self._on_undo)
+        self._tool_sidebar.quality_requested.connect(self._on_quality_check)
+        self._tool_sidebar.dedup_requested.connect(self._on_dedup)
+        self._tool_sidebar.resize_requested.connect(self._on_resize)
+        self._tool_sidebar.crop_requested.connect(self._on_crop)
+        self._tool_sidebar.rotate_requested.connect(self._on_rotate)
+        self._tool_sidebar.flip_requested.connect(self._on_flip)
+        self._tool_sidebar.convert_requested.connect(self._on_convert)
+        self._tool_sidebar.augment_requested.connect(self._on_augment)
+        self._tool_sidebar.predict_requested.connect(self._on_predict)
+        self._tool_sidebar.export_requested.connect(self._on_export)
+        self._tool_sidebar.history_requested.connect(self._on_history)
+        self._tool_sidebar.stats_requested.connect(self._on_stats)
 
         # -- Browser + Detail stack --
         self._browser_stack = QStackedWidget()
         # BrowserView reads dataset/task_type via AppState — single truth.
         self._browser = BrowserView(app_state=self._state)
         self._detail = DetailView()
+
+        # body = tool_sidebar + browser_stack (side by side)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self._tool_sidebar)
+        body.addWidget(self._browser_stack, 1)
+        lay.addLayout(body)
+
+        # ToolSidebar is meaningless in DetailView (single-image ops live in
+        # detail_view's own topbar); hide it on stack switch.
+        self._browser_stack.currentChanged.connect(
+            lambda idx: self._tool_sidebar.setVisible(
+                self._browser_stack.widget(idx) is self._browser
+            )
+        )
 
         self._thumb = ThumbnailWorker(size=170, parent=self)
         self._thumb.start()
@@ -170,7 +137,8 @@ class DatasetBrowserView(QWidget):
 
         self._browser_stack.addWidget(self._browser)
         self._browser_stack.addWidget(self._detail)
-        lay.addWidget(self._browser_stack, 1)
+        # Note: _browser_stack is already placed inside `body` above
+        # alongside _tool_sidebar; no second lay.addWidget here.
 
         # Re-scan when browser reports file-system changes (delete / move /
         # category ops). force=True so fingerprint-based cache-hit doesn't
@@ -488,20 +456,16 @@ class DatasetBrowserView(QWidget):
         self._export_worker = worker
 
     def _set_tools_enabled(self, enabled: bool) -> None:
-        """Enable/disable all toolbar buttons."""
-        for btn in (self._refresh_btn, self._export_btn, self._quality_btn,
-                    self._dedup_btn, self._process_btn,
-                    self._history_btn, self._stats_btn):
-            btn.setEnabled(enabled)
-        # Undo button is independent — gated on whether a reversible op
-        # exists in history, not just on dataset presence.
+        """Enable/disable ToolSidebar buttons en masse."""
+        self._tool_sidebar.set_enabled(enabled)
+        # Undo is separately gated on history having a reversible entry
         self._refresh_undo_enabled()
 
     def _refresh_undo_enabled(self) -> None:
         """Poll history for a reversible entry; called after dataset_changed."""
         ds = self._state.dataset
         if ds is None:
-            self._undo_btn.setEnabled(False)
+            self._tool_sidebar.set_undo_enabled(False)
             return
         from core.history import find_last_undoable
         try:
@@ -509,11 +473,11 @@ class DatasetBrowserView(QWidget):
         except Exception:
             logger.exception("find_last_undoable failed")
             entry = None
-        self._undo_btn.setEnabled(entry is not None)
+        self._tool_sidebar.set_undo_enabled(entry is not None)
         if entry is not None:
-            self._undo_btn.setToolTip(f"撤销: {entry.summary}")
+            self._tool_sidebar.set_undo_tooltip(f"撤销: {entry.summary}")
         else:
-            self._undo_btn.setToolTip("没有可撤销的操作")
+            self._tool_sidebar.set_undo_tooltip("没有可撤销的操作")
 
     def _on_undo(self) -> None:
         """Reverse the last undoable op via core.history.try_undo_last."""
@@ -541,25 +505,8 @@ class DatasetBrowserView(QWidget):
                             position=InfoBarPosition.TOP)
 
     # -- 处理 (transform / convert / augment / predict) ----------------
-
-    def _show_process_menu(self) -> None:
-        """Open the 处理 dropdown menu anchored under the button."""
-        from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self)
-
-        transform_menu = menu.addMenu("变换")
-        transform_menu.addAction("缩放…", self._on_resize)
-        transform_menu.addAction("裁剪…", self._on_crop)
-        transform_menu.addAction("旋转…", self._on_rotate)
-        transform_menu.addAction("翻转…", self._on_flip)
-        menu.addAction("格式转换…", self._on_convert)
-        menu.addAction("数据增强…", self._on_augment)
-        menu.addAction("AI 预标注…", self._on_predict)
-
-        # Anchor below the button
-        pos = self._process_btn.mapToGlobal(
-            self._process_btn.rect().bottomLeft())
-        menu.exec(pos)
+    # Previously dropped down from a single "处理" button; now each action
+    # is a first-class row in ToolSidebar, so this dispatcher is gone.
 
     def _run_transform(self, dlg_cls, op_fn, dlg_title_for_runner: str) -> None:
         """Shared plumbing for 4 transforms — dialog → BatchRunner."""

@@ -121,6 +121,17 @@ QFrame#categorySidebar {
     border-right: 1px solid $BORDER;
 }
 
+/* ToolSidebar — left-hand vertical tool panel (replaces old top toolbar) */
+QFrame#toolSidebar {
+    background-color: $SIDEBAR;
+    border-right: 1px solid $BORDER;
+}
+CaptionLabel#toolSidebarSection {
+    color: $TEXT_3;
+    padding: ${GAP_LG}px ${GAP}px ${GAP_XS}px ${GAP}px;
+    font-weight: bold;
+}
+
 QLabel#sectionHeader {
     color: $TEXT_2;
     border-bottom: 1px solid $BORDER;
