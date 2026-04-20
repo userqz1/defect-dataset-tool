@@ -1,13 +1,21 @@
-"""Append-only operation history for a dataset project.
+"""Append-only audit log for dataset metadata operations.
 
 Every metadata-changing operation (rename/merge/split category, batch
 rename, move-to-category, delete-duplicates) appends one JSON line to
-``<root>/.dataforge/history.jsonl``. Each entry captures *enough* before-
-and-after state that a future Undo phase can roll forward from here.
+``<root>/.dataforge/history.jsonl``. This is an **audit log**, not an
+undo primitive — review point #6:
 
-This module intentionally does NOT implement undo — reviewer's note was
-"不需要一上来做完整 undo,但至少应该给 ... 这类'元数据'操作留一个
-history.json,记录每次改动的前后快照。" That is what this does.
+- Entries capture the operation's declared parameters, not full
+  file-system snapshots. ``move-to-category`` records source paths at
+  call time, which may no longer exist by the time you'd try to undo.
+- ``delete-duplicates`` records the trashed paths as plain strings, but
+  OS Recycle Bin mappings are not reversible from here.
+- ``rename-category`` only records old/new names; a reverse play relies
+  on filesystem state being identical to when it ran.
+
+Use this for debugging / audit / diff viewing, not for programmatic undo.
+If undo becomes necessary, we'd design a proper BeforeState/AfterState
+model rather than extending this.
 
 Pure Python — no PyQt. Reads are cheap (small file, line-by-line)
 because writes are append-only and a cap of MAX_ENTRIES trims the head.

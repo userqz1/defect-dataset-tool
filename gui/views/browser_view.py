@@ -62,18 +62,20 @@ class BrowserView(QWidget):
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
 
-    def __init__(self, app_state=None) -> None:
+    def __init__(self, app_state) -> None:
+        """BrowserView requires an AppState — construction with None used to
+        auto-build a fresh AppState "for tests", but that masked production
+        bugs where two AppStates existed simultaneously (review #9). Tests
+        now must inject an explicit AppState fixture.
+        """
         super().__init__()
         self.setObjectName("browserView")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        # AppState is the single source of truth for the current Dataset.
-        # Injected from DatasetBrowserView. A fallback minimal stub keeps
-        # the view constructable in isolation (tests) but never stores a
-        # dataset itself.
         if app_state is None:
-            from gui.app_state import AppState
-            app_state = AppState(parent=self)
+            raise ValueError("BrowserView requires an AppState instance; "
+                             "construct one explicitly (e.g. AppState()) "
+                             "instead of passing None")
         self._state = app_state
         self._current_category: str = ""
         self._filter_mode: FilterMode = FilterMode.ALL
@@ -317,18 +319,13 @@ class BrowserView(QWidget):
         self._update_readiness(dataset)
         self._apply_filter_and_show()
 
-    # Compact labels — compliance checker uses verbose Chinese names.
-    # Here we collapse them into short pill-style chips.
-    _READINESS_LABEL = {
-        "图片数量": "图片",
-        "分类数": "分类",
-        "标注覆盖": "标注",
-        "类别平衡": "平衡",
-        "每类最少张数": "最少",
-    }
-
     def _update_readiness(self, dataset: Dataset) -> None:
-        """Compact readiness chips — short label + value, pill color by status."""
+        """Compact readiness chips — short label + value, pill color by status.
+
+        ``short`` comes from ``ReadinessCheck.short`` now, not a GUI-side
+        lookup table — that way a new core check automatically supplies a
+        pill label rather than silently falling back to a long Chinese name.
+        """
         for w in self._readiness_items:
             self._readiness_bar.removeWidget(w)
             w.deleteLater()
@@ -343,7 +340,7 @@ class BrowserView(QWidget):
         report = check_task_readiness(dataset, task_type)
 
         for check in report.checks:
-            short = self._READINESS_LABEL.get(check.item, check.item)
+            short = check.short
             value = self._format_readiness_value(check.item, check.current)
             # Pass: short label + value (e.g. "图片 5,098")
             # Fail: action when available, else short+value

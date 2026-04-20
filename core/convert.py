@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageOps
+from send2trash import send2trash
 
 from .fileops import OpResult, label_path_for_image
 
@@ -80,14 +81,21 @@ def convert_one(image_path: Path, opts: ConvertOptions) -> Path:
             except Exception:
                 pass
 
+    # Send to Recycle Bin rather than hard-unlink — review point #10.
+    # Conversion is user-initiated but not infallible (bad PIL config,
+    # JPEG from HDR TIFF losing bit depth, etc.); original must be
+    # recoverable on at least the first surprise.
     if opts.delete_original and new_path != image_path:
         try:
-            image_path.unlink()
+            send2trash(str(image_path))
             if label and label.is_file() and label.suffix == ".json":
-                # 仅当新 json 已生成才删除旧的
-                if new_path.with_suffix(".json").exists() and new_path.with_suffix(".json") != label:
-                    label.unlink()
+                new_json = new_path.with_suffix(".json")
+                if new_json.exists() and new_json != label:
+                    send2trash(str(label))
         except OSError:
+            # Swallow: new_path is already on disk, so we don't want to
+            # fail the whole convert over a trashing failure. Caller
+            # sees success; the stray original is visible in the UI.
             pass
 
     return new_path

@@ -31,29 +31,55 @@ logger = logging.getLogger(__name__)
 
 
 def _install_nav_expand_patch() -> None:
-    from qfluentwidgets.components.navigation.navigation_panel import (
-        NavigationDisplayMode, NavigationPanel,
-    )
-    if getattr(NavigationPanel, "_dataforge_patched", False):
-        return
-    original = NavigationPanel._onWidgetClicked
+    """Monkey-patch qfluentwidgets.NavigationPanel so clicks in collapsed mode
+    expand the sidebar before (or instead of) switching interfaces.
 
-    def patched(self):
-        widget = self.sender()
-        if widget is None:
+    Why this exists (review #8): default NavigationPanel behavior in
+    narrow/COMPACT mode is to switch interface silently on click — users hit
+    a nav icon, the page switches, but they don't see labels to know what
+    they picked. The patched version expands the panel first on a collapsed
+    click so labels become visible, preserving click-to-switch on already-
+    expanded panels.
+
+    Tested against: qfluentwidgets 1.11 (see requirements.txt pin). The
+    patched symbol ``_onWidgetClicked`` is a private attribute; upstream
+    rename / signature change will break the patch, so we wrap everything
+    in try/except and fall through cleanly — the app still works, just
+    without the expand-before-switch behavior.
+    """
+    try:
+        from qfluentwidgets.components.navigation.navigation_panel import (
+            NavigationDisplayMode, NavigationPanel,
+        )
+        if getattr(NavigationPanel, "_dataforge_patched", False):
             return
-        is_narrow = self.isCollapsed() or self.displayMode == NavigationDisplayMode.COMPACT
-        if not widget.isSelectable:
+        original = NavigationPanel._onWidgetClicked
+
+        def patched(self):
+            widget = self.sender()
+            if widget is None:
+                return
+            is_narrow = (self.isCollapsed()
+                         or self.displayMode == NavigationDisplayMode.COMPACT)
+            if not widget.isSelectable:
+                if is_narrow:
+                    self.expand(useAni=True)
+                    return
+                return original(self)
             if is_narrow:
                 self.expand(useAni=True)
-                return
             return original(self)
-        if is_narrow:
-            self.expand(useAni=True)
-        return original(self)
 
-    NavigationPanel._onWidgetClicked = patched
-    NavigationPanel._dataforge_patched = True
+        NavigationPanel._onWidgetClicked = patched
+        NavigationPanel._dataforge_patched = True
+    except Exception:
+        # qfluentwidgets upstream changed — log once so a maintainer notices
+        # the nav UX regressed, but don't crash the app on startup.
+        logger.warning(
+            "nav expand patch failed — qfluentwidgets API may have changed; "
+            "collapsed nav clicks will switch without auto-expanding",
+            exc_info=True,
+        )
 
 
 class MainWindow(FluentWindow):

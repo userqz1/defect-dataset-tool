@@ -34,13 +34,25 @@ from .task_types import TaskType, TASK_REGISTRY
 
 @dataclass
 class ReadinessCheck:
-    """One item in the task readiness report."""
+    """One item in the task readiness report.
+
+    ``short`` is a UI-friendly 2-character label used by the browser's
+    compact readiness bar (pill-sized chips). Defined here, not in the
+    GUI, so adding a new check guarantees the UI has something short to
+    show — review point #1: previously the GUI held a hardcoded map and
+    new checks silently fell back to the long ``item`` name.
+    """
     category: str      # "structure" / "quality" / "annotation" / "quantity" / "split"
-    item: str          # human-readable check name
+    item: str          # human-readable check name (full, may be long)
     passed: bool
     current: str       # what the dataset has now
     required: str      # what the standard requires (empty if informational)
     action: str        # suggested tool/action (empty if passed)
+    short: str = ""    # 2-char UI label for pill chips; defaults to item
+
+    def __post_init__(self) -> None:
+        if not self.short:
+            self.short = self.item
 
     @property
     def icon(self) -> str:
@@ -80,6 +92,7 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
     checks.append(ReadinessCheck(
         category="structure",
         item="图片数量",
+        short="图片",
         passed=n_images > 0,
         current=f"{n_images:,} 张",
         required="≥ 1",
@@ -90,6 +103,7 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
     checks.append(ReadinessCheck(
         category="structure",
         item="分类数",
+        short="分类",
         passed=n_cats > 0,
         current=f"{n_cats} 个",
         required="≥ 1",
@@ -102,6 +116,7 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
         checks.append(ReadinessCheck(
             category="annotation",
             item="标注覆盖",
+            short="标注",
             passed=n_unlabeled == 0,
             current=f"{n_labels:,}/{n_images:,} ({coverage:.0%})",
             required="100%",
@@ -117,6 +132,7 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
             checks.append(ReadinessCheck(
                 category="quantity",
                 item="类别平衡",
+                short="平衡",
                 passed=balanced,
                 current=f"{ratio:.1f}:1",
                 required="≤ 10:1",
@@ -131,6 +147,7 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
         checks.append(ReadinessCheck(
             category="quantity",
             item="每类最少张数",
+            short="最少",
             passed=enough,
             current=f"最少: {min_cat} ({min_count}张)",
             required="≥ 10",

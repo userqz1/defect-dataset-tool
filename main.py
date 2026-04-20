@@ -56,18 +56,44 @@ def _setup_logging() -> None:
 def _migrate_cache_dir() -> None:
     """One-time migration: copy ~/.defect_dataset_tool → ~/.dataforge.
 
-    Uses shutil.copytree (not rename) so the old dir survives if
-    the user downgrades. Writes a marker so it only runs once.
+    Uses shutil.copytree (not rename) so the old dir survives if the user
+    downgrades. Writes a marker so it only runs once. Review point #13:
+    handle copy failures (disk full / perms / stale handles) without
+    crashing the app, and log what was migrated.
     """
+    log = logging.getLogger(__name__)
     old = Path.home() / ".defect_dataset_tool"
     new = Path.home() / ".dataforge"
     marker = new / ".migrated"
-    if old.is_dir() and not new.exists():
-        import shutil
+
+    if not old.is_dir():
+        # Nothing to migrate; mark existing installs as done so we don't
+        # re-check every boot.
+        if new.is_dir() and not marker.exists():
+            try:
+                marker.touch()
+            except OSError:
+                log.warning("could not create .migrated marker", exc_info=True)
+        return
+
+    if new.exists() and marker.exists():
+        return  # already migrated
+
+    import shutil
+    try:
+        entry_count = sum(1 for _ in old.rglob("*"))
+        log.info("migrating legacy cache %s → %s (%d entries)",
+                 old, new, entry_count)
         shutil.copytree(old, new, dirs_exist_ok=True)
         marker.touch()
-    elif new.is_dir() and not marker.exists():
-        marker.touch()  # mark existing installs as migrated
+        log.info("cache migration complete; legacy dir left at %s "
+                 "(safe to delete after verifying the app works)", old)
+    except (OSError, shutil.Error) as e:
+        # Don't block startup — user still has the legacy dir, just
+        # without .dataforge-aware features. Surface clearly in log.
+        log.error("cache migration FAILED (%s); legacy dir at %s "
+                  "left untouched, new dir at %s may be partial",
+                  e, old, new, exc_info=True)
 
 
 def main() -> int:

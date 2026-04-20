@@ -68,27 +68,69 @@ def parse_annotation(
     return ParseResult(None, f"unsupported label format: {ext}")
 
 
-# Module-global cache: path → (mtime_ns, CocoIndex|None). Sized cache would
-# need thread-safety; since scan/count all run on the worker thread and
-# detail_view runs on the main thread, bounded-size dict is fine.
+# Module-global cache: path → (mtime_ns, CocoIndex|None).
+#
+# Thread-safety (review point #3): count_annotations now uses a
+# ThreadPoolExecutor(max_workers=8), so multiple worker threads can race
+# on the same cache miss. Without a lock, two threads observing no cache
+# entry would both parse the (potentially large) COCO JSON and clobber
+# each other's dict write. The Lock is held only for the dict read/write;
+# the parse itself runs outside the critical section so concurrent misses
+# on *different* JSONs still overlap.
+import threading as _threading
 _COCO_CACHE: dict[Path, tuple[int, "CocoIndex | None"]] = {}
 _COCO_CACHE_MAX = 8
+_COCO_CACHE_LOCK = _threading.Lock()
+_COCO_CACHE_INFLIGHT: dict[Path, _threading.Event] = {}
 
 
 def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
     """Parse a COCO JSON once per mtime. Returns None for non-COCO JSONs
-    (per-image LabelMe) so callers can fall through."""
+    (per-image LabelMe) so callers can fall through.
+
+    Thread-safe: coalesces concurrent misses on the same path via an
+    inflight-events map, so a 500MB COCO file is parsed at most once
+    per mtime even under 8-way parallel ingest.
+    """
     try:
         mtime = json_path.stat().st_mtime_ns
     except OSError:
         return None
-    cached = _COCO_CACHE.get(json_path)
-    if cached and cached[0] == mtime:
-        return cached[1]
-    idx = parse_coco(json_path)
-    if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
-        _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
-    _COCO_CACHE[json_path] = (mtime, idx)
+
+    is_owner = False
+    with _COCO_CACHE_LOCK:
+        cached = _COCO_CACHE.get(json_path)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        inflight = _COCO_CACHE_INFLIGHT.get(json_path)
+        if inflight is None:
+            inflight = _threading.Event()
+            _COCO_CACHE_INFLIGHT[json_path] = inflight
+            is_owner = True
+
+    if not is_owner:
+        # Another thread is already parsing this file; block until it's done,
+        # then re-read the cache it populated.
+        inflight.wait()
+        with _COCO_CACHE_LOCK:
+            cached = _COCO_CACHE.get(json_path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+        # Cache miss after waiter wakeup (evicted or owner failed) —
+        # fall through and parse ourselves, without claiming ownership
+        # (rare edge case, accept duplicate parse vs. retry-loop complexity).
+        return parse_coco(json_path)
+
+    # Owner: parse outside the lock (I/O + JSON decode can be slow).
+    try:
+        idx = parse_coco(json_path)
+    finally:
+        with _COCO_CACHE_LOCK:
+            if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
+                _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
+            _COCO_CACHE[json_path] = (mtime, idx)
+            _COCO_CACHE_INFLIGHT.pop(json_path, None)
+        inflight.set()
     return idx
 
 
