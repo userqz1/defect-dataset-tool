@@ -106,11 +106,18 @@ class AppState(QObject):
         a fresh dataset. Callers that want to preserve them across
         rescans must re-apply via set_quality_issues / ... after the
         dataset_changed signal settles.
+
+        Signal batching (review #5): the three derived-cleared signals
+        are *suppressed* here — subscribers re-render anyway via
+        ``dataset_changed`` and BrowserView.load_dataset already re-checks
+        ``quality_issue_paths`` / ``duplicate_groups`` to refresh chips.
+        Sending all 4 signals previously caused 3 redundant grid renders
+        per scan (each derived signal handler called _apply_filter_and_show).
         """
         self._dataset = ds
-        # Derived artifacts are per-scan; drop them so stale results
-        # don't leak into the new dataset's UI.
-        self._clear_derived(emit=True)
+        # Drop stale derived state without emitting — dataset_changed
+        # below carries the "everything has changed" message by itself.
+        self._clear_derived(emit=False)
         self.dataset_changed.emit(ds)
 
     def set_quality_issues(self, issues: list[Any] | None) -> None:

@@ -1031,17 +1031,32 @@ class DatasetBrowserView(QWidget):
         self._rescan()
 
     def _on_stats(self) -> None:
-        """Compute and show dataset statistics."""
+        """Compute and show dataset statistics.
+
+        ScanWorker already computes ExtendedStats during the analyze phase
+        and pushes them into AppState (review #2). Reuse that cached value
+        when present so this button doesn't re-walk the dataset every click.
+        Falls through to a fresh compute only on cache miss (e.g. extended
+        stats failed during scan, or AppState was cleared).
+        """
         ds = self._state.dataset
         if ds is None:
             return
 
         from core.stats import compute_extended_stats, compute_stats
+        from gui.dialogs.tool_dialogs import StatsResultDialog
         from gui.workers.batch_runner import BatchRunner
         stats = compute_stats(ds)  # fast, no worker
 
+        cached = self._state.ext_stats
+        if cached is not None:
+            StatsResultDialog(stats, cached, parent=self.window()).exec()
+            return
+
         def show_dialog(extended):
-            from gui.dialogs.tool_dialogs import StatsResultDialog
+            # Backfill the cache so subsequent clicks are instant too
+            if extended is not None:
+                self._state.set_ext_stats(extended)
             StatsResultDialog(stats, extended, parent=self.window()).exec()
 
         BatchRunner(self, "计算详细统计").run(
