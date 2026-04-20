@@ -102,15 +102,19 @@ def _detect_layout(root: Path, exts: set[str]) -> str:
 
     subdirs = _list_subdirs(root)
 
+    # Standard layout wins over a stray cover.jpg / README.png at the root
+    # (review #8). Previously a single image in the root demoted the whole
+    # dataset to "single" / 未分类, which silently broke layouts where the
+    # user dropped a thumbnail next to their <cat>/images/ tree.
+    for e in subdirs:
+        if (Path(e.path) / IMAGE_SUBDIR).is_dir():
+            return "standard"
+
     if _has_image_file(root, exts):
         return "single"
 
     if not subdirs:
         return "empty"
-
-    for e in subdirs:
-        if (Path(e.path) / IMAGE_SUBDIR).is_dir():
-            return "standard"
 
     for e in subdirs:
         if _has_image_file(Path(e.path), exts):

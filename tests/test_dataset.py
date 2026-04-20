@@ -82,11 +82,19 @@ class TestDetectLayout:
         _touch(tmp_path / "data.csv")
         assert _detect_layout(tmp_path, IMG_EXTS) == "empty"
 
-    # -- priority: single > standard (images in root take priority) --
+    # -- priority: standard > single (review #8) --
 
-    def test_single_beats_standard(self, tmp_path):
+    def test_standard_beats_single(self, tmp_path):
+        """A stray cover.jpg / README.png in the root must not demote the
+        whole tree to "single" when there's a real <cat>/images/ structure."""
         _touch(tmp_path / "root.jpg")
         _touch(tmp_path / "cat" / "images" / "a.jpg")
+        assert _detect_layout(tmp_path, IMG_EXTS) == "standard"
+
+    def test_single_when_no_categorized_subdir(self, tmp_path):
+        """No <cat>/images/ → root images do drive a "single" layout."""
+        _touch(tmp_path / "a.jpg")
+        _touch(tmp_path / "subdir" / "readme.txt")
         assert _detect_layout(tmp_path, IMG_EXTS) == "single"
 
 

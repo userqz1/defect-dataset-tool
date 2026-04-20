@@ -166,6 +166,12 @@ class DatasetBrowserView(QWidget):
         if self._scan_worker is not None:
             self._scan_worker.quit()
             self._scan_worker.wait(3000)
+        # Mid-export close used to orphan _export_worker (review #10) — the
+        # window vanished but the QThread carried on writing files. Wait
+        # bounded so a stuck export doesn't block app exit forever.
+        if self._export_worker is not None:
+            self._export_worker.quit()
+            self._export_worker.wait(3000)
         # stop() wakes the queue + closes diskcache; requestInterruption
         # alone would leave the worker blocked on queue.get().
         self._thumb.stop()
