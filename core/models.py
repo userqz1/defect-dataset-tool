@@ -44,3 +44,4 @@ class Dataset:
     total_images: int = 0
     total_annotations: int = 0
     layout: str = "standard"  # standard / flat / single / recursive / empty
+    fingerprint: str = ""  # sha1(scanned_at + top-level mtimes); empty = uncached

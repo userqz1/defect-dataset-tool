@@ -124,6 +124,26 @@ _register(ExporterEntry(
     structure="swift_{split}.jsonl + images/{split}/",
 ))
 
+_register(ExporterEntry(
+    key="ImageFolder",
+    display_name="ImageFolder",
+    description="torchvision ImageFolder 分类布局",
+    module="core.exporter.imagefolder",
+    opts_class="ImageFolderExportOptions",
+    export_fn="export_imagefolder",
+    structure="{split}/{class}/*.jpg",
+))
+
+_register(ExporterEntry(
+    key="MVTec",
+    display_name="MVTec AD",
+    description="MVTec 工业异常检测标准布局",
+    module="core.exporter.mvtec",
+    opts_class="MvtecExportOptions",
+    export_fn="export_mvtec",
+    structure="train/good/ + test/{good, defect_type}/",
+))
+
 
 # ---- Dispatch ----
 
