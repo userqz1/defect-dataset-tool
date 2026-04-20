@@ -248,11 +248,19 @@ class DatasetBrowserView(QWidget):
             self._open_btn.setEnabled(True)
 
             from gui.workers.scan_worker import ScanResult
-            ds = result.dataset if isinstance(result, ScanResult) else result
+            if isinstance(result, ScanResult):
+                ds, ext = result.dataset, result.ext_stats
+            else:
+                ds, ext = result, None
             # Single write: AppState → dataset_changed signal →
             # _on_dataset_changed updates the topbar + browser. No dual
             # writes to both self._browser and self._state.
             self._state.set_dataset(ds)
+            # set_dataset cleared derived artifacts; push the fresh
+            # ExtendedStats back so downstream views (future stats panel)
+            # get it without waiting for another scan.
+            if ext is not None:
+                self._state.set_ext_stats(ext)
             if ds.total_images == 0:
                 InfoBar.warning(
                     "目录中未找到图片",
@@ -313,10 +321,15 @@ class DatasetBrowserView(QWidget):
         def _done(result):
             self._scan_worker = None
             from gui.workers.scan_worker import ScanResult
-            ds = result.dataset if isinstance(result, ScanResult) else result
+            if isinstance(result, ScanResult):
+                ds, ext = result.dataset, result.ext_stats
+            else:
+                ds, ext = result, None
             # Same single-write pattern as the initial scan — the
             # dataset_changed handler re-renders everything.
             self._state.set_dataset(ds)
+            if ext is not None:
+                self._state.set_ext_stats(ext)
 
         def _fail(msg):
             self._scan_worker = None
@@ -540,14 +553,14 @@ class DatasetBrowserView(QWidget):
         opts = QualityOptions(blur_threshold=dlg.blur_threshold())
 
         def handle(issues):
+            # Push results to AppState — all views subscribe via
+            # quality_changed signal; BrowserView auto-refreshes its grid.
+            self._state.set_quality_issues(issues or None)
             if not issues:
-                self._browser.set_quality_issues({})
                 InfoBar.success("质量检查完成", "未发现问题图片",
                                 parent=self.window(), duration=3000,
                                 position=InfoBarPosition.TOP)
                 return
-            issues_map = {str(i.image.path): i.kinds for i in issues}
-            self._browser.set_quality_issues(issues_map)
             from collections import Counter
             kind_counts: Counter = Counter()
             for issue in issues:
@@ -585,6 +598,9 @@ class DatasetBrowserView(QWidget):
         from gui.workers.batch_runner import BatchRunner
 
         def handle(groups):
+            # Store in AppState so future views (a dedicated dedup viz,
+            # batch-delete panel, etc.) can read without re-running.
+            self._state.set_duplicate_groups(groups or None)
             if not groups:
                 InfoBar.success("重复检测完成", "未发现重复图片",
                                 parent=self.window(), duration=3000,
