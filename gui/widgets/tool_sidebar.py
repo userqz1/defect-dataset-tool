@@ -35,15 +35,24 @@ from gui.theme import T
 TOOL_SIDEBAR_WIDTH = 180
 
 
-class _ToolButton(PushButton):
-    """Full-width, left-aligned tool button."""
+def _make_tool_button(text: str, icon: FIF) -> PushButton:
+    """Build a full-width, left-aligned tool-row button.
 
-    def __init__(self, text: str, icon: FIF, parent: QWidget | None = None) -> None:
-        super().__init__(icon, text, parent)
-        self.setFixedHeight(32)
-        # Rely on default styling for icon placement; left-align the combined
-        # icon+text so a shorter label doesn't center awkwardly.
-        self.setStyleSheet("text-align: left; padding-left: 10px;")
+    Factory rather than a PushButton subclass: qfluentwidgets'
+    ``PushButton.__init__`` is a singledispatchmethod whose registered
+    overloads internally call ``self.__init__(parent=parent)`` to chain
+    into the base init. A subclass with a stricter signature gets caught
+    in that recursion via MRO and crashes ("missing required positional
+    arguments"). Composition sidesteps the whole problem.
+
+    Visual rules (left-align + padding) live in app.qss under the
+    ``QPushButton#toolSidebarButton`` selector — review #9 enforces the
+    three-layer styling rule for padding/alignment too, not just colors.
+    """
+    btn = PushButton(text=text, icon=icon)
+    btn.setObjectName("toolSidebarButton")
+    btn.setFixedHeight(32)
+    return btn
 
 
 class ToolSidebar(QFrame):
@@ -79,37 +88,39 @@ class ToolSidebar(QFrame):
         root.setSpacing(T.GAP_XS)
 
         # ── Row 1: session controls ──
-        self._refresh_btn = _ToolButton("刷新", FIF.SYNC)
+        self._refresh_btn = _make_tool_button("刷新", FIF.SYNC)
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
-        self._undo_btn = _ToolButton("撤销", FIF.CANCEL)
+        # FIF.RETURN reads as "back / undo" in Fluent; FIF.CANCEL was the
+        # cross icon which most users parse as "cancel current op" (review #11).
+        self._undo_btn = _make_tool_button("撤销", FIF.RETURN)
         self._undo_btn.clicked.connect(self.undo_requested.emit)
         root.addWidget(self._refresh_btn)
         root.addWidget(self._undo_btn)
 
         # ── Analysis ──
         root.addWidget(self._section_header("分析"))
-        self._quality_btn = _ToolButton("质检", FIF.SEARCH)
+        self._quality_btn = _make_tool_button("质检", FIF.SEARCH)
         self._quality_btn.clicked.connect(self.quality_requested.emit)
-        self._dedup_btn = _ToolButton("去重", FIF.COPY)
+        self._dedup_btn = _make_tool_button("去重", FIF.COPY)
         self._dedup_btn.clicked.connect(self.dedup_requested.emit)
         root.addWidget(self._quality_btn)
         root.addWidget(self._dedup_btn)
 
         # ── Processing (used to be a nested dropdown) ──
         root.addWidget(self._section_header("处理"))
-        self._resize_btn = _ToolButton("缩放", FIF.ZOOM)
+        self._resize_btn = _make_tool_button("缩放", FIF.ZOOM)
         self._resize_btn.clicked.connect(self.resize_requested.emit)
-        self._crop_btn = _ToolButton("裁剪", FIF.CUT)
+        self._crop_btn = _make_tool_button("裁剪", FIF.CUT)
         self._crop_btn.clicked.connect(self.crop_requested.emit)
-        self._rotate_btn = _ToolButton("旋转", FIF.ROTATE)
+        self._rotate_btn = _make_tool_button("旋转", FIF.ROTATE)
         self._rotate_btn.clicked.connect(self.rotate_requested.emit)
-        self._flip_btn = _ToolButton("翻转", FIF.IOT)
+        self._flip_btn = _make_tool_button("翻转", FIF.IOT)
         self._flip_btn.clicked.connect(self.flip_requested.emit)
-        self._convert_btn = _ToolButton("格式转换", FIF.PHOTO)
+        self._convert_btn = _make_tool_button("格式转换", FIF.PHOTO)
         self._convert_btn.clicked.connect(self.convert_requested.emit)
-        self._augment_btn = _ToolButton("数据增强", FIF.ADD)
+        self._augment_btn = _make_tool_button("数据增强", FIF.ADD)
         self._augment_btn.clicked.connect(self.augment_requested.emit)
-        self._predict_btn = _ToolButton("AI 预标注", FIF.ROBOT)
+        self._predict_btn = _make_tool_button("AI 预标注", FIF.ROBOT)
         self._predict_btn.clicked.connect(self.predict_requested.emit)
         for btn in (self._resize_btn, self._crop_btn, self._rotate_btn,
                     self._flip_btn, self._convert_btn, self._augment_btn,
@@ -118,15 +129,15 @@ class ToolSidebar(QFrame):
 
         # ── Output ──
         root.addWidget(self._section_header("输出"))
-        self._export_btn = _ToolButton("导出", FIF.SHARE)
+        self._export_btn = _make_tool_button("导出", FIF.SHARE)
         self._export_btn.clicked.connect(self.export_requested.emit)
         root.addWidget(self._export_btn)
 
         # ── Other ──
         root.addWidget(self._section_header("其他"))
-        self._history_btn = _ToolButton("历史", FIF.HISTORY)
+        self._history_btn = _make_tool_button("历史", FIF.HISTORY)
         self._history_btn.clicked.connect(self.history_requested.emit)
-        self._stats_btn = _ToolButton("统计", FIF.PIE_SINGLE)
+        self._stats_btn = _make_tool_button("统计", FIF.PIE_SINGLE)
         self._stats_btn.clicked.connect(self.stats_requested.emit)
         root.addWidget(self._history_btn)
         root.addWidget(self._stats_btn)

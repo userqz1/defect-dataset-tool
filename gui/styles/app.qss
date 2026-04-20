@@ -131,6 +131,12 @@ CaptionLabel#toolSidebarSection {
     padding: ${GAP_LG}px ${GAP}px ${GAP_XS}px ${GAP}px;
     font-weight: bold;
 }
+/* Full-width, left-aligned action rows. Padding/alignment used to be
+ * inlined via setStyleSheet inside _ToolButton (review #9). */
+QPushButton#toolSidebarButton {
+    text-align: left;
+    padding-left: 10px;
+}
 
 QLabel#sectionHeader {
     color: $TEXT_2;

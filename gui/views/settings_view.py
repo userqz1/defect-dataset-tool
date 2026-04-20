@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    CheckBox,
     PushButton,
     StrongBodyLabel,
     SubtitleLabel,
@@ -24,6 +25,7 @@ from qfluentwidgets import (
 
 from core.recent import clear_recent, load_recent
 from core.thumbnail_cache import ThumbnailCache
+from core.user_settings import load_settings, save_settings
 from gui.theme import T
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,15 @@ class SettingsView(QWidget):
         root.addLayout(cards_row)
         self._set_selected_card("light")
 
+        # 浏览
+        root.addWidget(StrongBodyLabel("浏览"))
+        self._keep_filter_chk = CheckBox("切换类别保留筛选")
+        self._keep_filter_chk.setChecked(
+            load_settings().keep_filter_on_category_switch
+        )
+        self._keep_filter_chk.toggled.connect(self._on_keep_filter_toggled)
+        root.addWidget(self._keep_filter_chk)
+
         # 缓存
         root.addWidget(StrongBodyLabel("缓存"))
         cache_row = QHBoxLayout()
@@ -244,3 +255,10 @@ class SettingsView(QWidget):
     def _on_clear_recent(self) -> None:
         clear_recent()
         self._refresh_recent()
+
+    # 浏览偏好
+
+    def _on_keep_filter_toggled(self, checked: bool) -> None:
+        s = load_settings()
+        s.keep_filter_on_category_switch = checked
+        save_settings(s)

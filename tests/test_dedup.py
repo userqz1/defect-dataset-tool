@@ -60,9 +60,6 @@ def _copy_file(src: Path, dst: Path) -> None:
 @pytest.fixture
 def three_copies(tmp_path):
     """3 byte-identical images (true duplicates) + 1 distinct random-noise image."""
-    # A random-noise image produces a high-entropy pHash. Binary-copying it
-    # to two more files guarantees identical pHash; the 4th (distinct seed)
-    # has a clearly different pHash no matter how DCT hashes collapse.
     _make_random_image(tmp_path / "green_0.png", seed=11)
     _copy_file(tmp_path / "green_0.png", tmp_path / "green_1.png")
     _copy_file(tmp_path / "green_0.png", tmp_path / "green_2.png")

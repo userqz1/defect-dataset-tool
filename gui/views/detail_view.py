@@ -83,6 +83,9 @@ class DetailView(QWidget):
         self._images: list[ImageInfo] = []
         self._index: int = -1
         self._annotation: Annotation | None = None
+        # mtime baseline for review #22 conflict check; per-method annotation
+        # had no runtime effect (PEP 526 only applies at class/module scope).
+        self._label_mtime_at_load: float | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -368,7 +371,7 @@ class DetailView(QWidget):
         # detect conflict: if the file changed externally (another editor,
         # another DataForge instance) between load and save, we warn
         # before overwriting. Review #22.
-        self._label_mtime_at_load: float | None = None
+        self._label_mtime_at_load = None
         try:
             if img.has_label and img.label_path and img.label_path.is_file():
                 self._label_mtime_at_load = img.label_path.stat().st_mtime

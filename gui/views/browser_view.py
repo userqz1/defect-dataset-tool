@@ -465,12 +465,15 @@ class BrowserView(QWidget):
         self.next_btn.setEnabled(self._page < page_count - 1)
 
     def _on_category_selected(self, category: str) -> None:
-        # Reset filter when switching categories — otherwise a user who
-        # clicked "未标注" while viewing one category sees an empty page
-        # on every subsequent category that happens to be fully annotated,
-        # and can't tell the filter is still active. 直觉:类别切换 = 看这类全部。
+        # Default: reset filter on category switch — otherwise a user who
+        # clicked "未标注" sees empty pages on fully-annotated categories
+        # without realizing the filter is still active. 直觉:类别切换 = 看这类全部。
+        # Settings → "切换类别保留筛选" (review #12) opts into the opposite
+        # behavior for the "过滤未标注 → 遍历类别逐个标" workflow.
         self._current_category = category
-        if self._filter_mode is not FilterMode.ALL:
+        from core.user_settings import load_settings
+        keep = load_settings().keep_filter_on_category_switch
+        if not keep and self._filter_mode is not FilterMode.ALL:
             self._filter_mode = FilterMode.ALL
             self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()
