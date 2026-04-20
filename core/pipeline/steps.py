@@ -134,6 +134,7 @@ class SplitStep:
     val: float = 0.1
     test: float = 0.1
     seed: int | None = None
+    stratified: bool = True   # per-category proportional split
     name: str = "划分"
     kind: str = "split"
     stop_on_error: bool = True
@@ -142,7 +143,10 @@ class SplitStep:
         if ctx.dataset is None:
             raise RuntimeError("SplitStep 需要 ctx.dataset")
         from ..splitter import SplitOptions, split_dataset
-        kwargs = dict(train=self.train, val=self.val, test=self.test)
+        kwargs = dict(
+            train=self.train, val=self.val, test=self.test,
+            stratified=self.stratified,
+        )
         if self.seed is not None:
             kwargs["seed"] = self.seed
         ctx.split = split_dataset(ctx.dataset, SplitOptions(**kwargs))

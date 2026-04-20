@@ -176,6 +176,28 @@ class ExportWizardDialog(MessageBoxBase):
         self._copy_chk.setChecked(True)
         p_lay.addWidget(self._copy_chk)
 
+        # Stratified (review #11) — preserve per-category ratios when splitting.
+        # Off means pure random; training on imbalanced data usually wants this
+        # ON so each split gets proportional class counts.
+        self._stratified_chk = CheckBox("按类别分层抽样(推荐)")
+        self._stratified_chk.setChecked(True)
+        p_lay.addWidget(self._stratified_chk)
+
+        # VLM question (review #8) — shown only for schemas whose options_class
+        # declares a ``question`` field (ShareGPT / LLaVA / Swift). For CV
+        # formats the row stays hidden so the form doesn't balloon.
+        self._question_row_widget = QFrame()
+        q_row = QHBoxLayout(self._question_row_widget)
+        q_row.setContentsMargins(0, 0, 0, 0)
+        q_row.setSpacing(T.GAP)
+        q_row.addWidget(BodyLabel("Q&A 问题"))
+        from qfluentwidgets import LineEdit
+        self._question_edit = LineEdit()
+        self._question_edit.setPlaceholderText("留空则用 Schema 默认问题")
+        q_row.addWidget(self._question_edit, 1)
+        p_lay.addWidget(self._question_row_widget)
+        self._question_row_widget.hide()  # toggled in _update_preview
+
         # Output directory
         dir_row = QHBoxLayout()
         dir_row.setSpacing(T.GAP)
@@ -274,6 +296,11 @@ class ExportWizardDialog(MessageBoxBase):
         )
         schema = get_schema(self._selected_fmt)
         self._structure.setText(schema.directory_preview if schema else "")
+        # Show Q&A row only when the schema's options support a question.
+        supports_q = bool(
+            schema and "question" in schema.options_class.__dataclass_fields__
+        )
+        self._question_row_widget.setVisible(supports_q)
         self._refresh_readiness()
 
     # ---------- Readiness (Schema-driven) ----------
@@ -328,4 +355,7 @@ class ExportWizardDialog(MessageBoxBase):
             "val_ratio": self._val.value(),
             "test_ratio": self._test.value(),
             "copy_images": self._copy_chk.isChecked(),
+            "stratified": self._stratified_chk.isChecked(),
+            # question only meaningful for VLM schemas; empty string = use default
+            "question": self._question_edit.text().strip(),
         }

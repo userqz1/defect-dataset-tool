@@ -399,6 +399,12 @@ class DatasetBrowserView(QWidget):
             return
 
         out_dir = opts["out_dir"]
+        # VLM schemas accept a ``question`` option; non-VLM schemas ignore
+        # unknown kwargs inside ExportStep.extra_options filtering.
+        extra = {}
+        q = opts.get("question") or ""
+        if q:
+            extra["question"] = q
         pipe = Pipeline(
             name=f"{schema.display_name} 导出",
             steps=[
@@ -406,11 +412,13 @@ class DatasetBrowserView(QWidget):
                     train=opts["train_ratio"],
                     val=opts["val_ratio"],
                     test=opts["test_ratio"],
+                    stratified=opts.get("stratified", True),
                 ),
                 ExportStep(
                     schema_key=opts["format"],
                     out_dir=out_dir,
                     copy_images=opts["copy_images"],
+                    extra_options=extra,
                 ),
             ],
         )
