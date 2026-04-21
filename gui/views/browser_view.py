@@ -125,19 +125,6 @@ class BrowserView(QWidget):
         right_layout.addWidget(body, 1)
         right_layout = body_lay  # rest of the init uses this name
 
-        # 就绪检查条（替代独立概览页 — 核心设计：输出是已知格子，缺什么补什么）
-        # Wrap in a fixed-height container — otherwise, when the grid
-        # hides on an empty filter result, QVBoxLayout redistributes the
-        # freed vertical space into these pill labels (Preferred policy),
-        # rendering them as giant beige rectangles. 36px keeps the row tight.
-        self._readiness_row = QFrame()
-        self._readiness_row.setFixedHeight(36)
-        self._readiness_bar = QHBoxLayout(self._readiness_row)
-        self._readiness_bar.setContentsMargins(0, 0, 0, 0)
-        self._readiness_bar.setSpacing(T.GAP_LG)
-        self._readiness_items: list[QWidget] = []
-        right_layout.addWidget(self._readiness_row)
-
         # 筛选栏
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(T.GAP)
@@ -265,27 +252,35 @@ class BrowserView(QWidget):
         right_layout.addWidget(self._grid_stack, 1)
 
         # 分页栏
-        from qfluentwidgets import SpinBox
+        from PyQt6.QtGui import QIntValidator
         pager = QHBoxLayout()
         pager.setSpacing(T.GAP)
         self.prev_btn = ToolButton(FIF.LEFT_ARROW)
         self.prev_btn.clicked.connect(self._prev_page)
         self.next_btn = ToolButton(FIF.RIGHT_ARROW)
         self.next_btn.clicked.connect(self._next_page)
-        self.page_spin = SpinBox()
-        self.page_spin.setFixedWidth(80)
-        self.page_spin.setRange(1, 1)
-        self.page_spin.editingFinished.connect(self._on_page_jump)
+        # Plain LineEdit instead of SpinBox: the ▲▼ chevrons ate half the
+        # input box on high page counts (user report: "/ 123 页" clipped
+        # the actual value). Direct typing + Enter/blur commits the jump.
+        self.page_input = LineEdit()
+        self.page_input.setFixedWidth(64)
+        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._page_validator = QIntValidator(1, 1, self)
+        self.page_input.setValidator(self._page_validator)
+        self.page_input.setText("1")
+        self.page_input.editingFinished.connect(self._on_page_jump)
         self.page_total_label = CaptionLabel("/ 1")
         self.count_label = CaptionLabel("")
+        self._pager_prefix = CaptionLabel(i18n.t("pager.prefix"))
+        self._pager_suffix = CaptionLabel(i18n.t("pager.suffix"))
         pager.addStretch(1)
         pager.addWidget(self.count_label)
         pager.addSpacing(T.GAP_LG)
         pager.addWidget(self.prev_btn)
-        pager.addWidget(CaptionLabel("第"))
-        pager.addWidget(self.page_spin)
+        pager.addWidget(self._pager_prefix)
+        pager.addWidget(self.page_input)
         pager.addWidget(self.page_total_label)
-        pager.addWidget(CaptionLabel("页"))
+        pager.addWidget(self._pager_suffix)
         pager.addWidget(self.next_btn)
         right_layout.addLayout(pager)
 
@@ -304,6 +299,9 @@ class BrowserView(QWidget):
         self._multi_btn.setText(i18n.t("filter.multi"))
         self._on_selection_changed(self.grid.selected_images())
         self._delete_btn.setText(i18n.t("filter.delete"))
+        self._pager_prefix.setText(i18n.t("pager.prefix"))
+        self._pager_suffix.setText(i18n.t("pager.suffix"))
+        self._show_page()
 
     def set_catalog_tree(self, tree) -> None:
         """Give BrowserView a handle to the CategoryTree living in CatalogPanel.
@@ -389,65 +387,7 @@ class BrowserView(QWidget):
             self._chips[FilterMode.ALL].setChecked(True)
         # Tree + distribution now live in CatalogPanel (owned by the outer
         # DatasetBrowserView). We only drive the grid-side state here.
-        self._update_readiness(dataset)
         self._apply_filter_and_show()
-
-    def _update_readiness(self, dataset: Dataset) -> None:
-        """Compact readiness chips — short label + value, pill color by status.
-
-        ``short`` comes from ``ReadinessCheck.short`` now, not a GUI-side
-        lookup table — that way a new core check automatically supplies a
-        pill label rather than silently falling back to a long Chinese name.
-        """
-        for w in self._readiness_items:
-            self._readiness_bar.removeWidget(w)
-            w.deleteLater()
-        self._readiness_items.clear()
-
-        from core.task_readiness import check_task_readiness
-        task_type = self._state.task_type
-        if task_type is None:
-            from core.task_types import TaskType
-            task_type = TaskType.DETECTION
-
-        report = check_task_readiness(dataset, task_type)
-
-        for check in report.checks:
-            short = check.short
-            value = self._format_readiness_value(check.item, check.current)
-            # Pass: short label + value (e.g. "图片 5,098")
-            # Fail: action when available, else short+value
-            if check.passed:
-                text = f"{short} {value}"
-            else:
-                text = check.action or f"{short} {value}"
-            lbl = CaptionLabel(text)
-            lbl.setObjectName("readinessOk" if check.passed else "readinessGap")
-            # Tooltip always shows the full detail — the chip stays short
-            lbl.setToolTip(f"{check.item}: {check.current}"
-                           + (f" · 需求 {check.required}" if check.required else "")
-                           + (f"\n{check.action}" if check.action else ""))
-            self._readiness_bar.addWidget(lbl)
-            self._readiness_items.append(lbl)
-
-        self._readiness_bar.addStretch(1)
-
-    @staticmethod
-    def _format_readiness_value(item: str, current: str) -> str:
-        """Strip verbose prefixes so the chip reads "图片 5,098" not "图片 5,098 张"."""
-        # "5,098 张" → "5,098"
-        if current.endswith(" 张"):
-            return current[:-2]
-        # "15 个" → "15"
-        if current.endswith(" 个"):
-            return current[:-2]
-        # "4,906/5,098 (96%)" → "96%"
-        if "(" in current and current.endswith(")"):
-            return current[current.rindex("(") + 1:-1]
-        # "最少: OverLimit (4张)" → "OverLimit 4"
-        if current.startswith("最少:"):
-            return current[3:].replace("(", "").replace(")", "").replace("张", "").strip()
-        return current
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)
@@ -524,12 +464,15 @@ class BrowserView(QWidget):
         self._grid_stack.setCurrentIndex(1 if total == 0 else 0)
 
         # 更新分页控件
-        self.page_spin.blockSignals(True)
-        self.page_spin.setRange(1, page_count)
-        self.page_spin.setValue(self._page + 1)
-        self.page_spin.blockSignals(False)
-        self.page_total_label.setText(f"/ {page_count}")
-        self.count_label.setText(f"共 {total:,} 张" if total > 0 else "没有匹配的图片")
+        self._page_validator.setTop(page_count)
+        self.page_input.blockSignals(True)
+        self.page_input.setText(str(self._page + 1))
+        self.page_input.blockSignals(False)
+        self.page_total_label.setText(i18n.t("pager.page_of", n=page_count))
+        self.count_label.setText(
+            i18n.t("pager.total", n=total) if total > 0
+            else i18n.t("pager.empty")
+        )
         self.prev_btn.setEnabled(self._page > 0)
         self.next_btn.setEnabled(self._page < page_count - 1)
 
@@ -637,7 +580,20 @@ class BrowserView(QWidget):
         self._show_page()
 
     def _on_page_jump(self) -> None:
-        self._page = self.page_spin.value() - 1
+        txt = self.page_input.text().strip()
+        if not txt:
+            # Blank → restore current page display without jumping.
+            self.page_input.setText(str(self._page + 1))
+            return
+        try:
+            n = int(txt)
+        except ValueError:
+            self.page_input.setText(str(self._page + 1))
+            return
+        # Validator bounds the value, but clamp again defensively in case
+        # the text was set programmatically.
+        n = max(1, min(self._page_validator.top(), n))
+        self._page = n - 1
         self._show_page()
 
     # ---------- 右键菜单 / 批量操作 ----------

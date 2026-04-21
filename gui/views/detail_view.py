@@ -38,17 +38,26 @@ class _ImageLoader(QThread):
     Emits QImage (thread-safe), NOT QPixmap. The main-thread slot
     must do QPixmap.fromImage() itself. Each loader carries a
     ``generation`` token so the slot can drop stale results — cancel()
-    is best-effort (wait(500) may time out while reading large TIFFs)
-    and a late ``done`` signal would otherwise clobber the viewer with
-    the wrong image. Review #9.
+    is best-effort (QImage(path) can't be interrupted mid-read) and a
+    late ``done`` signal would otherwise clobber the viewer with the
+    wrong image. Review #9.
+
+    ``prefetch=True`` makes the loader silent — it only fills the cache
+    via the ``prefetched`` signal, never emits ``done``. Lets us warm
+    the next/prev images in the background while the user looks at the
+    current one.
     """
     # Payload: (QImage, Annotation|None, ImageInfo, generation)
     done = pyqtSignal(object, object, object, int)
+    # Payload: (path_str, QImage, Annotation|None)
+    prefetched = pyqtSignal(str, object, object)
 
-    def __init__(self, img: ImageInfo, generation: int, parent=None):
+    def __init__(self, img: ImageInfo, generation: int,
+                 prefetch: bool = False, parent=None):
         super().__init__(parent)
         self._img = img
         self._gen = generation
+        self._prefetch = prefetch
         self._cancelled = False
 
     def cancel(self):
@@ -70,7 +79,11 @@ class _ImageLoader(QThread):
             if result.ok:
                 annotation = result.annotation
 
-        if not self._cancelled:
+        if self._cancelled:
+            return
+        if self._prefetch:
+            self.prefetched.emit(str(self._img.path), image, annotation)
+        else:
             self.done.emit(image, annotation, self._img, self._gen)
 
 
@@ -99,6 +112,13 @@ class DetailView(QWidget):
         # review #9: increments on every _load_current; _on_image_loaded
         # ignores any (stale) result whose generation != current.
         self._load_generation: int = 0
+        # LRU cache of recently decoded images — keyed by str(path) so
+        # Path object identity doesn't matter. Each slot: (QImage, Annotation|None).
+        # 3 slots is the sweet spot for 4K images (~48MB each → ~150MB peak)
+        # while still covering the common A←→D ping-pong navigation pattern.
+        self._image_cache: dict[str, tuple] = {}
+        self._image_cache_order: list[str] = []
+        self._image_cache_max: int = 3
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -143,6 +163,12 @@ class DetailView(QWidget):
         self.toggle_anno_btn.setCheckable(True)
         self.toggle_anno_btn.setChecked(True)
         self.toggle_anno_btn.setToolTip("显示 / 隐藏标注 (H)")
+        # Swap icon on state change so the button reads as two distinct
+        # states, not "same icon, maybe pressed". FIF.VIEW = eye-open
+        # (annotations shown), FIF.HIDE = eye-struck (hidden).
+        self.toggle_anno_btn.toggled.connect(
+            lambda on: self.toggle_anno_btn.setIcon(FIF.VIEW if on else FIF.HIDE)
+        )
 
         # 编辑模式
         self.edit_btn = ToolButton(FIF.EDIT)
@@ -347,15 +373,79 @@ class DetailView(QWidget):
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
 
-        # 图片 + 标注异步加载 — bump generation so any stale ``done``
-        # signal from a still-running old loader is ignored (review #9).
         self._load_generation += 1
+        gen = self._load_generation
+
+        # Cache hit → render synchronously. A 4K-image next-click goes
+        # from ~300ms to sub-frame when the prefetcher has already warmed
+        # the adjacent slot.
+        cached = self._cache_get(str(img.path))
+        if cached is not None:
+            qimage, annotation = cached
+            self._on_image_loaded(qimage, annotation, img, gen)
+            self._schedule_prefetch()
+            return
+
+        # Cache miss: abandon any in-flight loader and spawn a fresh one.
+        # generation token lets _on_image_loaded drop the stale ``done``.
         if hasattr(self, "_loader") and self._loader and self._loader.isRunning():
+            # Cancel only — don't wait(). QImage(path) on a 3072×4096 TIFF
+            # can't be interrupted mid-read, so wait(500) used to freeze the
+            # main thread every time the user pressed Next.
             self._loader.cancel()
-            self._loader.wait(500)
-        self._loader = _ImageLoader(img, self._load_generation, parent=self)
+        self._loader = _ImageLoader(img, gen, parent=self)
+        self._loader.finished.connect(self._loader.deleteLater)
         self._loader.done.connect(self._on_image_loaded)
         self._loader.start()
+
+    # ---------- LRU cache + prefetch ----------
+
+    def _cache_get(self, key: str):
+        hit = self._image_cache.get(key)
+        if hit is not None:
+            # Move to most-recently-used position
+            try:
+                self._image_cache_order.remove(key)
+            except ValueError:
+                pass
+            self._image_cache_order.append(key)
+        return hit
+
+    def _cache_put(self, key: str, qimage: QImage, annotation) -> None:
+        if key in self._image_cache:
+            try:
+                self._image_cache_order.remove(key)
+            except ValueError:
+                pass
+        elif len(self._image_cache_order) >= self._image_cache_max:
+            oldest = self._image_cache_order.pop(0)
+            self._image_cache.pop(oldest, None)
+        self._image_cache[key] = (qimage, annotation)
+        self._image_cache_order.append(key)
+
+    def _schedule_prefetch(self) -> None:
+        """Kick off background loads for the neighbors (prev + next)
+        if they're not already cached. Sequential browsing becomes
+        instant once the warm-up round-trip completes."""
+        if not self._images or len(self._images) < 2:
+            return
+        for offset in (1, -1):
+            target = (self._index + offset) % len(self._images)
+            if target == self._index:
+                continue
+            neighbor = self._images[target]
+            if str(neighbor.path) in self._image_cache:
+                continue
+            loader = _ImageLoader(neighbor, self._load_generation,
+                                   prefetch=True, parent=self)
+            loader.prefetched.connect(self._on_prefetch_done)
+            loader.finished.connect(loader.deleteLater)
+            loader.start()
+
+    def _on_prefetch_done(self, path: str, qimage: QImage, annotation) -> None:
+        if qimage is None or qimage.isNull():
+            return
+        self._cache_put(path, qimage, annotation)
 
     def _on_image_loaded(self, qimage: QImage, annotation, img: ImageInfo,
                           generation: int) -> None:
@@ -366,6 +456,11 @@ class DetailView(QWidget):
             return
         if not qimage.isNull():
             self.viewer.load_pixmap(QPixmap.fromImage(qimage))
+            # Cache the freshly loaded image so the reverse-direction
+            # click (D, then A) hits instantly. Skip the cache on null
+            # decodes — corrupted files shouldn't pin memory.
+            self._cache_put(str(img.path), qimage, annotation)
+            self._schedule_prefetch()
         self._annotation = annotation
         self.viewer.set_annotation(self._annotation)
         try:
@@ -516,6 +611,12 @@ class DetailView(QWidget):
         img.has_label = True
         img.label_path = label_path
         self._dirty = False
+        # Sync the cache with the just-saved annotation so navigating
+        # away and back doesn't resurrect the pre-save version.
+        key = str(img.path)
+        if key in self._image_cache:
+            qimage, _ = self._image_cache[key]
+            self._image_cache[key] = (qimage, self._annotation)
         # Refresh the conflict-detection baseline to the file we just
         # wrote — any further external edits show up on the next save.
         try:

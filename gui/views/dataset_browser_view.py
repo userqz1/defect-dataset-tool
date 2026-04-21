@@ -1081,7 +1081,11 @@ class DatasetBrowserView(QWidget):
             InfoBar.success("删除完成", f"已移除 {deleted} 张重复图片到回收站",
                             parent=self.window(), duration=5000,
                             position=InfoBarPosition.TOP)
-        self._rescan()
+        # force=True: user just deleted files on disk. The mtime
+        # fingerprint isn't 100% reliable (Windows timer granularity,
+        # network shares) — every other delete/move path here also
+        # forces, so align with them instead of trusting the cache.
+        self._rescan(force=True)
 
     def _on_stats(self) -> None:
         """Compute and show dataset statistics.

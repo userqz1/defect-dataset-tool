@@ -16,11 +16,11 @@ The project uses a conda env named `defect-tool`. Conda is not on PATH; use the 
 
 ```bash
 # Run the app
-C:/Users/zq/miniconda3/envs/defect-tool/python.exe main.py
+C:/ProgramData/miniconda3/envs/defect-tool/python.exe main.py
 
 # Install deps (unset proxy first to avoid SSL errors)
 unset HTTP_PROXY HTTPS_PROXY
-C:/Users/zq/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+C:/ProgramData/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 No test suite exists yet. When added, use pytest.
@@ -136,7 +136,3 @@ Schemes serialize the canvas state (nodes + connections + positions) to JSON in 
 - **Config is read-once**: `core/config.load()` is `@lru_cache(maxsize=1)`. Changes need app restart.
 - **Tool clicks require active scheme**: Sidebar tool clicks only work when `_scheme_active=True`; otherwise an info bar prompts the user to create a scheme first.
 - **Nav rail auto-collapse**: Sidebar collapses/expands at 1100px window width threshold.
-
-## Reference
-
-Full design rationale, data models, and phased feature list in `解决方案.md`. Read sections 三 (directory layout), 六 (data models), and 九 (extensibility) before non-trivial changes.

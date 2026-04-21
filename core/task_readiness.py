@@ -41,6 +41,13 @@ class ReadinessCheck:
     GUI, so adding a new check guarantees the UI has something short to
     show — review point #1: previously the GUI held a hardcoded map and
     new checks silently fell back to the long ``item`` name.
+
+    ``item_key`` and ``action_key`` are stable identifiers the GUI uses
+    to look up translations (``readiness.item.*`` / ``readiness.action.*``).
+    ``action_args`` carries the raw numeric/string substitutions so the
+    GUI can format them into its locale's template — e.g. "「Loose」仅 9
+    张" vs "Loose: only 9 images". Pre-formatted ``action`` stays as
+    zh fallback when ``action_key`` is empty.
     """
     category: str      # "structure" / "quality" / "annotation" / "quantity" / "split"
     item: str          # human-readable check name (full, may be long)
@@ -49,6 +56,10 @@ class ReadinessCheck:
     required: str      # what the standard requires (empty if informational)
     action: str        # suggested tool/action (empty if passed)
     short: str = ""    # 2-char UI label for pill chips; defaults to item
+    item_key: str = ""                 # stable i18n suffix, e.g. "images"
+    action_key: str = ""               # stable i18n suffix for failure text
+    action_args: dict = field(default_factory=dict)  # raw args for action i18n
+    value: float | int | str | None = None  # raw numeric value for locale-side formatting
 
     def __post_init__(self) -> None:
         if not self.short:
@@ -93,10 +104,13 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
         category="structure",
         item="图片数量",
         short="图片",
+        item_key="images",
         passed=n_images > 0,
         current=f"{n_images:,} 张",
+        value=n_images,
         required="≥ 1",
         action="" if n_images > 0 else "导入图片",
+        action_key="" if n_images > 0 else "import_images",
     ))
 
     # 2. Has categories?
@@ -104,8 +118,10 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
         category="structure",
         item="分类数",
         short="分类",
+        item_key="classes",
         passed=n_cats > 0,
         current=f"{n_cats} 个",
+        value=n_cats,
         required="≥ 1",
         action="",
     ))
@@ -117,10 +133,14 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
             category="annotation",
             item="标注覆盖",
             short="标注",
+            item_key="labeled",
             passed=n_unlabeled == 0,
             current=f"{n_labels:,}/{n_images:,} ({coverage:.0%})",
+            value=coverage,
             required="100%",
             action=f"{n_unlabeled} 张未标注" if n_unlabeled else "",
+            action_key="unlabeled" if n_unlabeled else "",
+            action_args={"n": n_unlabeled} if n_unlabeled else {},
         ))
 
     # 4. Class balance
@@ -133,10 +153,14 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
                 category="quantity",
                 item="类别平衡",
                 short="平衡",
+                item_key="balance",
                 passed=balanced,
                 current=f"{ratio:.1f}:1",
+                value=ratio,
                 required="≤ 10:1",
                 action=f"最大类/最小类 = {ratio:.0f}:1" if not balanced else "",
+                action_key="imbalance" if not balanced else "",
+                action_args={"ratio": ratio} if not balanced else {},
             ))
 
     # 5. Min per class
@@ -148,10 +172,14 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
             category="quantity",
             item="每类最少张数",
             short="最少",
+            item_key="minimum",
             passed=enough,
             current=f"最少: {min_cat} ({min_count}张)",
+            value=min_count,
             required="≥ 10",
             action=f"「{min_cat}」仅 {min_count} 张" if not enough else "",
+            action_key="min_class" if not enough else "",
+            action_args={"cat": min_cat, "n": min_count} if not enough else {},
         ))
 
     # Note: 可用导出格式 not included — it's static task metadata,
