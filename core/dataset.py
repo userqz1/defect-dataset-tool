@@ -414,6 +414,22 @@ def _scan_coco(
 def _scan_recursive(
     root: Path, exts: set[str], progress_cb: ProgressCb | None, counter: list[int]
 ) -> tuple[list[Category], int]:
+    """Recursive-layout scanner.
+
+    _walk yields every directory that directly contains image files. We
+    then figure out where the corresponding labels live:
+
+    - If the image dir is literally ``<cat>/images/`` (standard layout
+      discovered mid-recursion, e.g. root contains non-image files at
+      top so _detect_layout fell through to recursive), labels should
+      come from the sibling ``<cat>/labels/``. Using the image dir as
+      its own label dir (the old behavior) silently dropped every
+      .json — review item #1.
+    - Otherwise (flat recursive) labels sit alongside images.
+
+    Category name is the LEAF dir for flat layouts, or the parent dir
+    when we detect the <cat>/images/ sibling pattern.
+    """
     image_dirs = list(_walk(root, exts, depth=0))
     buckets: dict[str, list[ImageInfo]] = {}
     bucket_label_count: dict[str, int] = {}
@@ -421,9 +437,24 @@ def _scan_recursive(
     for d in image_dirs:
         if progress_cb:
             progress_cb(counter[0], 0, d.name)
-        cat_name = d.name or root.name
+        # If ``d`` is a <something>/images/ dir AND a sibling <something>/labels/
+        # exists, treat this as a standard-layout bucket embedded in the
+        # recursive tree. The category name is the parent, the label root
+        # is the sibling.
+        if d.name == IMAGE_SUBDIR:
+            parent = d.parent
+            sibling_labels = parent / LABEL_SUBDIR
+            if sibling_labels.is_dir():
+                lbl_root = sibling_labels
+                cat_name = parent.name or root.name
+            else:
+                lbl_root = d
+                cat_name = d.name or root.name
+        else:
+            lbl_root = d
+            cat_name = d.name or root.name
         images, label_count = _build_image_list(
-            d, d, cat_name, exts, progress_cb, counter
+            d, lbl_root, cat_name, exts, progress_cb, counter,
         )
         if not images:
             continue

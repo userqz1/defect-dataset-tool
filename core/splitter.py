@@ -63,13 +63,23 @@ class SplitResult:
 
 
 def _slice_ratio(items: list[ImageInfo], opts: SplitOptions):
+    """Compute train/val/test splits from ratio options.
+
+    Rounding can make ``n_tr + n_va > n`` (e.g. n=10, 0.8/0.15/0.05 →
+    8+2+0 which is fine, but n=11, 0.8/0.15/0.05 → 9+2+1 = 12). We
+    subtract the overshoot from val first, then clamp val to 0 so it
+    never goes negative (review item #2: ``n_va += n_te`` with n_te = -2
+    could drive val to -1 if train itself over-rounded).
+    """
     tr, va, te = opts.normalized_ratio()
     n = len(items)
     n_tr = int(round(n * tr))
     n_va = int(round(n * va))
     n_te = n - n_tr - n_va
     if n_te < 0:
-        n_va += n_te
+        n_va = max(0, n_va + n_te)
+        # Re-clamp n_tr too, in case val couldn't absorb the entire overshoot
+        n_tr = min(n_tr, n - n_va)
         n_te = 0
     return items[:n_tr], items[n_tr:n_tr + n_va], items[n_tr + n_va:n_tr + n_va + n_te]
 

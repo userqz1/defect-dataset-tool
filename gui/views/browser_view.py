@@ -85,6 +85,12 @@ class BrowserView(QWidget):
         self._search_text: str = ""
         self._page: int = 0
         self._filtered: list[ImageInfo] = []
+        # Per-category image-list cache (review #8). Rebuilt on category
+        # switch / dataset change; reused across filter + search typing
+        # so a 50k-image dataset doesn't rebuild the full list on every
+        # keystroke. Keyed by category name ("" = 全部).
+        self._category_images_cache: list[ImageInfo] | None = None
+        self._category_images_cache_key: tuple[str, int] | None = None
         # Quality issues now live in AppState (review #7) so other views
         # can read them without re-running the check. BrowserView just
         # subscribes to quality_changed below.
@@ -453,17 +459,29 @@ class BrowserView(QWidget):
     # ---------- 内部 ----------
 
     def _all_images(self) -> list[ImageInfo]:
+        """Images visible under the current category, cached per
+        (category, id(dataset)) pair — review #8. Filter/search still
+        runs linearly on top, but that scan is bounded by the category
+        size, not the whole dataset, and doesn't rebuild on every
+        keystroke of a search."""
         ds = self._state.dataset
         if not ds:
             return []
+        key = (self._current_category, id(ds))
+        if self._category_images_cache_key == key and self._category_images_cache is not None:
+            return self._category_images_cache
+
         if self._current_category:
             cat = ds.category_by_name(self._current_category)
-            return list(cat.images) if cat else []
-        # 全部
-        out: list[ImageInfo] = []
-        for cat in ds.categories:
-            out.extend(cat.images)
-        return out
+            images = list(cat.images) if cat else []
+        else:
+            images = []
+            for cat in ds.categories:
+                images.extend(cat.images)
+
+        self._category_images_cache = images
+        self._category_images_cache_key = key
+        return images
 
     def _apply_filter_and_show(self) -> None:
         imgs = self._all_images()

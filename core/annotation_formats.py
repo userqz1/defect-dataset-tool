@@ -78,7 +78,12 @@ def parse_annotation(
 # the parse itself runs outside the critical section so concurrent misses
 # on *different* JSONs still overlap.
 import threading as _threading
-_COCO_CACHE: dict[Path, tuple[int, "CocoIndex | None"]] = {}
+from collections import OrderedDict as _OrderedDict
+# True LRU (review #16): OrderedDict + move_to_end() on hit → least-recently
+# accessed falls off on overflow. The previous plain dict + next(iter(...))
+# was FIFO-by-insertion-order, which evicted hot entries re-accessed after
+# 8 others had been inserted. OrderedDict gives the semantic callers expect.
+_COCO_CACHE: "_OrderedDict[Path, tuple[int, CocoIndex | None]]" = _OrderedDict()
 _COCO_CACHE_MAX = 8
 _COCO_CACHE_LOCK = _threading.Lock()
 _COCO_CACHE_INFLIGHT: dict[Path, _threading.Event] = {}
@@ -106,6 +111,7 @@ def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
         with _COCO_CACHE_LOCK:
             cached = _COCO_CACHE.get(json_path)
             if cached and cached[0] == mtime:
+                _COCO_CACHE.move_to_end(json_path)  # LRU: mark as MRU
                 return cached[1]
             inflight = _COCO_CACHE_INFLIGHT.get(json_path)
             if inflight is None:
@@ -120,8 +126,10 @@ def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
             finally:
                 with _COCO_CACHE_LOCK:
                     if len(_COCO_CACHE) >= _COCO_CACHE_MAX:
-                        _COCO_CACHE.pop(next(iter(_COCO_CACHE)))
+                        # popitem(last=False) evicts the oldest entry
+                        _COCO_CACHE.popitem(last=False)
                     _COCO_CACHE[json_path] = (mtime, idx)
+                    _COCO_CACHE.move_to_end(json_path)
                     _COCO_CACHE_INFLIGHT.pop(json_path, None)
                 inflight.set()
             return idx
@@ -131,6 +139,7 @@ def _load_coco_cached(json_path: Path) -> "CocoIndex | None":
         with _COCO_CACHE_LOCK:
             cached = _COCO_CACHE.get(json_path)
             if cached and cached[0] == mtime:
+                _COCO_CACHE.move_to_end(json_path)
                 return cached[1]
         # Cache miss after wakeup — owner failed or LRU evicted our entry.
         # Loop back and race for ownership instead of every waker parsing
@@ -223,8 +232,16 @@ def parse_yolo(
         wp, hp = w * iw, h * ih
         x1, y1 = cxp - wp / 2, cyp - hp / 2
         x2, y2 = cxp + wp / 2, cyp + hp / 2
-        if class_names and 0 <= cls < len(class_names):
-            label = class_names[cls]
+        if class_names:
+            if 0 <= cls < len(class_names):
+                label = class_names[cls]
+            else:
+                # Out-of-range index vs the provided classes.txt. Keep the
+                # numeric label with a ``#`` prefix so it can't collide
+                # with a real class literally named "5" (review #4). A
+                # downstream exporter treating "#5" as a class will at
+                # least be obviously fake to a human reader.
+                label = f"#{cls}"
         else:
             label = str(cls)
         shapes.append(

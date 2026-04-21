@@ -103,118 +103,93 @@ class _ToolRow(QFrame):
         self.style().polish(self)
 
 
-def _make_tool_button(i18n_key: str, icon: FIF, kind: str = "default") -> _ToolRow:
+def _make_tool_button(kind: str, i18n_key: str, icon: FIF,
+                       variant: str = "default") -> _ToolRow:
     """Build a tool row whose text comes from ``gui.i18n.t(i18n_key)``.
 
-    The row tracks its own key so ``ToolSidebar._retranslate`` can re-apply
-    text on language change without rebuilding the widget tree.
+    ``kind`` is the dispatch tag emitted via ToolSidebar.tool_requested
+    (e.g. "quality", "dedup"). ``variant`` maps to the QSS ``toolKind``
+    property for styling (``default`` / ``featured`` / ``ai``).
+    The row tracks its own key so ``ToolSidebar._retranslate`` can
+    re-apply text on language change without rebuilding the tree.
     """
-    row = _ToolRow(i18n.t(i18n_key), icon, kind)
+    row = _ToolRow(i18n.t(i18n_key), icon, variant)
     row._i18n_key = i18n_key  # type: ignore[attr-defined]
+    row._kind = kind  # type: ignore[attr-defined]
     return row
 
 
+# (kind, i18n_key, FIF icon, variant) — adding a new tool is a single
+# line here plus a handler entry in DatasetBrowserView.TOOL_HANDLERS.
+# Group boundaries are marked by None entries (rendered as section header).
+_TOOL_LAYOUT: list = [
+    # Common
+    ("refresh", "tools.refresh", FIF.SYNC, "default"),
+    ("undo", "tools.undo", FIF.RETURN, "default"),
+    # Analysis
+    ("__section__", "tools.group.analysis"),
+    ("quality", "tools.quality", FIF.SEARCH, "default"),
+    ("dedup", "tools.dedup", FIF.COPY, "default"),
+    # Processing
+    ("__section__", "tools.group.process"),
+    ("resize", "tools.resize", FIF.ZOOM, "default"),
+    ("crop", "tools.crop", FIF.CUT, "default"),
+    ("rotate", "tools.rotate", FIF.ROTATE, "default"),
+    ("flip", "tools.flip", FIF.IOT, "default"),
+    ("convert", "tools.convert", FIF.PHOTO, "default"),
+    ("augment", "tools.augment", FIF.ADD, "default"),
+    ("predict", "tools.predict", FIF.ROBOT, "ai"),
+    # Output
+    ("__section__", "tools.group.output"),
+    ("export", "tools.export", FIF.SHARE, "featured"),
+    # Other
+    ("__section__", "tools.group.other"),
+    ("history", "tools.history", FIF.HISTORY, "default"),
+    ("stats", "tools.stats", FIF.PIE_SINGLE, "default"),
+]
+
+
 class ToolSidebar(QFrame):
-    """Left-hand tool sidebar — 14 actions across 4 function groups."""
+    """Left-hand tool sidebar — data-driven layout + one dispatch signal.
 
-    # Signals — direct 1:1 with existing handlers in DatasetBrowserView
-    refresh_requested = pyqtSignal()
-    undo_requested = pyqtSignal()
+    Adding a tool used to require touching three places (signal
+    declaration, signal emit, DatasetBrowserView handler). With a
+    single ``tool_requested(kind)`` signal + the ``_TOOL_LAYOUT`` table,
+    a new tool is one row in the table + one entry in the outer
+    view's handler map — review #15.
+    """
 
-    quality_requested = pyqtSignal()
-    dedup_requested = pyqtSignal()
-
-    resize_requested = pyqtSignal()
-    crop_requested = pyqtSignal()
-    rotate_requested = pyqtSignal()
-    flip_requested = pyqtSignal()
-    convert_requested = pyqtSignal()
-    augment_requested = pyqtSignal()
-    predict_requested = pyqtSignal()
-
-    export_requested = pyqtSignal()
-
-    history_requested = pyqtSignal()
-    stats_requested = pyqtSignal()
+    # Single dispatch signal — ``kind`` matches the tag in _TOOL_LAYOUT.
+    tool_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("toolSidebar")
-        # Design handoff: ToolsPanel is 248px wide (collapses to 60px).
-        # We live as our own column now (not nested inside BrowserView).
         self.setFixedWidth(248)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(T.GAP, T.GAP_LG, T.GAP, T.GAP_LG)
         root.setSpacing(T.GAP_XS)
 
-        # Track (widget, i18n_key) pairs so language-switch retranslation
-        # is a cheap walk + setText instead of rebuilding the tree.
         self._section_labels: list[tuple["CaptionLabel", str]] = []
+        self._buttons: dict[str, _ToolRow] = {}
 
-        # ── Row 1: session controls ──
-        self._refresh_btn = _make_tool_button("tools.refresh", FIF.SYNC)
-        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
-        # FIF.RETURN reads as "back / undo" in Fluent; FIF.CANCEL was the
-        # cross icon which most users parse as "cancel current op" (review #11).
-        self._undo_btn = _make_tool_button("tools.undo", FIF.RETURN)
-        self._undo_btn.clicked.connect(self.undo_requested.emit)
-        root.addWidget(self._refresh_btn)
-        root.addWidget(self._undo_btn)
-
-        # ── Analysis ──
-        root.addWidget(self._section_header("tools.group.analysis"))
-        self._quality_btn = _make_tool_button("tools.quality", FIF.SEARCH)
-        self._quality_btn.clicked.connect(self.quality_requested.emit)
-        self._dedup_btn = _make_tool_button("tools.dedup", FIF.COPY)
-        self._dedup_btn.clicked.connect(self.dedup_requested.emit)
-        root.addWidget(self._quality_btn)
-        root.addWidget(self._dedup_btn)
-
-        # ── Processing ──
-        root.addWidget(self._section_header("tools.group.process"))
-        self._resize_btn = _make_tool_button("tools.resize", FIF.ZOOM)
-        self._resize_btn.clicked.connect(self.resize_requested.emit)
-        self._crop_btn = _make_tool_button("tools.crop", FIF.CUT)
-        self._crop_btn.clicked.connect(self.crop_requested.emit)
-        self._rotate_btn = _make_tool_button("tools.rotate", FIF.ROTATE)
-        self._rotate_btn.clicked.connect(self.rotate_requested.emit)
-        self._flip_btn = _make_tool_button("tools.flip", FIF.IOT)
-        self._flip_btn.clicked.connect(self.flip_requested.emit)
-        self._convert_btn = _make_tool_button("tools.convert", FIF.PHOTO)
-        self._convert_btn.clicked.connect(self.convert_requested.emit)
-        self._augment_btn = _make_tool_button("tools.augment", FIF.ADD)
-        self._augment_btn.clicked.connect(self.augment_requested.emit)
-        self._predict_btn = _make_tool_button("tools.predict", FIF.ROBOT, kind="ai")
-        self._predict_btn.clicked.connect(self.predict_requested.emit)
-        for btn in (self._resize_btn, self._crop_btn, self._rotate_btn,
-                    self._flip_btn, self._convert_btn, self._augment_btn,
-                    self._predict_btn):
+        for entry in _TOOL_LAYOUT:
+            if entry[0] == "__section__":
+                root.addWidget(self._section_header(entry[1]))
+                continue
+            kind, key, icon, variant = entry
+            btn = _make_tool_button(kind, key, icon, variant=variant)
+            btn.clicked.connect(
+                lambda _b=False, k=kind: self.tool_requested.emit(k)
+            )
+            self._buttons[kind] = btn
             root.addWidget(btn)
-
-        # ── Output ──
-        root.addWidget(self._section_header("tools.group.output"))
-        self._export_btn = _make_tool_button("tools.export", FIF.SHARE, kind="featured")
-        self._export_btn.clicked.connect(self.export_requested.emit)
-        root.addWidget(self._export_btn)
-
-        # ── Other ──
-        root.addWidget(self._section_header("tools.group.other"))
-        self._history_btn = _make_tool_button("tools.history", FIF.HISTORY)
-        self._history_btn.clicked.connect(self.history_requested.emit)
-        self._stats_btn = _make_tool_button("tools.stats", FIF.PIE_SINGLE)
-        self._stats_btn.clicked.connect(self.stats_requested.emit)
-        root.addWidget(self._history_btn)
-        root.addWidget(self._stats_btn)
 
         root.addStretch(1)
 
-        # All buttons disabled until a dataset is active
         self.set_enabled(False)
         self.set_undo_enabled(False)
-
-        # Subscribe to language changes for live re-text (header + section +
-        # button labels in one sweep).
         i18n.bus.language_changed.connect(self._retranslate)
 
     def _section_header(self, i18n_key: str) -> QWidget:
@@ -235,11 +210,7 @@ class ToolSidebar(QFrame):
         """Re-apply i18n text to all tracked labels & buttons."""
         for lbl, key in self._section_labels:
             lbl.setText(i18n.t(key).upper())
-        for btn in (self._refresh_btn, self._undo_btn, self._quality_btn,
-                     self._dedup_btn, self._resize_btn, self._crop_btn,
-                     self._rotate_btn, self._flip_btn, self._convert_btn,
-                     self._augment_btn, self._predict_btn, self._export_btn,
-                     self._history_btn, self._stats_btn):
+        for btn in self._buttons.values():
             key = getattr(btn, "_i18n_key", None)
             if key:
                 btn._text_label.setText(i18n.t(key))
@@ -248,15 +219,17 @@ class ToolSidebar(QFrame):
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable/disable dataset-scoped buttons (all except undo)."""
-        for btn in (self._refresh_btn, self._quality_btn, self._dedup_btn,
-                    self._resize_btn, self._crop_btn, self._rotate_btn,
-                    self._flip_btn, self._convert_btn, self._augment_btn,
-                    self._predict_btn, self._export_btn,
-                    self._history_btn, self._stats_btn):
+        for kind, btn in self._buttons.items():
+            if kind == "undo":
+                continue  # undo is separately gated
             btn.setEnabled(enabled)
 
     def set_undo_enabled(self, enabled: bool) -> None:
-        self._undo_btn.setEnabled(enabled)
+        btn = self._buttons.get("undo")
+        if btn is not None:
+            btn.setEnabled(enabled)
 
     def set_undo_tooltip(self, text: str) -> None:
-        self._undo_btn.setToolTip(text)
+        btn = self._buttons.get("undo")
+        if btn is not None:
+            btn.setToolTip(text)

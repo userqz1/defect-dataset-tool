@@ -47,20 +47,29 @@ class DatasetBrowserView(QWidget):
         # Column 1: Tools panel
         from gui.widgets.tool_sidebar import ToolSidebar
         self._tool_sidebar = ToolSidebar()
-        self._tool_sidebar.refresh_requested.connect(self._on_refresh)
-        self._tool_sidebar.undo_requested.connect(self._on_undo)
-        self._tool_sidebar.quality_requested.connect(self._on_quality_check)
-        self._tool_sidebar.dedup_requested.connect(self._on_dedup)
-        self._tool_sidebar.resize_requested.connect(self._on_resize)
-        self._tool_sidebar.crop_requested.connect(self._on_crop)
-        self._tool_sidebar.rotate_requested.connect(self._on_rotate)
-        self._tool_sidebar.flip_requested.connect(self._on_flip)
-        self._tool_sidebar.convert_requested.connect(self._on_convert)
-        self._tool_sidebar.augment_requested.connect(self._on_augment)
-        self._tool_sidebar.predict_requested.connect(self._on_predict)
-        self._tool_sidebar.export_requested.connect(self._on_export)
-        self._tool_sidebar.history_requested.connect(self._on_history)
-        self._tool_sidebar.stats_requested.connect(self._on_stats)
+        # Single-signal dispatch (review #15) — ToolSidebar emits the
+        # kind string; we route to handlers via TOOL_HANDLERS. Adding a
+        # new tool = one row in tool_sidebar._TOOL_LAYOUT + one entry
+        # here (no new signal declaration anywhere).
+        TOOL_HANDLERS: dict[str, callable] = {
+            "refresh": self._on_refresh,
+            "undo": self._on_undo,
+            "quality": self._on_quality_check,
+            "dedup": self._on_dedup,
+            "resize": self._on_resize,
+            "crop": self._on_crop,
+            "rotate": self._on_rotate,
+            "flip": self._on_flip,
+            "convert": self._on_convert,
+            "augment": self._on_augment,
+            "predict": self._on_predict,
+            "export": self._on_export,
+            "history": self._on_history,
+            "stats": self._on_stats,
+        }
+        self._tool_sidebar.tool_requested.connect(
+            lambda kind: TOOL_HANDLERS[kind]()
+        )
         root.addWidget(self._tool_sidebar)
 
         # Column 2: Browser + Detail stack (the "viewer" region)

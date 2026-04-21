@@ -164,9 +164,14 @@ def rename_pair(image: ImageInfo, new_stem: str) -> OpResult:
 
         label = image.label_path or label_path_for_image(image.path)
         if label and label.is_file():
-            new_label = label.with_name(new_stem + ".json")
+            # Preserve the label's original extension (.json/.txt/.xml) —
+            # hardcoding .json silently mis-converted YOLO/VOC labels
+            # (review #3). _update_image_path_in_json is LabelMe-only so
+            # we gate the in-JSON rewrite on suffix match too.
+            new_label = label.with_name(new_stem + label.suffix)
             label.rename(new_label)
-            _update_image_path_in_json(new_label, new_image.name)
+            if new_label.suffix.lower() == ".json":
+                _update_image_path_in_json(new_label, new_image.name)
 
         result.succeeded.append(new_image)
     except Exception as e:  # noqa: BLE001
@@ -208,9 +213,15 @@ def batch_rename(
             new_image = tmp_image.with_name(new_stem + img.path.suffix)
             tmp_image.rename(new_image)
             if tmp_label is not None:
-                new_label = tmp_label.with_name(new_stem + ".json")
+                # Recover the real extension — the stage-1 temp file is
+                # ``__renaming__{i}__<real_stem><.ext>`` so we take the
+                # last suffix. Hardcoding .json broke YOLO (.txt) and
+                # VOC (.xml) label pipelines (review #3).
+                orig_suffix = tmp_label.suffix
+                new_label = tmp_label.with_name(new_stem + orig_suffix)
                 tmp_label.rename(new_label)
-                _update_image_path_in_json(new_label, new_image.name)
+                if new_label.suffix.lower() == ".json":
+                    _update_image_path_in_json(new_label, new_image.name)
             result.succeeded.append(new_image)
         except Exception as e:  # noqa: BLE001
             result.failed.append((tmp_image, f"stage2: {e}"))

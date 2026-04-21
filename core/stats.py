@@ -95,17 +95,32 @@ def _parse_one(img):
     for s in r.annotation.shapes:
         labels[s.label] += 1
 
+    # Image size: try PIL's image-header read first (fast: only reads
+    # a few KB). Falls back to the LabelMe JSON's embedded dimensions
+    # if the image doesn't open. For COCO layouts we previously
+    # re-decoded the shared 500MB JSON for every sampled image just to
+    # pull imageWidth/imageHeight — a massive waste (review #10).
     size = None
-    if img.label_path.suffix.lower() == ".json":
-        try:
-            import json as _json
-            raw = _json.loads(img.label_path.read_text(encoding="utf-8"))
-            w = int(raw.get("imageWidth", 0))
-            h = int(raw.get("imageHeight", 0))
+    try:
+        from PIL import Image as _PIL
+        with _PIL.open(img.path) as im:
+            w, h = im.size
             if w > 0 and h > 0:
                 size = (w, h)
-        except Exception:  # noqa: BLE001
-            pass
+    except Exception:  # noqa: BLE001
+        # Fallback: LabelMe JSON only (COCO JSON has per-image sizes
+        # but looking them up requires a whole-file parse we already
+        # run once via parse_annotation's COCO cache).
+        if img.label_path.suffix.lower() == ".json":
+            try:
+                import json as _json
+                raw = _json.loads(img.label_path.read_text(encoding="utf-8"))
+                w = int(raw.get("imageWidth", 0))
+                h = int(raw.get("imageHeight", 0))
+                if w > 0 and h > 0:
+                    size = (w, h)
+            except Exception:  # noqa: BLE001
+                pass
     return len(r.annotation.shapes), labels, size
 
 

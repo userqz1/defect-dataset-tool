@@ -12,7 +12,7 @@ faster than setItemWidget on large datasets (480 QWidgets → 0).
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -255,6 +255,12 @@ class ThumbnailGrid(QListWidget):
         # path → item row index for fast thumb_ready lookup
         self._path_to_row: dict[str, int] = {}
 
+        # Debounce selection_changed (review #9) — Ctrl+A over 40 items
+        # otherwise fires 40 signals, each triggering a full selected_images()
+        # scan on the receiver side. Coalesce to a single emit on the next
+        # event loop tick via QTimer.singleShot(0, ...).
+        self._sel_pending = False
+
     def set_images(
         self,
         images: list[ImageInfo],
@@ -301,4 +307,13 @@ class ThumbnailGrid(QListWidget):
             self.item_activated.emit(img)
 
     def _on_selection_changed(self) -> None:
+        # Coalesce bursts (Ctrl+A, shift-click range) into a single emit
+        # on the next event loop tick.
+        if self._sel_pending:
+            return
+        self._sel_pending = True
+        QTimer.singleShot(0, self._flush_selection)
+
+    def _flush_selection(self) -> None:
+        self._sel_pending = False
         self.selection_changed.emit(self.selected_images())

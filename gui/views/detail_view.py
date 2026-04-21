@@ -91,7 +91,11 @@ class DetailView(QWidget):
         self._annotation: Annotation | None = None
         # mtime baseline for review #22 conflict check; per-method annotation
         # had no runtime effect (PEP 526 only applies at class/module scope).
-        self._label_mtime_at_load: float | None = None
+        # Nanosecond precision (st_mtime_ns) — review #5: float st_mtime
+        # + 0.001s tolerance is too fine for FAT32/NAS (2s precision)
+        # and too fragile in general. ns rounds away sub-microsecond
+        # noise while still catching real external edits.
+        self._label_mtime_at_load: int | None = None
         # review #9: increments on every _load_current; _on_image_loaded
         # ignores any (stale) result whose generation != current.
         self._load_generation: int = 0
@@ -390,7 +394,7 @@ class DetailView(QWidget):
         self._label_mtime_at_load = None
         try:
             if img.has_label and img.label_path and img.label_path.is_file():
-                self._label_mtime_at_load = img.label_path.stat().st_mtime
+                self._label_mtime_at_load = img.label_path.stat().st_mtime_ns
         except OSError:
             self._label_mtime_at_load = None
         self._dirty = False
@@ -482,10 +486,12 @@ class DetailView(QWidget):
         if (self._label_mtime_at_load is not None
                 and label_path.is_file()):
             try:
-                disk_mtime = label_path.stat().st_mtime
+                disk_mtime = label_path.stat().st_mtime_ns
             except OSError:
                 disk_mtime = self._label_mtime_at_load
-            if disk_mtime > self._label_mtime_at_load + 0.001:
+            # 100 ms tolerance (in ns) — bigger than any real filesystem's
+            # noise, smaller than any interactive save interval.
+            if disk_mtime > self._label_mtime_at_load + 100_000_000:
                 box = MessageBox(
                     "文件已被外部修改",
                     f"{label_path.name} 在打开后被其他程序改动过。\n"
@@ -513,7 +519,7 @@ class DetailView(QWidget):
         # Refresh the conflict-detection baseline to the file we just
         # wrote — any further external edits show up on the next save.
         try:
-            self._label_mtime_at_load = label_path.stat().st_mtime
+            self._label_mtime_at_load = label_path.stat().st_mtime_ns
         except OSError:
             pass
         InfoBar.success(

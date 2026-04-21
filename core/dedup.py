@@ -77,20 +77,97 @@ def find_duplicates(
     # Stable sort so "representative image" (group[0]) is deterministic
     hashes.sort(key=lambda x: str(x[0].path))
 
-    # Group by hamming distance (O(n²) but fast for <10k hashed images)
-    groups: list[DuplicateGroup] = []
-    visited = [False] * len(hashes)
-    for i in range(len(hashes)):
-        if visited[i]:
+    return _group_by_hamming(hashes, threshold)
+
+
+def _as_int(h: imagehash.ImageHash) -> int:
+    """Pack an ImageHash's 8×8 bool grid into a 64-bit int (MSB first)."""
+    n = 0
+    for b in h.hash.flatten():
+        n = (n << 1) | int(bool(b))
+    return n
+
+
+def _group_by_hamming(
+    hashes: list[tuple[ImageInfo, imagehash.ImageHash]],
+    threshold: int,
+) -> list[DuplicateGroup]:
+    """Group hashes within ``threshold`` Hamming distance.
+
+    Uses multi-index hashing (review #7) — split each 64-bit hash into
+    ``threshold + 1`` segments; by the pigeonhole principle, any two
+    hashes within ``threshold`` bits of each other must share at least
+    one exact-match segment, so we only do precise Hamming checks
+    inside shared-segment buckets. Drops the old O(n²) scan to ~O(n)
+    on well-distributed pHashes, ~O(n·k) in the worst case where k is
+    the largest bucket size.
+    """
+    if not hashes:
+        return []
+
+    n_seg = max(1, threshold + 1)
+    seg_bits = 64 // n_seg  # 64 bits / 6 segments = 10-11 bits each
+    mask = (1 << seg_bits) - 1
+
+    # Precompute each hash's 64-bit int + per-segment keys
+    packed: list[int] = []
+    keys_per_hash: list[list[tuple[int, int]]] = []  # [(seg_idx, seg_val)]
+    for _, h in hashes:
+        v = _as_int(h)
+        packed.append(v)
+        keys = [
+            (i, (v >> (64 - seg_bits * (i + 1))) & mask)
+            for i in range(n_seg)
+        ]
+        keys_per_hash.append(keys)
+
+    # Inverted index: (seg_idx, seg_val) → list of hash indices
+    from collections import defaultdict
+    buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for idx, keys in enumerate(keys_per_hash):
+        for k in keys:
+            buckets[k].append(idx)
+
+    # Union-find over near-duplicate edges
+    parent = list(range(len(hashes)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # For each bucket, verify candidate pairs via popcount; small buckets
+    # stay linear, large buckets still do k² but on a much smaller k.
+    for members in buckets.values():
+        if len(members) < 2:
             continue
-        visited[i] = True
-        group = DuplicateGroup(hash_value=str(hashes[i][1]), images=[hashes[i][0]])
-        for j in range(i + 1, len(hashes)):
-            if visited[j]:
-                continue
-            if hashes[i][1] - hashes[j][1] <= threshold:
-                visited[j] = True
-                group.images.append(hashes[j][0])
-        if group.size > 1:
-            groups.append(group)
+        for i in range(len(members)):
+            a = members[i]
+            for j in range(i + 1, len(members)):
+                b = members[j]
+                if find(a) == find(b):
+                    continue  # already grouped via another segment
+                if bin(packed[a] ^ packed[b]).count("1") <= threshold:
+                    union(a, b)
+
+    # Materialize groups from union-find
+    root_to_members: dict[int, list[int]] = defaultdict(list)
+    for idx in range(len(hashes)):
+        root_to_members[find(idx)].append(idx)
+
+    groups: list[DuplicateGroup] = []
+    for root, members in root_to_members.items():
+        if len(members) < 2:
+            continue
+        members.sort()  # deterministic order within group
+        groups.append(DuplicateGroup(
+            hash_value=str(hashes[root][1]),
+            images=[hashes[m][0] for m in members],
+        ))
     return groups

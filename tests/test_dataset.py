@@ -150,6 +150,26 @@ class TestScanDataset:
                json.dumps(label).encode())
         ds = scan_dataset(tmp_path)
         assert ds.categories[0].label_count == 1
+
+    def test_scan_recursive_finds_sibling_labels(self, tmp_path):
+        """Review #1: when recursive walk hits ``<cat>/images/``, labels
+        should come from the sibling ``<cat>/labels/`` dir — the old
+        behavior used the image dir as its own label root and dropped
+        every .json."""
+        import json
+        png = _make_png()
+        # Put a non-image file at root so _detect_layout falls through
+        # to "recursive" (otherwise this would be a plain standard scan).
+        _touch(tmp_path / "README.md", b"")
+        _touch(tmp_path / "nested" / "cat" / "images" / "a.jpg", png)
+        _touch(tmp_path / "nested" / "cat" / "labels" / "a.json",
+               json.dumps({"imagePath": "a.jpg", "shapes": []}).encode())
+        ds = scan_dataset(tmp_path)
+        # Bucket is named after the category parent, not "images"
+        assert any(c.name == "cat" for c in ds.categories), \
+            [c.name for c in ds.categories]
+        cat = next(c for c in ds.categories if c.name == "cat")
+        assert cat.label_count == 1, f"expected 1 label, got {cat.label_count}"
         assert ds.categories[0].images[0].has_label
 
 

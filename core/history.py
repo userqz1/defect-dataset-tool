@@ -240,7 +240,28 @@ def _undo_move_to_category(root: Path, entry: HistoryEntry) -> tuple[bool, str]:
         if landed_str:
             current = Path(landed_str)
         else:
-            current = root / target / "images" / Path(src_str).name
+            # Legacy entries (pre-moves-field) only stored the original
+            # filename. Try the literal location first; if missing, probe
+            # ``foo_1.jpg / foo_2.jpg / ...`` up to _3 to cover the case
+            # where move_to_category's ``_ensure_unique`` appended a suffix.
+            # If none match, refuse the row rather than misidentify a
+            # same-named file that happened to land there later (review #6).
+            candidate = root / target / "images" / Path(src_str).name
+            if candidate.exists():
+                current = candidate
+            else:
+                current = None
+                p = Path(src_str)
+                for i in range(1, 4):
+                    guess = (root / target / "images"
+                             / f"{p.stem}_{i}{p.suffix}")
+                    if guess.exists():
+                        current = guess
+                        break
+                if current is None:
+                    failed.append((src_str,
+                                   "当前位置找不到文件(legacy 记录缺 moves 字段)"))
+                    continue
         filename = current.name
         if not current.exists():
             failed.append((src_str, "当前位置找不到文件"))
