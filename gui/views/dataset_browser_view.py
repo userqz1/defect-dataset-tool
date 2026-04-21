@@ -206,7 +206,10 @@ class DatasetBrowserView(QWidget):
         """Scan a directory and load into browser.
 
         ``force=True`` skips the SQLite index cache and re-walks the
-        filesystem — used by the manual "刷新" button.
+        filesystem — used by the manual "刷新" button. Refresh also
+        skips the heavy extended-stats phase (stats dialog recomputes
+        on open); the first-time open still runs it so the stats tab
+        is ready without an extra wait.
         """
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
@@ -220,7 +223,8 @@ class DatasetBrowserView(QWidget):
         progress.show()
 
         from gui.workers.scan_worker import ScanWorker
-        worker = ScanWorker(root, parent=self, force_rescan=force)
+        worker = ScanWorker(root, parent=self, force_rescan=force,
+                             skip_analyze=force)
         self._scan_worker = worker
         progress.canceled.connect(worker.cancel)
 
@@ -322,7 +326,10 @@ class DatasetBrowserView(QWidget):
         root = ds.root_path
 
         from gui.workers.scan_worker import ScanWorker
-        worker = ScanWorker(root, parent=self, force_rescan=force)
+        # Post-op rescans (after delete/move/rename) don't need Phase 3;
+        # stats dialog recomputes lazily on next open.
+        worker = ScanWorker(root, parent=self, force_rescan=force,
+                             skip_analyze=True)
         self._scan_worker = worker
 
         def _done(result):
