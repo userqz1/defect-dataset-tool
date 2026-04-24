@@ -6,7 +6,7 @@ from io import BytesIO
 from PIL import Image
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout
 from qfluentwidgets import CaptionLabel
 
 from gui.theme import T
@@ -22,7 +22,10 @@ class _ImageSlot(QFrame):
         layout.setSpacing(T.GAP_XS)
         self.title = CaptionLabel(title)
         layout.addWidget(self.title)
-        self.image_label = QLabel("(无)")
+        # Dual-use: holds a pixmap (set by set_pil_image) OR a "(无)"
+        # fallback text when no image is loaded. CaptionLabel styles the
+        # fallback text consistently with the rest of the UI.
+        self.image_label = CaptionLabel("(无)")
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumSize(240, 180)
         self.image_label.setScaledContents(False)

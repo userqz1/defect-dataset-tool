@@ -1,12 +1,25 @@
-"""Dataset statistics — basic (fast) and extended (parses all annotations)."""
+"""Dataset statistics — basic (fast) and extended.
+
+Primary path: ``compute_extended_stats_from_samples(ss)`` — reads from
+in-memory SampleSet, no disk I/O, ~100× faster.
+
+Legacy fallback: ``compute_extended_stats(dataset)`` — re-parses
+annotation files from disk. Kept only for the rare case where
+SampleSet is unavailable (e.g. very early scan phase). Scheduled
+for removal once all callers migrate to the SampleSet path.
+"""
 from __future__ import annotations
 
+import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from statistics import median
+from typing import TYPE_CHECKING
 
-from .annotation_formats import load_yolo_classes, parse_annotation
 from .models import Dataset
+
+if TYPE_CHECKING:
+    from .unified import SampleSet
 
 
 @dataclass
@@ -78,9 +91,15 @@ def _parse_one(img):
     Returns ``(objects_count, labels_counter, (w, h) or None)``. Runs off
     the main thread; no shared state mutation. Called from the
     ThreadPoolExecutor inside compute_extended_stats.
+
+    .. deprecated:: Uses legacy annotation_formats; prefer
+       ``compute_extended_stats_from_samples`` instead.
     """
     if not img.has_label or img.label_path is None:
         return 0, Counter(), None
+
+    # Lazy import — avoids top-level dependency on annotation_formats
+    from .annotation_formats import load_yolo_classes, parse_annotation
 
     classes = (
         load_yolo_classes(img.label_path.parent)
@@ -127,11 +146,22 @@ def _parse_one(img):
 def compute_extended_stats(dataset: Dataset, progress_cb=None) -> ExtendedStats:
     """Parse annotation files to compute per-class stats, image sizes, and warnings.
 
+    .. deprecated::
+        Use ``compute_extended_stats_from_samples`` with an in-memory
+        ``SampleSet`` instead. This function re-parses every annotation
+        file from disk — ~100× slower and maintains a parallel parsing
+        path that diverges from format_in.
+
     For datasets > _MAX_PARSE images, samples a random subset and extrapolates.
     Parallelized with ThreadPoolExecutor (Python's json/xml release the GIL
     during I/O) — 4–8× speedup on 2k-sample scans versus the serial loop.
     Call from a worker thread; progress_cb fires on the calling thread.
     """
+    warnings.warn(
+        "compute_extended_stats() is deprecated; use "
+        "compute_extended_stats_from_samples(sample_set) instead",
+        DeprecationWarning, stacklevel=2,
+    )
     import random as _random
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -217,6 +247,94 @@ def compute_extended_stats(dataset: Dataset, progress_cb=None) -> ExtendedStats:
     unlabeled = sum(1 for img in all_images if not img.has_label)
     if unlabeled > 0:
         pct = unlabeled / len(all_images) * 100
+        warnings.append(f"{unlabeled} 张图片未标注（{pct:.1f}%）")
+
+    return ExtendedStats(
+        per_class_annotations=per_class,
+        objects_per_image_min=opi_min,
+        objects_per_image_max=opi_max,
+        objects_per_image_median=opi_median,
+        image_sizes=size_stats,
+        imbalance_ratio=imbalance,
+        warnings=warnings,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────
+# SampleSet-based stats (no disk I/O)
+# ────────────────────────────────────────────────────────────────────
+
+def compute_extended_stats_from_samples(
+    ss: SampleSet,
+    progress_cb=None,
+) -> ExtendedStats:
+    """Compute extended stats from in-memory SampleSet — no disk I/O.
+
+    Functionally identical to ``compute_extended_stats`` but reads region
+    counts, class labels, and image dimensions directly from Sample
+    objects. No sampling needed (in-memory iteration is fast).
+    """
+    class_counter: Counter[str] = Counter()
+    objects_per_image: list[int] = []
+    widths: list[int] = []
+    heights: list[int] = []
+
+    total = len(ss.samples)
+    for i, sample in enumerate(ss.samples):
+        if progress_cb and i > 0 and i % 200 == 0:
+            progress_cb(i, total, "")
+
+        n_objs = len(sample.regions)
+        objects_per_image.append(n_objs)
+
+        for r in sample.regions:
+            class_counter[r.label] += 1
+
+        if sample.image_width > 0 and sample.image_height > 0:
+            widths.append(sample.image_width)
+            heights.append(sample.image_height)
+
+    if progress_cb:
+        progress_cb(total, total, "")
+
+    # No sampling ⇒ no scale factor
+    per_class = sorted(class_counter.items(), key=lambda x: x[1], reverse=True)
+
+    opi_min = min(objects_per_image) if objects_per_image else 0
+    opi_max = max(objects_per_image) if objects_per_image else 0
+    opi_median = median(objects_per_image) if objects_per_image else 0.0
+
+    size_stats = None
+    if widths and heights:
+        size_stats = ImageSizeStats(
+            min_w=min(widths), min_h=min(heights),
+            max_w=max(widths), max_h=max(heights),
+            median_w=int(median(widths)), median_h=int(median(heights)),
+        )
+
+    counts = [c for _, c in per_class]
+    if len(counts) >= 2 and min(counts) > 0:
+        imbalance = max(counts) / min(counts)
+    else:
+        imbalance = 1.0
+
+    warnings: list[str] = []
+    if not per_class:
+        warnings.append("未检测到任何标注类别")
+    else:
+        for label, count in per_class:
+            if count < 10:
+                warnings.append(f"类别 \"{label}\" 仅有 {count} 个标注，可能不足以训练")
+        if imbalance > 5:
+            most, least = per_class[0], per_class[-1]
+            warnings.append(
+                f"类别严重不平衡：\"{most[0]}\"({most[1]}) vs \"{least[0]}\"({least[1]})，"
+                f"比例 {imbalance:.1f}:1"
+            )
+
+    unlabeled = sum(1 for s in ss.samples if not s.has_label)
+    if unlabeled > 0:
+        pct = unlabeled / total * 100 if total else 0
         warnings.append(f"{unlabeled} 张图片未标注（{pct:.1f}%）")
 
     return ExtendedStats(

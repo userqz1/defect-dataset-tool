@@ -99,6 +99,7 @@ class ExportWizardDialog(MessageBoxBase):
 
     def __init__(self, dataset: Dataset, task_type: TaskType | None = None,
                  manual_counts: tuple[int, int, int] = (0, 0, 0),
+                 wf_ready_count: int = 0, wf_total_count: int = 0,
                  parent=None) -> None:
         super().__init__(parent=parent)
         self._dataset = dataset
@@ -237,9 +238,33 @@ class ExportWizardDialog(MessageBoxBase):
 
         p_lay.addWidget(self._ratio_widget)
 
-        self._copy_chk = CheckBox("复制图片到导出目录")
+        self._copy_chk = CheckBox("复���图片到导出目录")
         self._copy_chk.setChecked(True)
         p_lay.addWidget(self._copy_chk)
+
+        # Workflow scope — export all vs ready-only
+        self._wf_ready_count = wf_ready_count
+        self._wf_total_count = wf_total_count
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(T.GAP_LG)
+        self._scope_all_rb = RadioButton("导出全部")
+        self._scope_ready_rb = RadioButton("仅导出已就绪")
+        self._scope_group = QButtonGroup(self)
+        self._scope_group.addButton(self._scope_all_rb)
+        self._scope_group.addButton(self._scope_ready_rb)
+        self._scope_all_rb.setChecked(True)
+        scope_row.addWidget(self._scope_all_rb)
+        scope_row.addWidget(self._scope_ready_rb)
+        if wf_total_count > 0:
+            scope_hint = CaptionLabel(
+                f"{wf_ready_count} 张就绪 / {wf_total_count} 张总计")
+            scope_hint.setObjectName("statValue")
+            scope_row.addWidget(scope_hint)
+        scope_row.addStretch(1)
+        p_lay.addLayout(scope_row)
+        # Hide scope row when no workflow is active
+        self._scope_all_rb.setVisible(wf_total_count > 0)
+        self._scope_ready_rb.setVisible(wf_total_count > 0)
 
         # Toggle ratio block visibility based on mode selection
         self._mode_ratio_rb.toggled.connect(
@@ -434,4 +459,6 @@ class ExportWizardDialog(MessageBoxBase):
             "stratified": self._stratified_chk.isChecked(),
             # question only meaningful for VLM schemas; empty string = use default
             "question": self._question_edit.text().strip(),
+            # Workflow scope: "all" or "ready_only"
+            "export_scope": "ready_only" if self._scope_ready_rb.isChecked() else "all",
         }

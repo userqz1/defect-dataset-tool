@@ -7,6 +7,7 @@ the `imagePath` field updated.
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,22 +50,36 @@ def convert_one(image_path: Path, opts: ConvertOptions) -> Path:
     if new_path == image_path:
         return image_path  # 同格式不动
     if new_path.exists() and not opts.overwrite:
-        # 加 _converted 后缀避免覆盖
-        new_path = image_path.with_name(image_path.stem + "_converted" + opts.target_ext)
+        stem = image_path.stem + "_converted"
+        new_path = image_path.with_name(stem + opts.target_ext)
+        counter = 1
+        while new_path.exists():
+            new_path = image_path.with_name(f"{stem}_{counter}" + opts.target_ext)
+            counter += 1
 
-    with Image.open(image_path) as im:
-        im = ImageOps.exif_transpose(im)
-        # JPEG 不支持 alpha
-        if pil_format == "JPEG" and im.mode in ("RGBA", "LA", "P"):
-            im = im.convert("RGB")
-        save_kwargs: dict = {}
-        if pil_format in ("JPEG", "WEBP"):
-            save_kwargs["quality"] = opts.quality
-        if opts.keep_exif:
-            exif = im.info.get("exif")
-            if exif:
-                save_kwargs["exif"] = exif
-        im.save(new_path, format=pil_format, **save_kwargs)
+    # Write to a temp file then rename — avoids TOCTOU race where
+    # concurrent converts both pick the same new_path.
+    import os
+    fd, tmp = tempfile.mkstemp(
+        suffix=opts.target_ext, dir=str(image_path.parent))
+    os.close(fd)  # close fd so PIL can open the path on Windows
+    try:
+        with Image.open(image_path) as im:
+            im = ImageOps.exif_transpose(im)
+            if pil_format == "JPEG" and im.mode in ("RGBA", "LA", "P"):
+                im = im.convert("RGB")
+            save_kwargs: dict = {}
+            if pil_format in ("JPEG", "WEBP"):
+                save_kwargs["quality"] = opts.quality
+            if opts.keep_exif:
+                exif = im.info.get("exif")
+                if exif:
+                    save_kwargs["exif"] = exif
+            im.save(tmp, format=pil_format, **save_kwargs)
+        Path(tmp).replace(new_path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
     # 同步 JSON
     label = label_path_for_image(image_path)

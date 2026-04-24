@@ -6,9 +6,9 @@ Geometric variants (flip/rotate/crop/copy-paste) update annotation points in
 pixel coordinates. Photometric variants (brightness/contrast/jitter/noise/blur)
 leave annotations unchanged.
 
-Annotations are round-tripped through core.annotation_formats +
-core.annotation_writer, so LabelMe / YOLO / Pascal VOC are all supported — the
-generated label file matches the source format.
+Annotations are loaded via ``format_in`` (unified parsing) and written back
+via ``annotation_writer``, so LabelMe / YOLO / Pascal VOC are all supported —
+the generated label file matches the source format.
 """
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
-from .annotation_formats import load_yolo_classes, parse_annotation
 from .annotation_writer import write_annotation
 from .fileops import OpResult, label_path_for_image
 from .models import Annotation, Shape
@@ -68,15 +67,47 @@ class AugmentResult:
 # ---------- 标注 IO (多格式) ----------
 
 def _load_annotation(image_path: Path) -> tuple[Annotation | None, Path | None]:
+    """Load annotation via format_in (unified parsing).
+
+    Returns (Annotation, label_path) or (None, label_path).
+    The Sample's regions are converted back to the legacy Annotation/Shape
+    model that the geometric transform helpers operate on.
+    """
     label = label_path_for_image(image_path)
     if label is None or not label.is_file():
         return None, None
-    yolo_classes = None
-    if label.suffix.lower() == ".txt":
-        yolo_classes = load_yolo_classes(label.parent)
     try:
-        result = parse_annotation(label, image_path, yolo_classes)
-        return result.annotation, label
+        from .format_in import load_sample
+        from .models import ImageInfo
+        img_info = ImageInfo(
+            path=image_path, category="",
+            has_label=True, label_path=label,
+        )
+        sample = load_sample(img_info)
+        if not sample.regions:
+            return None, label
+        # Convert unified regions → legacy Annotation/Shape
+        shapes: list[Shape] = []
+        for r in sample.regions:
+            pts: list[tuple[float, float]]
+            if r.polygon:
+                pts = list(r.polygon)
+            elif r.bbox:
+                if r.shape_type == "rectangle":
+                    pts = [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y2)]
+                else:
+                    bb = r.bbox
+                    pts = [(bb.x1, bb.y1), (bb.x2, bb.y1),
+                           (bb.x2, bb.y2), (bb.x1, bb.y2)]
+            else:
+                continue
+            shapes.append(Shape(
+                label=r.label,
+                shape_type=r.shape_type,
+                points=pts,
+            ))
+        ann = Annotation(image_path=image_path, shapes=shapes)
+        return ann, label
     except Exception:
         return None, label
 

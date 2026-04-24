@@ -31,6 +31,7 @@ from qfluentwidgets import (
 from core.thumbnail_cache import ThumbnailCache
 from core.user_settings import load_settings, save_settings
 from gui import i18n
+from gui.theme import T
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,7 @@ class SettingsView(QFrame):
     theme_changed = pyqtSignal(str)
     catalog_toggled = pyqtSignal(bool)
     tools_collapsed = pyqtSignal(bool)
+    format_change_requested = pyqtSignal(str)  # new annotation_format key
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -111,7 +113,7 @@ class SettingsView(QFrame):
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(40)
         shadow.setOffset(0, 12)
-        shadow.setColor(QColor(60, 40, 20, 60))
+        shadow.setColor(QColor(T.POPUP_SHADOW))
         self.setGraphicsEffect(shadow)
 
         self._i18n_refs: list[tuple[QWidget, str]] = []
@@ -205,7 +207,37 @@ class SettingsView(QFrame):
         self._i18n_refs.append((self._cat_show, "settings.catalog.show"))
         self._i18n_refs.append((self._cat_hide, "settings.catalog.hide"))
 
-        # Group 3: cache (single action — no seg)
+        # Group 3: project format (only visible when a project is open)
+        self._fmt_divider = _divider()
+        body.addWidget(self._fmt_divider)
+
+        self._fmt_labelme = _seg_btn("LabelMe")
+        self._fmt_yolo = _seg_btn("YOLO")
+        self._fmt_voc = _seg_btn("VOC")
+        self._fmt_labelme.setChecked(True)
+        g = QButtonGroup(self); g.setExclusive(True)
+        g.addButton(self._fmt_labelme)
+        g.addButton(self._fmt_yolo)
+        g.addButton(self._fmt_voc)
+        self._fmt_labelme.clicked.connect(lambda: self._on_fmt("labelme"))
+        self._fmt_yolo.clicked.connect(lambda: self._on_fmt("yolo"))
+        self._fmt_voc.clicked.connect(lambda: self._on_fmt("voc"))
+        self._fmt_row = self._row(
+            FIF.DOCUMENT, "settings.project_format",
+            _seg_group(self._fmt_labelme, self._fmt_yolo, self._fmt_voc),
+        )
+        body.addWidget(self._fmt_row)
+        self._fmt_btns = {
+            "labelme": self._fmt_labelme,
+            "yolo": self._fmt_yolo,
+            "voc": self._fmt_voc,
+        }
+        # Hide until a project is set
+        self._fmt_divider.hide()
+        self._fmt_row.hide()
+        self._current_fmt = "labelme"
+
+        # Group 4: cache (single action — no seg)
         body.addWidget(_divider())
 
         self._clear_btn = _seg_btn("")
@@ -274,8 +306,17 @@ class SettingsView(QFrame):
         self.show()
         self.raise_()
 
-    def set_dataset(self, dataset) -> None:
-        pass
+    def set_project(self, project) -> None:
+        """Update the project format row from the current Project."""
+        has_project = project is not None
+        self._fmt_divider.setVisible(has_project)
+        self._fmt_row.setVisible(has_project)
+        if has_project:
+            fmt = getattr(project, "annotation_format", "labelme")
+            self._current_fmt = fmt
+            btn = self._fmt_btns.get(fmt)
+            if btn is not None:
+                btn.setChecked(True)
 
     # ---------- internals ----------
 
@@ -294,6 +335,12 @@ class SettingsView(QFrame):
         except Exception:  # noqa: BLE001
             logger.exception("reading cache size failed")
             self._cache_label.setText(i18n.t("settings.cache.read_failed"))
+
+    def _on_fmt(self, key: str) -> None:
+        if key != self._current_fmt:
+            self._current_fmt = key
+            self.format_change_requested.emit(key)
+            self.hide()
 
     def _on_clear_cache(self) -> None:
         try:

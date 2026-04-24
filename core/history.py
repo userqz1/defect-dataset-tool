@@ -24,10 +24,13 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_HISTORY_LOCK = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -82,21 +85,21 @@ def append(root: Path, entry: HistoryEntry) -> None:
     losing a log line must never roll that back. Errors are logged.
     """
     path = _history_path(root)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
-    except OSError:
-        logger.exception("history append failed at %s", path)
-        return
+    with _HISTORY_LOCK:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(entry), ensure_ascii=False) + "\n")
+        except OSError:
+            logger.exception("history append failed at %s", path)
+            return
 
-    # Opportunistic trim: if the file gets huge, keep only the tail
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return
-    if size > 512_000:  # ~500 KB is a lot of lines
-        _trim(path, MAX_ENTRIES)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        if size > 512_000:
+            _trim(path, MAX_ENTRIES)
 
 
 def _trim(path: Path, keep: int) -> None:

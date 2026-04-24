@@ -36,14 +36,25 @@ ROLE_DUP = Qt.ItemDataRole.UserRole + 4      # bool — part of a dup group
 
 
 class _ThumbDelegate(QStyledItemDelegate):
-    """Paint a thumbnail card entirely in paint() — no widget creation."""
+    """Paint a thumbnail card entirely in paint() — no widget creation.
 
-    CARD_W = 200
-    THUMB_H = 150   # 4:3 of 200
-    META_H = 72
-    CARD_H = THUMB_H + META_H
-    PAD = 8
-    RADIUS = 14
+    Dimensions come from theme tokens (T.CARD_WIDTH / CARD_HEIGHT /
+    THUMB_H / CARD_META_H / CARD_PAD / RADIUS_LG) so the grid layout
+    and the delegate paint step can never drift apart.
+    """
+
+    @property
+    def CARD_W(self): return T.CARD_WIDTH      # noqa: E704
+    @property
+    def THUMB_H(self): return T.THUMB_H        # noqa: E704
+    @property
+    def META_H(self): return T.CARD_META_H     # noqa: E704
+    @property
+    def CARD_H(self): return T.CARD_HEIGHT     # noqa: E704
+    @property
+    def PAD(self): return T.CARD_PAD           # noqa: E704
+    @property
+    def RADIUS(self): return T.RADIUS_LG       # noqa: E704
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         painter.save()
@@ -118,8 +129,7 @@ class _ThumbDelegate(QStyledItemDelegate):
         else:
             painter.fillRect(thumb_rect, QColor(T.SURFACE_DIM))
             placeholder_font = QFont(painter.font())
-            placeholder_font.setFamily("JetBrains Mono, Consolas, Menlo")
-            placeholder_font.setPointSize(8)
+            placeholder_font.setPointSize(9)
             painter.setFont(placeholder_font)
             painter.setPen(QColor(T.TEXT_3))
             painter.drawText(thumb_rect, Qt.AlignmentFlag.AlignCenter,
@@ -127,9 +137,12 @@ class _ThumbDelegate(QStyledItemDelegate):
         painter.restore()
 
         # ---- Badges top-left (stacked horizontally) ----
+        # Default UI family — the previous mono 7pt looked like a
+        # technical log tag; 8pt Medium reads cleaner and sits closer to
+        # the rest of the chrome (sidebar captions, dataset bar stats).
         badge_font = QFont(painter.font())
-        badge_font.setFamily("JetBrains Mono, Consolas, Menlo")
-        badge_font.setPointSize(7)
+        badge_font.setPointSize(8)
+        badge_font.setWeight(QFont.Weight.Medium)
         fm_b = QFontMetrics(badge_font)
         bx = thumb_rect.x() + self.PAD
         by = thumb_rect.y() + self.PAD
@@ -148,17 +161,13 @@ class _ThumbDelegate(QStyledItemDelegate):
 
         # Warn (issue) badge
         if has_issue:
-            draw_badge("!", QColor(T.WARNING), QColor("#18181B"))
-        # Duplicate badge (ghost style — subtle dark with white text)
+            draw_badge("!", QColor(T.WARNING), QColor(T.BADGE_FG_DARK))
+        # Duplicate badge (ghost style — subtle dark with light text)
         if index.data(ROLE_DUP):
-            ghost = QColor(0, 0, 0)
-            ghost.setAlphaF(0.55)
-            draw_badge("DUP", ghost, QColor("#FFFFFF"))
+            draw_badge("DUP", QColor(T.BADGE_GHOST_BG), QColor(T.BADGE_FG_LIGHT))
         # Labeled badge ("N bbox" / "已标" minimal)
         if img.has_label:
-            ghost = QColor(0, 0, 0)
-            ghost.setAlphaF(0.55)
-            draw_badge("已标", ghost, QColor("#FFFFFF"))
+            draw_badge("已标", QColor(T.BADGE_GHOST_BG), QColor(T.BADGE_FG_LIGHT))
 
         # ---- Corner-select box top-right (only when selected) ----
         if is_selected:
@@ -168,8 +177,8 @@ class _ThumbDelegate(QStyledItemDelegate):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(T.ACCENT))
             painter.drawRoundedRect(sx, sy, sel_size, sel_size, 6, 6)
-            # ✓ mark
-            painter.setPen(QPen(QColor("#FFFFFF"), 2))
+            # ✓ mark — on-accent foreground so it tracks theme
+            painter.setPen(QPen(QColor(T.ON_ACCENT), 2))
             painter.drawLine(sx + 5, sy + 10, sx + 9, sy + 14)
             painter.drawLine(sx + 9, sy + 14, sx + 15, sy + 7)
 
@@ -178,10 +187,12 @@ class _ThumbDelegate(QStyledItemDelegate):
         text_x = card.x() + self.PAD + 2
         text_w = card.width() - 2 * self.PAD - 4
 
-        # Filename (mono)
+        # Filename — use the default UI font so the grid visually aligns
+        # with the rest of the app (sidebar, dataset bar) instead of the
+        # old 8pt mono which read as "technical log output".
         fn_font = QFont(painter.font())
-        fn_font.setFamily("JetBrains Mono, Consolas, Menlo")
-        fn_font.setPointSize(8)
+        fn_font.setPointSize(9)
+        fn_font.setWeight(QFont.Weight.Medium)
         painter.setFont(fn_font)
         painter.setPen(QColor(T.TEXT))
         fm_fn = QFontMetrics(fn_font)
@@ -190,11 +201,10 @@ class _ThumbDelegate(QStyledItemDelegate):
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          elided)
 
-        # Dimensions (mono, muted)
+        # Dimensions — muted caption, default family, not mono.
         dim = index.data(ROLE_DIM)
         dim_font = QFont(painter.font())
-        dim_font.setFamily("JetBrains Mono, Consolas, Menlo")
-        dim_font.setPointSize(7)
+        dim_font.setPointSize(8)
         painter.setFont(dim_font)
         painter.setPen(QColor(T.TEXT_3))
         if dim and dim[0] > 0 and dim[1] > 0:
@@ -206,12 +216,12 @@ class _ThumbDelegate(QStyledItemDelegate):
         if img.category:
             tag_color = QColor(_color_for(img.category))
             tag_font = QFont(painter.font())
-            tag_font.setPointSize(7)
+            tag_font.setPointSize(8)
             tag_font.setWeight(QFont.Weight.Medium)
             painter.setFont(tag_font)
             fm_tag = QFontMetrics(tag_font)
-            tag_w = fm_tag.horizontalAdvance(img.category) + 8
-            tag_h = 14
+            tag_w = fm_tag.horizontalAdvance(img.category) + 10
+            tag_h = 16
             tx = text_x
             ty = meta_top + 46
             soft = QColor(tag_color)
@@ -244,8 +254,8 @@ class ThumbnailGrid(QListWidget):
         self.setMovement(QListWidget.Movement.Static)
         self.setSpacing(16)
         self.setUniformItemSizes(True)
-        self.setGridSize(QSize(_ThumbDelegate.CARD_W + 16,
-                                _ThumbDelegate.CARD_H + 16))
+        self.setGridSize(QSize(T.CARD_WIDTH + 16,
+                                T.CARD_HEIGHT + 16))
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setItemDelegate(_ThumbDelegate(self))
@@ -273,7 +283,7 @@ class ThumbnailGrid(QListWidget):
         qm = quality_map or {}
         for i, img in enumerate(images):
             item = QListWidgetItem()
-            item.setSizeHint(QSize(_ThumbDelegate.CARD_W, _ThumbDelegate.CARD_H))
+            item.setSizeHint(QSize(T.CARD_WIDTH, T.CARD_HEIGHT))
             item.setData(ROLE_IMG, img)
             kinds = qm.get(str(img.path))
             if kinds:

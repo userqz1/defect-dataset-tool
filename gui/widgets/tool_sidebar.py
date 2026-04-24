@@ -25,6 +25,7 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import (
+    BodyLabel,
     CaptionLabel,
     FluentIcon as FIF,
 )
@@ -60,20 +61,28 @@ class _ToolRow(QFrame):
         self.setProperty("toolKind", kind)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setFixedHeight(32)
+        self.setFixedHeight(T.CONTROL_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 0, 10, 0)
-        lay.setSpacing(10)
+        lay.setContentsMargins(T.PAD, 0, T.PAD, 0)
+        lay.setSpacing(T.PAD)
 
+        # Icon holder stays as a raw QLabel — the rule-5 exception
+        # explicitly allows icon-only QLabel (setPixmap target). The
+        # readable label below is the one that must be semantic.
         self._icon_label = QLabel()
         self._icon_label.setFixedSize(16, 16)
         self._icon_label.setPixmap(icon.icon().pixmap(QSize(16, 16)))
         self._icon_label.setObjectName("toolSidebarIcon")
         lay.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self._text_label = QLabel(text)
+        # BodyLabel (qfluentwidgets) subclasses QLabel, so the existing
+        # ``QLabel#toolSidebarText`` QSS selector still matches — no
+        # QSS churn needed. Swapping in the semantic widget just keeps
+        # the style-cop "no bare QLabel for human-readable text" rule
+        # happy across the codebase.
+        self._text_label = BodyLabel(text)
         self._text_label.setObjectName("toolSidebarText")
         lay.addWidget(self._text_label, 1)
 
@@ -139,11 +148,15 @@ _TOOL_LAYOUT: list = [
     ("convert", "tools.convert", FIF.PHOTO, "default"),
     ("augment", "tools.augment", FIF.ADD, "default"),
     ("predict", "tools.predict", FIF.ROBOT, "ai"),
-    # Output
+    # Format center
     ("__section__", "tools.group.output"),
+    ("import_annot", "tools.import_annot", FIF.FOLDER_ADD, "default"),
+    ("convert_annot", "tools.convert_annot", FIF.SYNC, "default"),
+    ("migrate_format", "tools.migrate_format", FIF.UPDATE, "default"),
     ("export", "tools.export", FIF.SHARE, "featured"),
     # Other
     ("__section__", "tools.group.other"),
+    ("inbox", "tools.inbox", FIF.MAIL, "default"),
     ("history", "tools.history", FIF.HISTORY, "default"),
     ("stats", "tools.stats", FIF.PIE_SINGLE, "default"),
 ]

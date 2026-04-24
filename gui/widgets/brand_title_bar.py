@@ -63,9 +63,11 @@ class _BrandChip(QWidget):
         p.setBrush(QBrush(grad))
         p.drawRoundedRect(rect, 5.0, 5.0)
 
-        # Top-edge specular highlight — 1px white alpha on the upper
-        # 40% of the chip for a soft "lit from above" cue.
-        highlight = QColor(255, 255, 255, 32)
+        # Top-edge specular highlight — on-accent foreground with low
+        # alpha for a soft "lit from above" cue. Tracks the theme token
+        # rather than a hard-coded white.
+        highlight = QColor(T.ON_ACCENT)
+        highlight.setAlpha(32)
         p.setBrush(highlight)
         hr = QRectF(1, 1, rect.width() - 2, rect.height() * 0.45)
         p.drawRoundedRect(hr, 4.0, 4.0)
@@ -87,7 +89,7 @@ class _BrandChip(QWidget):
         font.setWeight(QFont.Weight.DemiBold)
         font.setItalic(True)
         p.setFont(font)
-        p.setPen(QPen(QColor("#ffffff")))
+        p.setPen(QPen(QColor(T.ON_ACCENT)))
         # Italic slant leans the glyph right; nudge the draw rect left
         # 1px so optical centering looks balanced.
         text_rect = rect.adjusted(-1, 0, -1, 0)
@@ -131,8 +133,11 @@ class BrandTitleBar(FluentTitleBar):
         self.hBoxLayout.insertWidget(
             4, self._crumbs, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # Re-apply text on language change (brand stays zh+CN-styled).
-        i18n.bus.language_changed.connect(self._retranslate)
+        # No language_changed subscription: the brand name is a product
+        # name that stays in Chinese, and breadcrumb segments are file-path
+        # segments not subject to translation — there is literally nothing
+        # to re-apply on language switch, so we skip the wire rather than
+        # keep an empty hook.
 
     # ---------- public API ----------
 
@@ -160,9 +165,3 @@ class BrandTitleBar(FluentTitleBar):
             self._crumbs_lay.addWidget(lbl)
         self._crumbs_lay.addStretch(1)
 
-    # ---------- internals ----------
-
-    def _retranslate(self, _lang: str) -> None:
-        # Brand name stays Chinese per design (it's a product name, not a UI
-        # string). Nothing to re-apply here; left as a hook.
-        pass

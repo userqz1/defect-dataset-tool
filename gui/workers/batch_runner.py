@@ -112,4 +112,8 @@ class BatchRunner(QObject):
     def _close_progress(self) -> None:
         if self._progress is not None:
             self._progress.accept()
+            self._progress.deleteLater()
             self._progress = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None

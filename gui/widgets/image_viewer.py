@@ -237,7 +237,7 @@ class ImageViewer(QGraphicsView):
             poly = QPolygonF([QPointF(x, y) for x, y in pts])
             item = QGraphicsPolygonItem(poly)
             item.setPen(pen)
-            item.setBrush(QBrush(QColor(0, 0, 0, 0)))
+            item.setBrush(Qt.BrushStyle.NoBrush)
             item.setToolTip(shape.label)
             return item
         return None

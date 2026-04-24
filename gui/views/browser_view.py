@@ -21,6 +21,8 @@ from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
     IndeterminateProgressBar,
+    InfoBar,
+    InfoBarPosition,
     LineEdit,
     MessageBox,
     PushButton,
@@ -52,6 +54,10 @@ class FilterMode(str, Enum):
     UNLABELED = "unlabeled"
     ISSUES = "issues"          # only meaningful after a quality check
     DUPLICATES = "duplicates"  # only meaningful after dedup ran (review #15)
+    WORK_NEW = "work_new"          # workflow: new + prelabeled + annotating
+    WORK_REVIEW = "work_review"    # workflow: review_pending
+    WORK_FIX = "work_fix"          # workflow: needs_fix
+    WORK_READY = "work_ready"      # workflow: ready + exported
 
 
 class BrowserView(QWidget):
@@ -61,6 +67,7 @@ class BrowserView(QWidget):
     add_to_split = pyqtSignal(str, list)        # (bucket name, list[ImageInfo])
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
+    batch_status_requested = pyqtSignal(list, str)  # (images, new_status_str)
     # Bubbled from DatasetBar's 选择目录 button — DatasetBrowserView owns
     # the actual file dialog + scan plumbing.
     open_clicked = pyqtSignal()
@@ -98,6 +105,11 @@ class BrowserView(QWidget):
         # Duplicates also come through AppState now (review #15) — needed
         # for the "重复" filter chip to light up after a dedup run.
         self._state.duplicates_changed.connect(self._on_duplicates_changed)
+        # SampleSet-aware filter: "已标注"/"未标注" use actual region data.
+        self._state.sample_set_changed.connect(self._on_sample_set_changed)
+        self._annotated_cache: set[str] | None = None
+        # Work-status cache: image_path str → WorkStatus.value
+        self._work_status_cache: dict[str, str] | None = None
 
         # Single-column layout — viewer region per the design handoff.
         # The 4-column body (NavRail | Tools | Viewer | Catalog) lives in
@@ -135,7 +147,7 @@ class BrowserView(QWidget):
         # Narrower default so filter chips keep their natural width when
         # the viewer is below ~1100px — previously 280 ate the chip budget.
         self.search.setFixedWidth(220)
-        self.search.setFixedHeight(32)
+        self.search.setFixedHeight(T.CONTROL_HEIGHT)
         # 300ms debounce — 不在每次按键时都重新过滤
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -172,6 +184,10 @@ class BrowserView(QWidget):
             FilterMode.UNLABELED: "filter.unlabeled",
             FilterMode.ISSUES: "filter.issues",
             FilterMode.DUPLICATES: "filter.duplicates",
+            FilterMode.WORK_NEW: "filter.work_new",
+            FilterMode.WORK_REVIEW: "filter.work_review",
+            FilterMode.WORK_FIX: "filter.work_fix",
+            FilterMode.WORK_READY: "filter.work_ready",
         }
         for mode, key in self._chip_i18n.items():
             chip = FilterChip(i18n.t(key))
@@ -186,6 +202,13 @@ class BrowserView(QWidget):
         # "有问题" / "重复" only meaningful after their respective run
         self._chips[FilterMode.ISSUES].setEnabled(False)
         self._chips[FilterMode.DUPLICATES].setEnabled(False)
+        # Workflow chips hidden until a workflow is loaded
+        self._work_chips = (FilterMode.WORK_NEW, FilterMode.WORK_REVIEW,
+                            FilterMode.WORK_FIX, FilterMode.WORK_READY)
+        for m in self._work_chips:
+            self._chips[m].setVisible(False)
+        self._state.workflow_summary_changed.connect(
+            self._on_workflow_summary_changed)
         filter_bar.addWidget(chip_container)
 
         filter_bar.addStretch(1)
@@ -201,19 +224,19 @@ class BrowserView(QWidget):
         # Letting the buttons size to content + QSS padding works for both zh/en.
         self._multi_btn = PushButton(i18n.t("filter.multi"))
         self._multi_btn.setCheckable(True)
-        self._multi_btn.setFixedHeight(32)
+        self._multi_btn.setFixedHeight(T.CONTROL_HEIGHT)
         self._multi_btn.toggled.connect(self._on_multi_toggle)
         filter_bar.addWidget(self._multi_btn)
 
         self._select_all_btn = PushButton(i18n.t("filter.select_all"))
-        self._select_all_btn.setFixedHeight(32)
+        self._select_all_btn.setFixedHeight(T.CONTROL_HEIGHT)
         self._select_all_btn.setEnabled(False)
         self._select_all_btn.clicked.connect(self._on_select_all_toggle)
         filter_bar.addWidget(self._select_all_btn)
 
         self._delete_btn = PushButton(i18n.t("filter.delete"))
         self._delete_btn.setIcon(FIF.DELETE)
-        self._delete_btn.setFixedHeight(32)
+        self._delete_btn.setFixedHeight(T.CONTROL_HEIGHT)
         self._delete_btn.setEnabled(False)
         self._delete_btn.clicked.connect(self._on_delete_clicked)
         filter_bar.addWidget(self._delete_btn)
@@ -311,6 +334,20 @@ class BrowserView(QWidget):
         DatasetBrowserView after both widgets are constructed.
         """
         self._catalog_tree = tree
+
+    # -- Public wrappers for private methods (consumed by controllers) --
+
+    def select_category(self, category: str) -> None:
+        self._on_category_selected(category)
+
+    def rename_category(self, name: str) -> None:
+        self._do_rename_category(name)
+
+    def merge_category(self, name: str) -> None:
+        self._do_merge_categories(name)
+
+    def split_category(self, name: str) -> None:
+        self._do_split_category(name)
 
     def _category_names(self) -> list[str]:
         """List of categories for dialog population. Prefers the live tree
@@ -426,9 +463,19 @@ class BrowserView(QWidget):
     def _apply_filter_and_show(self) -> None:
         imgs = self._all_images()
         if self._filter_mode is FilterMode.LABELED:
-            imgs = [i for i in imgs if i.has_label]
+            # SampleSet-aware: "labeled" = has actual regions (not just
+            # a label file). Falls back to has_label flag when SS absent.
+            annotated = self._annotated_paths()
+            if annotated is not None:
+                imgs = [i for i in imgs if str(i.path) in annotated]
+            else:
+                imgs = [i for i in imgs if i.has_label]
         elif self._filter_mode is FilterMode.UNLABELED:
-            imgs = [i for i in imgs if not i.has_label]
+            annotated = self._annotated_paths()
+            if annotated is not None:
+                imgs = [i for i in imgs if str(i.path) not in annotated]
+            else:
+                imgs = [i for i in imgs if not i.has_label]
         elif self._filter_mode is FilterMode.ISSUES:
             qmap = self._state.quality_issue_paths
             imgs = [i for i in imgs if str(i.path) in qmap]
@@ -438,12 +485,56 @@ class BrowserView(QWidget):
             groups = self._state.duplicate_groups or []
             dup_paths = {str(img.path) for g in groups for img in g.images}
             imgs = [i for i in imgs if str(i.path) in dup_paths]
+        elif self._filter_mode in self._work_chips:
+            imgs = self._filter_by_work_status(imgs)
         if self._search_text:
             q = self._search_text.lower()
             imgs = [i for i in imgs if q in i.path.name.lower()]
         self._filtered = imgs
         self._page = 0
         self._show_page()
+
+    def _filter_by_work_status(self, imgs: list[ImageInfo]) -> list[ImageInfo]:
+        """Filter images by workflow status (NEW/REVIEW/READY groups).
+
+        Prefers the SampleSet-based ``_work_status_cache`` when
+        available (O(1) lookup by image path). Falls back to
+        WorkflowState-based path resolution otherwise.
+        """
+        from core.workflow import WorkStatus
+
+        if self._filter_mode is FilterMode.WORK_NEW:
+            accept_values = {"new", "prelabeled", "annotating"}
+        elif self._filter_mode is FilterMode.WORK_REVIEW:
+            accept_values = {"review_pending"}
+        elif self._filter_mode is FilterMode.WORK_FIX:
+            accept_values = {"needs_fix"}
+        else:  # WORK_READY
+            accept_values = {"ready", "exported"}
+
+        # --- Fast path: SampleSet cache available ---
+        cache = self._work_status_cache
+        if cache is not None:
+            return [i for i in imgs if cache.get(str(i.path), "") in accept_values]
+
+        # --- Fallback: WorkflowState path resolution ---
+        wf = self._state.workflow
+        project = self._state.project
+        if wf is None or project is None:
+            return imgs
+        status_map: dict[str, str] = {
+            item.relative_path: item.status.value for item in wf.items
+        }
+        root = project.root_path
+        result = []
+        for img in imgs:
+            try:
+                rel = str(img.path.relative_to(root)).replace("\\", "/")
+            except ValueError:
+                continue
+            if status_map.get(rel, "") in accept_values:
+                result.append(img)
+        return result
 
     def _show_page(self) -> None:
         total = len(self._filtered)
@@ -513,6 +604,39 @@ class BrowserView(QWidget):
             self._chips[FilterMode.ALL].setChecked(True)
         self._apply_filter_and_show()
 
+    def _on_sample_set_changed(self, ss) -> None:
+        """Rebuild annotated-path + work-status caches when SampleSet changes."""
+        if ss is not None and self._state.sample_set_ready:
+            self._annotated_cache = {
+                str(s.image_path) for s in ss.samples if s.regions
+            }
+            self._work_status_cache = {
+                str(s.image_path): s.work_status
+                for s in ss.samples if s.work_status
+            }
+        else:
+            self._annotated_cache = None
+            self._work_status_cache = None
+        # Re-filter if currently on a filter that depends on SS data.
+        if (self._filter_mode in (FilterMode.LABELED, FilterMode.UNLABELED)
+                or self._filter_mode in self._work_chips):
+            self._apply_filter_and_show()
+
+    def _annotated_paths(self) -> set[str] | None:
+        """Return cached set of paths with actual annotations, or None
+        if SampleSet is not READY (caller should fall back to has_label)."""
+        return self._annotated_cache
+
+    def _on_workflow_summary_changed(self, summary) -> None:
+        """Show/hide workflow filter chips based on active workflow."""
+        active = summary is not None and summary.total > 0
+        for m in self._work_chips:
+            self._chips[m].setVisible(active)
+        if not active and self._filter_mode in self._work_chips:
+            self._filter_mode = FilterMode.ALL
+            self._chips[FilterMode.ALL].setChecked(True)
+            self._apply_filter_and_show()
+
     def _on_search_changed(self, text: str) -> None:
         self._search_text = text.strip()
         self._apply_filter_and_show()
@@ -564,6 +688,15 @@ class BrowserView(QWidget):
             self.grid.clearSelection()
 
     def _on_delete_clicked(self) -> None:
+        # Same rule as the context menu — no mutations while scan is live.
+        if not self._state.can_write:
+            InfoBar.warning(
+                title="数据集仍在加载",
+                content="等后台扫描完成再删除，避免和索引构建产生冲突。",
+                isClosable=True, position=InfoBarPosition.TOP,
+                duration=3000, parent=self.window(),
+            )
+            return
         sel = self.grid.selected_images()
         if sel:
             self._do_delete(sel)
@@ -602,6 +735,21 @@ class BrowserView(QWidget):
         sel = self.grid.selected_images()
         if not sel:
             return
+        # Quick-open write gate.  Every action in this menu mutates the
+        # filesystem or the workflow store — allowing any of them while
+        # the ScanWorker is still building SampleSet in Phase 2/3 lets a
+        # delete/move/status-flip race with the unify pass and leaves
+        # the in-memory model permanently out of sync with disk.  Show a
+        # single InfoBar and do not pop the menu at all; matches the
+        # DetailView save-gate UX.
+        if not self._state.can_write:
+            InfoBar.warning(
+                title="数据集仍在加载",
+                content="等后台扫描完成再做批量操作，避免和索引构建产生冲突。",
+                isClosable=True, position=InfoBarPosition.TOP,
+                duration=3000, parent=self.window(),
+            )
+            return
         menu = QMenu(self)
         menu.addAction(
             self.tr("已选 {n} 张").format(n=len(sel))
@@ -614,6 +762,16 @@ class BrowserView(QWidget):
         split_menu.addAction(self.tr("→ Train"), lambda: self.add_to_split.emit("train", sel))
         split_menu.addAction(self.tr("→ Val"), lambda: self.add_to_split.emit("val", sel))
         split_menu.addAction(self.tr("→ Test"), lambda: self.add_to_split.emit("test", sel))
+        # Workflow transitions
+        wf_menu = menu.addMenu(i18n.t("wf.submit_review").split()[0] if i18n.lang() == "zh" else "Workflow")
+        wf_menu.addAction(i18n.t("wf.submit_review"),
+                          lambda: self.batch_status_requested.emit(sel, "review_pending"))
+        wf_menu.addAction(i18n.t("wf.approve"),
+                          lambda: self.batch_status_requested.emit(sel, "ready"))
+        wf_menu.addAction(i18n.t("wf.reject"),
+                          lambda: self.batch_status_requested.emit(sel, "needs_fix"))
+        wf_menu.addAction(i18n.t("wf.mark_ready"),
+                          lambda: self.batch_status_requested.emit(sel, "ready"))
         menu.addSeparator()
         menu.addAction(self.tr("导出为子集数据集…"), lambda: self._do_export_subset(sel))
         menu.exec(self.grid.viewport().mapToGlobal(pos))
@@ -899,5 +1057,11 @@ class BrowserView(QWidget):
             self._progress.close()
             self._progress = None
         if self._worker:
+            try:
+                self._worker.progress.disconnect()
+                self._worker.finished_ok.disconnect()
+                self._worker.failed.disconnect()
+            except (TypeError, RuntimeError):
+                pass
             self._worker.deleteLater()
             self._worker = None

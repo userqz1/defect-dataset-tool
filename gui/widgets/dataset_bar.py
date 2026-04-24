@@ -28,6 +28,7 @@ from qfluentwidgets import (
 )
 
 from core.models import Dataset
+from core.workflow import WorkflowSummary
 from gui import i18n
 from gui.theme import T
 
@@ -161,8 +162,28 @@ class DatasetBar(QFrame):
         self._name_label.setObjectName("datasetName")
         self._path_label = CaptionLabel("")
         self._path_label.setObjectName("datasetPath")
+        self._fmt_label = CaptionLabel("")
+        self._fmt_label.setObjectName("datasetFmt")
+        self._fmt_label.setVisible(False)
+        # Scan-in-progress banner — sits next to the path. Hidden unless
+        # AppState.scan_active is True.  A visible text cue lets the user
+        # know stat numbers are still settling, complementing the pulsing
+        # dot (which alone is too subtle for a "load is happening" signal
+        # on a first-open cold scan).
+        self._loading_label = CaptionLabel(i18n.t("ds.loading"))
+        self._loading_label.setObjectName("datasetLoading")
+        self._loading_label.setVisible(False)
+
         title_box.addWidget(self._name_label)
-        title_box.addWidget(self._path_label)
+        # path + format badge + loading banner on one row
+        path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(T.GAP)
+        path_row.addWidget(self._path_label)
+        path_row.addWidget(self._fmt_label)
+        path_row.addWidget(self._loading_label)
+        path_row.addStretch(1)
+        title_box.addLayout(path_row)
 
         title_row.addLayout(title_box)
         lay.addLayout(title_row)
@@ -183,6 +204,14 @@ class DatasetBar(QFrame):
         self._stat_flagged = _Stat("ds.stat.flagged", "—")
         for w in (self._stat_images, self._stat_classes, self._stat_labeled,
                    self._stat_ratio, self._stat_flagged):
+            strip_lay.addWidget(w)
+
+        # Workflow stats — hidden until a workflow is loaded
+        self._stat_pending = _Stat("ds.stat.pending", "—")
+        self._stat_review = _Stat("ds.stat.review", "—")
+        self._stat_ready = _Stat("ds.stat.ready", "—")
+        for w in (self._stat_pending, self._stat_review, self._stat_ready):
+            w.setVisible(False)
             strip_lay.addWidget(w)
 
         lay.addWidget(strip)
@@ -210,9 +239,11 @@ class DatasetBar(QFrame):
         if self._name_label.text() in ("未选择数据集", "No dataset"):
             self._name_label.setText(i18n.t("ds.empty"))
         for cell in (self._stat_images, self._stat_classes, self._stat_labeled,
-                      self._stat_ratio, self._stat_flagged):
+                      self._stat_ratio, self._stat_flagged,
+                      self._stat_pending, self._stat_review, self._stat_ready):
             cell.retranslate()
         self._open_btn.setText(i18n.t("ds.open_dir"))
+        self._loading_label.setText(i18n.t("ds.loading"))
 
     # ---------- public setters ----------
 
@@ -222,9 +253,11 @@ class DatasetBar(QFrame):
     def clear(self) -> None:
         self._name_label.setText(i18n.t("ds.empty"))
         self._path_label.setText("")
+        self._fmt_label.setVisible(False)
         for cell in (self._stat_images, self._stat_classes, self._stat_labeled,
                       self._stat_ratio, self._stat_flagged):
             cell.set_value("—")
+        self.set_workflow_summary(None)
 
     def set_dataset(self, ds: Dataset, flagged_count: int = 0) -> None:
         """Populate title + stat strip from a loaded Dataset.
@@ -239,7 +272,7 @@ class DatasetBar(QFrame):
         self._stat_images.set_value(f"{ds.total_images:,}")
         self._stat_classes.set_value(str(len(ds.categories)))
 
-        # Labeled %: rely on has_label flags from count_annotations phase.
+        # Labeled %: has_label flags are set during filesystem scan (Phase 1).
         labeled = 0
         for cat in ds.categories:
             labeled += sum(1 for img in cat.images if img.has_label)
@@ -259,9 +292,84 @@ class DatasetBar(QFrame):
             warn=flagged_count > 0,
         )
 
+    def update_from_sample_set(self, ss) -> None:
+        """Refine labeled% from SampleSet (region-aware, more accurate).
+
+        Called when sample_set_changed fires.  SampleSet distinguishes
+        "has regions" from "has a label file" — empty label files are
+        correctly counted as unlabeled here.
+        """
+        if ss is None:
+            return
+        n_annotated = sum(1 for s in ss.samples if s.regions)
+        total = len(ss.samples)
+        pct = (n_annotated / total * 100) if total else 0
+        self._stat_labeled.set_value(f"{pct:.0f}%")
+
+    def set_sample_set_status(self, status_value: str) -> None:
+        """Update the sync dot color based on SampleSetStatus.
+
+        - ``ready``       — accent pulse (normal).
+        - ``stale``       — orange pulse (data may be outdated).
+        - ``unavailable`` — stop pulsing (no unified data).
+        """
+        from gui.app_state import SampleSetStatus
+        status = SampleSetStatus(status_value)
+        if status is SampleSetStatus.READY:
+            self._dot._anim.resume() if self._dot._anim.state() != self._dot._anim.State.Running else None
+            self._dot._anim.start() if self._dot._anim.state() == self._dot._anim.State.Stopped else None
+            self._dot.setToolTip("")
+        elif status is SampleSetStatus.STALE:
+            self._dot.setToolTip("统一模型可能过期 · 正在刷新…")
+        else:  # UNAVAILABLE
+            self._dot._anim.pause()
+            self._dot.setToolTip("统一模型不可用 · 使用磁盘回退")
+
     def set_flagged_count(self, n: int) -> None:
         """Update just the Flagged stat after a quality-check run."""
         self._stat_flagged.set_value(f"{n}" if n else "0", warn=n > 0)
+
+    def set_loading(self, active: bool) -> None:
+        """Show/hide the "model loading" text banner in the title row.
+
+        Bound to ``AppState.scan_active_changed``.  The pulsing sync dot
+        already hints at activity, but a visible text cue is what the
+        user asked for — the dot alone is too easy to miss on a
+        cold-open scan where nothing else on screen has redrawn yet.
+        """
+        self._loading_label.setVisible(bool(active))
+
+    def set_catalog_open(self, open_: bool) -> None:
+        """Sync the catalog toggle button state without re-emitting."""
+        self._catalog_btn.blockSignals(True)
+        self._catalog_btn.setChecked(open_)
+        self._catalog_btn.blockSignals(False)
+
+    def set_annotation_format(self, fmt: str) -> None:
+        """Show the project's active annotation format as a badge."""
+        if fmt:
+            from core.format_convert import FORMATS
+            info = FORMATS.get(fmt)
+            display = info.display_name if info else fmt.upper()
+            self._fmt_label.setText(display)
+            self._fmt_label.setVisible(True)
+        else:
+            self._fmt_label.setVisible(False)
+
+    def set_workflow_summary(self, summary: WorkflowSummary | None) -> None:
+        """Show/hide workflow stat cells based on active workflow."""
+        active = summary is not None and summary.total > 0
+        self._stat_pending.setVisible(active)
+        self._stat_review.setVisible(active)
+        self._stat_ready.setVisible(active)
+        if not active:
+            return
+        pending = summary.new + summary.prelabeled
+        review = summary.review_pending + summary.needs_fix
+        ready = summary.ready + summary.exported
+        self._stat_pending.set_value(str(pending), warn=pending > 0)
+        self._stat_review.set_value(str(review), warn=review > 0)
+        self._stat_ready.set_value(str(ready))
 
     @staticmethod
     def _fmt_path(p: Path | None) -> str:

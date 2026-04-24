@@ -1,26 +1,11 @@
 """Organize view — batch import → classify → land.
 
-Per DataForge-设计方案-v1.2 §9.3:
-  "整理台 (拖入原始数据 → 分类建议 → 调整 → 落地)"
-
-Layout:
-  ┌──────────────────────────────────────┐
-  │ ① 选择源目录          [选择]        │
-  │    /path/to/raw   → 404 张图片      │
-  ├──────────────────────────────────────┤
-  │ ② 分类规则   [▼ by_filename_prefix] │
-  │    [预览分类]                        │
-  ├──────────────────────────────────────┤
-  │ ③ 分类预览                          │
-  │    crack     │ 120                   │
-  │    good      │ 284                   │
-  │    未分类     │   0                   │
-  ├──────────────────────────────────────┤
-  │ ④ 目标目录          [选择]          │
-  │    /datasets/project1               │
-  │                                      │
-  │        [ 开始导入 ]                  │
-  └──────────────────────────────────────┘
+Two modes:
+  1. **Standalone** — no active project. User picks source dir → classify →
+     pick target dir → import.  Emits ``import_done(path_str)``.
+  2. **Inbox** — an active project is set.  Images land in
+     ``<root>/_inbox/<batch>/images/``.  Target directory is the project
+     root (read-only). After import the workflow tracks each image.
 
 After import, emits ``import_done(path_str)`` so MainWindow can
 open the dataset in the browser view.
@@ -28,6 +13,7 @@ open the dataset in the browser view.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -56,6 +42,10 @@ from qfluentwidgets import (
 
 from gui.theme import T
 
+if TYPE_CHECKING:
+    from gui.app_state import AppState
+    from gui.controllers.workflow_controller import WorkflowController
+
 
 class OrganizeView(QWidget):
     """Batch import → classify → land workflow."""
@@ -66,6 +56,8 @@ class OrganizeView(QWidget):
         super().__init__(parent)
         self.setObjectName("organizeView")
 
+        self._state: AppState | None = None
+        self._wf_ctrl: WorkflowController | None = None
         self._source_dir: Path | None = None
         self._target_dir: Path | None = None
         self._discovered: list[Path] = []
@@ -75,7 +67,8 @@ class OrganizeView(QWidget):
         root.setContentsMargins(T.PAD_2XL, T.PAD_XL, T.PAD_2XL, T.PAD_XL)
         root.setSpacing(T.GAP_LG)
 
-        root.addWidget(SubtitleLabel("整理台"))
+        self._title = SubtitleLabel("整理台")
+        root.addWidget(self._title)
 
         # ===== ① Source directory =====
         src_frame = self._card()
@@ -147,26 +140,29 @@ class OrganizeView(QWidget):
         root.addWidget(preview_frame)
 
         # ===== ④ Target directory + Execute =====
-        exec_frame = self._card()
-        exec_lay = QVBoxLayout(exec_frame)
+        self._exec_frame = self._card()
+        exec_lay = QVBoxLayout(self._exec_frame)
         exec_lay.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
         exec_lay.setSpacing(T.GAP)
 
         tgt_row = QHBoxLayout()
-        tgt_row.addWidget(StrongBodyLabel("④ 目标目录"))
+        self._tgt_title = StrongBodyLabel("④ 目标目录")
+        tgt_row.addWidget(self._tgt_title)
         tgt_row.addStretch(1)
-        tgt_btn = PushButton("选择")
-        tgt_btn.setIcon(FIF.FOLDER)
-        tgt_btn.setFixedWidth(80)
-        tgt_btn.clicked.connect(self._pick_target)
-        tgt_row.addWidget(tgt_btn)
+        self._tgt_btn = PushButton("选择")
+        self._tgt_btn.setIcon(FIF.FOLDER)
+        self._tgt_btn.setFixedWidth(80)
+        self._tgt_btn.clicked.connect(self._pick_target)
+        tgt_row.addWidget(self._tgt_btn)
         exec_lay.addLayout(tgt_row)
 
         self._tgt_label = CaptionLabel("未选择")
         exec_lay.addWidget(self._tgt_label)
 
         # Post-ingest checks (§6.4)
-        checks_row = QHBoxLayout()
+        self._checks_row_widget = QWidget()
+        checks_row = QHBoxLayout(self._checks_row_widget)
+        checks_row.setContentsMargins(0, 0, 0, 0)
         checks_row.setSpacing(T.GAP_LG)
         self._run_quality_chk = CheckBox("导入后质检")
         self._run_quality_chk.setChecked(True)
@@ -175,16 +171,30 @@ class OrganizeView(QWidget):
         checks_row.addWidget(self._run_quality_chk)
         checks_row.addWidget(self._run_dedup_chk)
         checks_row.addStretch(1)
-        exec_lay.addLayout(checks_row)
+        exec_lay.addWidget(self._checks_row_widget)
 
         self._import_btn = PrimaryPushButton("开始导入")
         self._import_btn.setIcon(FIF.DOWNLOAD)
         self._import_btn.setEnabled(False)
         self._import_btn.clicked.connect(self._run_import)
         exec_lay.addWidget(self._import_btn, alignment=Qt.AlignmentFlag.AlignRight)
-        root.addWidget(exec_frame)
+        root.addWidget(self._exec_frame)
 
         root.addStretch(1)
+
+    # ---------- Public ----------
+
+    def set_state(self, state: AppState,
+                  wf_ctrl: WorkflowController) -> None:
+        """Inject shared state.  Call once from MainWindow after creation."""
+        self._state = state
+        self._wf_ctrl = wf_ctrl
+        state.project_changed.connect(self._sync_inbox_mode)
+
+    @property
+    def _inbox_mode(self) -> bool:
+        return (self._state is not None
+                and self._state.project is not None)
 
     # ---------- Helpers ----------
 
@@ -201,6 +211,26 @@ class OrganizeView(QWidget):
     def _short_path(self, p: Path, max_len: int = 60) -> str:
         s = str(p)
         return ("..." + s[-(max_len - 3):]) if len(s) > max_len else s
+
+    def _sync_inbox_mode(self, project) -> None:
+        """Toggle between inbox mode and standalone mode."""
+        inbox = project is not None
+        # In inbox mode: target = project root, hide target picker + checks
+        self._tgt_btn.setVisible(not inbox)
+        self._checks_row_widget.setVisible(not inbox)
+        if inbox:
+            self._title.setText(f"整理台 — {project.name}")
+            self._tgt_title.setText("④ 导入到项目")
+            self._tgt_label.setText(self._short_path(project.root_path))
+            self._target_dir = project.root_path
+            self._import_btn.setText("导入到收件箱")
+        else:
+            self._title.setText("整理台")
+            self._tgt_title.setText("④ 目标目录")
+            self._tgt_label.setText("未选择")
+            self._target_dir = None
+            self._import_btn.setText("开始导入")
+        self._update_import_btn()
 
     # ---------- Source ----------
 
@@ -274,12 +304,53 @@ class OrganizeView(QWidget):
     # ---------- Import ----------
 
     def _update_import_btn(self) -> None:
-        ok = (self._preview is not None
-              and self._preview.placed_count > 0
-              and self._target_dir is not None)
+        if self._inbox_mode:
+            # inbox mode: only need source images discovered
+            ok = len(self._discovered) > 0
+        else:
+            # standalone: need preview + target
+            ok = (self._preview is not None
+                  and self._preview.placed_count > 0
+                  and self._target_dir is not None)
         self._import_btn.setEnabled(ok)
 
     def _run_import(self) -> None:
+        if self._inbox_mode:
+            self._run_inbox_import()
+        else:
+            self._run_standalone_import()
+
+    # -- Inbox import (into project's _inbox) --
+
+    def _run_inbox_import(self) -> None:
+        if not self._source_dir or not self._wf_ctrl:
+            return
+        src = self._source_dir
+
+        def task(progress_cb):
+            return self._wf_ctrl.import_to_inbox(
+                [src], progress_cb=progress_cb,
+            )
+
+        from gui.workers.batch_runner import BatchRunner
+        runner = BatchRunner(self.window(), "导入到收件箱")
+        runner.run(task, on_done=self._on_inbox_done)
+
+    def _on_inbox_done(self, count: int) -> None:
+        project = self._state.project if self._state else None
+        name = project.name if project else ""
+        InfoBar.success(
+            "导入完成",
+            f"{count:,} 张图片已导入收件箱 — {name}",
+            parent=self.window(), duration=6000,
+            position=InfoBarPosition.TOP,
+        )
+        if project:
+            self.import_done.emit(str(project.root_path))
+
+    # -- Standalone import (classify → target dir) --
+
+    def _run_standalone_import(self) -> None:
         if self._preview is None or self._target_dir is None:
             return
 
@@ -301,10 +372,10 @@ class OrganizeView(QWidget):
         runner = BatchRunner(self.window(), "导入数据集")
         runner.run(
             task,
-            on_done=lambda result: self._on_import_done(result, tgt),
+            on_done=lambda result: self._on_standalone_done(result, tgt),
         )
 
-    def _on_import_done(self, result, target: Path) -> None:
+    def _on_standalone_done(self, result, target: Path) -> None:
         parts = [f"{result.copied:,} 张图片已导入"]
         if result.quality_issues is not None:
             parts.append(f"质检异常 {len(result.quality_issues)}")
@@ -317,4 +388,37 @@ class OrganizeView(QWidget):
             parent=self.window(), duration=6000,
             position=InfoBarPosition.TOP,
         )
+        # Create WorkItems for newly imported images so they enter the
+        # production queue immediately (not just on next scan).
+        self._create_work_items_for_import(result, target)
         self.import_done.emit(str(target))
+
+    def _create_work_items_for_import(self, result, target: Path) -> None:
+        """Register imported images in the workflow as NEW items."""
+        if self._state is None or self._state.project is None:
+            return
+        root = self._state.project.root_path
+        wf = self._state.workflow
+        if wf is None:
+            return
+        from core.workflow import WorkItem, WorkStatus, make_id, _now_iso
+        now = _now_iso()
+        existing_paths = {item.relative_path for item in wf.items}
+        new_items = []
+        for dest in getattr(result, "destinations", []):
+            try:
+                rel = Path(dest).relative_to(root).as_posix()
+            except (ValueError, TypeError):
+                continue
+            if rel not in existing_paths:
+                new_items.append(WorkItem(
+                    item_id=make_id(),
+                    relative_path=rel,
+                    status=WorkStatus.NEW,
+                    updated_at=now,
+                ))
+        if new_items:
+            wf.items.extend(new_items)
+            from core import workflow_store
+            workflow_store.save(root, wf)
+            self._state.refresh_workflow_summary()

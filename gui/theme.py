@@ -44,6 +44,33 @@ class Tokens:
     SUCCESS: str
     WARNING: str
     ERROR: str = "#c0392b"
+    # Text/glyph color that reads against ACCENT (e.g. brand chip "D",
+    # button-on-accent labels). Override per theme if ACCENT shifts hue.
+    ON_ACCENT: str = "#ffffff"
+
+    # Drop shadow used by the floating Settings popup. Warm-brown on
+    # light, black-with-alpha on dark — set per theme.
+    POPUP_SHADOW: str = "#2d2a2640"
+
+    # Badge overlays (thumbnail "已标" / "DUP" / "!") — ghost background
+    # is a semi-transparent overlay; FG is the text color on that.
+    BADGE_GHOST_BG: str = "#00000088"   # black @ 55% alpha
+    BADGE_FG_LIGHT: str = "#ffffff"
+    BADGE_FG_DARK: str = "#18181b"
+
+    # Workflow-status identity colors (used by the batch list's progress
+    # strip). Modeled the same way as the category-identity palette in
+    # ``image_viewer.PALETTE`` / ``category_tree._EARTHEN`` — values are
+    # expected to read against both themes, so LIGHT and DARK can reuse
+    # the same hex. Keeping them as tokens (rather than widget-local
+    # literals) so style-cop stays green and future themes can override.
+    STATUS_NEW: str = "#6b7280"
+    STATUS_PRELABELED: str = "#8b5cf6"
+    STATUS_ANNOTATING: str = "#3b82f6"
+    STATUS_REVIEW_PENDING: str = "#f59e0b"
+    STATUS_NEEDS_FIX: str = "#ef4444"
+    STATUS_READY: str = "#22c55e"
+    STATUS_EXPORTED: str = "#06b6d4"
 
     # ---- Node editor ----
     NODE_CAT_CLEAN: str = ""
@@ -75,8 +102,17 @@ class Tokens:
     SIDEBAR_WIDTH: int = 240
     DETAIL_SIDEBAR_WIDTH: int = 280
     THUMB_SIZE: int = 170
-    CARD_WIDTH: int = 182
-    CARD_HEIGHT: int = 232
+    # Card dimensions for the thumbnail grid (delegate uses these to
+    # paint; grid uses them for the layout pitch). Values match the
+    # 200×222 card that ships in thumbnail_grid.py.
+    CARD_WIDTH: int = 200
+    CARD_HEIGHT: int = 222
+    THUMB_H: int = 150
+    CARD_META_H: int = 72
+    CARD_PAD: int = 8
+    # Common 32px control height used by PushButton / ToolButton /
+    # LineEdit across the filter bar + delete button + search box.
+    CONTROL_HEIGHT: int = 32
 
 
 # ---------- 主题登记表 ----------
@@ -98,6 +134,11 @@ LIGHT = Tokens(
     SUCCESS="#5a7a3c",
     WARNING="#ce8a2c",
     ERROR="#b5453c",
+    ON_ACCENT="#ffffff",
+    POPUP_SHADOW="#3c28143c",  # warm brown @ 24% alpha — ivory-friendly
+    BADGE_GHOST_BG="#00000088",
+    BADGE_FG_LIGHT="#ffffff",
+    BADGE_FG_DARK="#18181b",
     NODE_CAT_CLEAN="#4a9a8a",
     NODE_CAT_AUGMENT="#8a6ac0",
     NODE_CAT_SPLIT="#c09840",
@@ -124,6 +165,11 @@ DARK = Tokens(
     SUCCESS="#7a9a4c",
     WARNING="#e0a84a",
     ERROR="#d26a60",
+    ON_ACCENT="#ffffff",
+    POPUP_SHADOW="#00000080",
+    BADGE_GHOST_BG="#00000099",
+    BADGE_FG_LIGHT="#ffffff",
+    BADGE_FG_DARK="#18181b",
     NODE_CAT_CLEAN="#5abaa0",
     NODE_CAT_AUGMENT="#a080e0",
     NODE_CAT_SPLIT="#d0a850",

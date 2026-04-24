@@ -36,7 +36,9 @@ class _DatasetCard(QFrame):
     relocate_requested = pyqtSignal(str)  # root_path — review #17
 
     def __init__(self, root_path: str, name: str, updated_at: str,
-                 exists: bool, parent: QWidget | None = None) -> None:
+                 exists: bool, wf_total: int = 0, wf_ready: int = 0,
+                 wf_review: int = 0, wf_new: int = 0,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._root = root_path
         self._exists = exists
@@ -57,6 +59,19 @@ class _DatasetCard(QFrame):
             gone = CaptionLabel("目录不存在")
             gone.setObjectName("hintWarn")
             top.addWidget(gone)
+        elif wf_total > 0:
+            # Production progress mini-strip
+            pct = int(wf_ready / wf_total * 100) if wf_total else 0
+            parts = []
+            if wf_ready:
+                parts.append(f"✓{wf_ready}")
+            if wf_review:
+                parts.append(f"⟳{wf_review}")
+            if wf_new:
+                parts.append(f"○{wf_new}")
+            progress_lbl = CaptionLabel(f"{pct}%  " + "  ".join(parts))
+            progress_lbl.setObjectName("statValue")
+            top.addWidget(progress_lbl)
         lay.addLayout(top)
 
         # Path + timestamp
@@ -89,6 +104,7 @@ class DatasetWelcome(QWidget):
     """Dataset-centric home page."""
 
     open_dataset = pyqtSignal(str)          # root_path
+    create_project = pyqtSignal(str, str, object)  # root, name, TaskType
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -99,10 +115,15 @@ class DatasetWelcome(QWidget):
         root.setContentsMargins(T.PAD_3XL, T.PAD_2XL, T.PAD_3XL, T.PAD_2XL)
         root.setSpacing(T.PAD_LG)
 
-        # Header: title + open button
+        # Header: title + buttons
         header = QHBoxLayout()
         header.addWidget(SubtitleLabel("数据集"))
         header.addStretch()
+        new_btn = PrimaryPushButton("新建空项目")
+        new_btn.setIcon(FIF.ADD)
+        new_btn.setFixedHeight(36)
+        new_btn.clicked.connect(self._on_create_project)
+        header.addWidget(new_btn)
         open_btn = PrimaryPushButton("打开数据集目录")
         open_btn.setIcon(FIF.FOLDER)
         open_btn.setFixedHeight(36)
@@ -149,11 +170,24 @@ class DatasetWelcome(QWidget):
         for ps in projects:
             card = _DatasetCard(
                 str(ps.root_path), ps.name, ps.updated_at, ps.exists,
+                wf_total=ps.wf_total, wf_ready=ps.wf_ready,
+                wf_review=ps.wf_review, wf_new=ps.wf_new,
             )
             card.clicked.connect(self.open_dataset.emit)
             card.remove_requested.connect(self._on_remove)
             card.relocate_requested.connect(self._on_relocate)
             self._list_lay.addWidget(card)
+
+    def _on_create_project(self) -> None:
+        from gui.dialogs.project_dialogs import CreateProjectDialog
+        dlg = CreateProjectDialog(self.window())
+        if not dlg.exec():
+            return
+        root = dlg.root_path()
+        if root is None:
+            return
+        self.create_project.emit(str(root), dlg.project_name(),
+                                 dlg.selected_task_type())
 
     def _on_open_dir(self) -> None:
         from PyQt6.QtWidgets import QFileDialog

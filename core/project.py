@@ -15,6 +15,13 @@ from .task_types import TaskType
 PROJECT_DIR = ".dataforge"
 PROJECT_FILE = "project.json"
 
+# Formats that support per-image write-back (in-place annotation save).
+# COCO is dataset-level (single JSON) so it cannot be a project's
+# ``annotation_format`` — it would break DetailView save, augment
+# write-back, and format_migrate.  Use ``annotation_format`` only for
+# values listed here.
+WRITEBACK_FORMATS: tuple[str, ...] = ("labelme", "yolo", "voc")
+
 
 # ---------- State sub-models ----------
 
@@ -61,6 +68,8 @@ class Project:
     created_at: str = ""
     updated_at: str = ""
     notes: str = ""
+    class_names: list[str] = field(default_factory=list)
+    annotation_format: str = "labelme"      # must be one of WRITEBACK_FORMATS
     browse_state: BrowseState = field(default_factory=BrowseState)
     split_state: SplitState = field(default_factory=SplitState)
     export_config: ExportConfig = field(default_factory=ExportConfig)
@@ -103,6 +112,12 @@ def load_project(root: Path) -> Project | None:
     except ValueError:
         task_type = TaskType.DETECTION
 
+    # Clamp annotation_format to writeback-capable formats.
+    # Legacy projects may have "coco" or other invalid values.
+    ann_fmt = raw.get("annotation_format", "labelme")
+    if ann_fmt not in WRITEBACK_FORMATS:
+        ann_fmt = "labelme"
+
     return Project(
         root_path=root,
         name=raw.get("name", root.name),
@@ -111,6 +126,8 @@ def load_project(root: Path) -> Project | None:
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         notes=raw.get("notes", ""),
+        class_names=raw.get("class_names", []),
+        annotation_format=ann_fmt,
         browse_state=BrowseState(
             category=bs.get("category", ""),
             filter=bs.get("filter", "all"),
@@ -153,6 +170,8 @@ def save_project(project: Project) -> None:
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "notes": project.notes,
+        "class_names": project.class_names,
+        "annotation_format": project.annotation_format,
         "browse_state": asdict(project.browse_state),
         "split_state": asdict(project.split_state),
         "export_config": asdict(project.export_config),
@@ -185,10 +204,17 @@ class ProjectSummary:
     name: str
     updated_at: str
     exists: bool  # whether the directory still exists
+    # Workflow stats (optional — populated when workflow.json exists)
+    wf_total: int = 0
+    wf_ready: int = 0
+    wf_review: int = 0
+    wf_new: int = 0
 
 
 def list_known_projects() -> list[ProjectSummary]:
     """Build project summaries from the recent list + project.json files."""
+    from . import workflow_store
+
     summaries: list[ProjectSummary] = []
     for path_str in load_recent():
         root = Path(path_str)
@@ -198,15 +224,25 @@ def list_known_projects() -> list[ProjectSummary]:
             ))
             continue
         proj = load_project(root)
+        # Quick workflow summary (reads JSON, no scan)
+        ws = workflow_store.summarize(root)
         if proj:
             summaries.append(ProjectSummary(
                 root_path=root,
                 name=proj.name,
                 updated_at=proj.updated_at,
                 exists=True,
+                wf_total=ws.total,
+                wf_ready=ws.ready + ws.exported,
+                wf_review=ws.review_pending + ws.needs_fix,
+                wf_new=ws.new + ws.prelabeled,
             ))
         else:
             summaries.append(ProjectSummary(
-                root_path=root, name=root.name, updated_at="", exists=True
+                root_path=root, name=root.name, updated_at="", exists=True,
+                wf_total=ws.total,
+                wf_ready=ws.ready + ws.exported,
+                wf_review=ws.review_pending + ws.needs_fix,
+                wf_new=ws.new + ws.prelabeled,
             ))
     return summaries

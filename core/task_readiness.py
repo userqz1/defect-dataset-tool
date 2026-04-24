@@ -27,27 +27,21 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .models import Dataset
 from .task_types import TaskType, TASK_REGISTRY
+
+if TYPE_CHECKING:
+    from .unified import SampleSet
 
 
 @dataclass
 class ReadinessCheck:
     """One item in the task readiness report.
 
-    ``short`` is a UI-friendly 2-character label used by the browser's
-    compact readiness bar (pill-sized chips). Defined here, not in the
-    GUI, so adding a new check guarantees the UI has something short to
-    show — review point #1: previously the GUI held a hardcoded map and
-    new checks silently fell back to the long ``item`` name.
-
-    ``item_key`` and ``action_key`` are stable identifiers the GUI uses
-    to look up translations (``readiness.item.*`` / ``readiness.action.*``).
-    ``action_args`` carries the raw numeric/string substitutions so the
-    GUI can format them into its locale's template — e.g. "「Loose」仅 9
-    张" vs "Loose: only 9 images". Pre-formatted ``action`` stays as
-    zh fallback when ``action_key`` is empty.
+    ``short`` is a UI-friendly 2-character label used where the full
+    ``item`` name is too long (e.g. the export wizard's readiness pills).
     """
     category: str      # "structure" / "quality" / "annotation" / "quantity" / "split"
     item: str          # human-readable check name (full, may be long)
@@ -55,11 +49,7 @@ class ReadinessCheck:
     current: str       # what the dataset has now
     required: str      # what the standard requires (empty if informational)
     action: str        # suggested tool/action (empty if passed)
-    short: str = ""    # 2-char UI label for pill chips; defaults to item
-    item_key: str = ""                 # stable i18n suffix, e.g. "images"
-    action_key: str = ""               # stable i18n suffix for failure text
-    action_args: dict = field(default_factory=dict)  # raw args for action i18n
-    value: float | int | str | None = None  # raw numeric value for locale-side formatting
+    short: str = ""    # short UI label; defaults to item
 
     def __post_init__(self) -> None:
         if not self.short:
@@ -89,28 +79,41 @@ class TaskReadinessReport:
         return sum(1 for c in self.checks if not c.passed)
 
 
-def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadinessReport:
-    """Run all task-level readiness checks for a dataset against its task type."""
+def check_task_readiness(
+    dataset: Dataset,
+    task_type: TaskType,
+    sample_set: SampleSet | None = None,
+) -> TaskReadinessReport:
+    """Run all task-level readiness checks for a dataset against its task type.
+
+    When *sample_set* is provided, annotation checks use the actual parsed
+    region content (more accurate than the ``has_label`` flag which only
+    checks file existence — empty label files pass that test but fail here).
+    """
     info = TASK_REGISTRY.get(task_type)
     checks: list[ReadinessCheck] = []
 
     n_images = sum(c.image_count for c in dataset.categories)
-    n_labels = sum(c.label_count for c in dataset.categories)
     n_cats = len(dataset.categories)
-    n_unlabeled = n_images - n_labels
+
+    # Derive annotation coverage from SampleSet when available — checks
+    # actual region content, not just label-file existence.
+    if sample_set is not None:
+        n_annotated = sum(1 for s in sample_set.samples if s.regions)
+        n_unlabeled = n_images - n_annotated
+    else:
+        n_annotated = sum(c.label_count for c in dataset.categories)
+        n_unlabeled = n_images - n_annotated
 
     # 1. Has images?
     checks.append(ReadinessCheck(
         category="structure",
         item="图片数量",
         short="图片",
-        item_key="images",
         passed=n_images > 0,
         current=f"{n_images:,} 张",
-        value=n_images,
         required="≥ 1",
         action="" if n_images > 0 else "导入图片",
-        action_key="" if n_images > 0 else "import_images",
     ))
 
     # 2. Has categories?
@@ -118,29 +121,23 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
         category="structure",
         item="分类数",
         short="分类",
-        item_key="classes",
         passed=n_cats > 0,
         current=f"{n_cats} 个",
-        value=n_cats,
         required="≥ 1",
         action="",
     ))
 
     # 3. Annotation coverage (for tasks that need shapes)
     if info and info.needs_shapes:
-        coverage = n_labels / n_images if n_images else 0
+        coverage = n_annotated / n_images if n_images else 0
         checks.append(ReadinessCheck(
             category="annotation",
             item="标注覆盖",
             short="标注",
-            item_key="labeled",
             passed=n_unlabeled == 0,
-            current=f"{n_labels:,}/{n_images:,} ({coverage:.0%})",
-            value=coverage,
+            current=f"{n_annotated:,}/{n_images:,} ({coverage:.0%})",
             required="100%",
             action=f"{n_unlabeled} 张未标注" if n_unlabeled else "",
-            action_key="unlabeled" if n_unlabeled else "",
-            action_args={"n": n_unlabeled} if n_unlabeled else {},
         ))
 
     # 4. Class balance
@@ -153,14 +150,10 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
                 category="quantity",
                 item="类别平衡",
                 short="平衡",
-                item_key="balance",
                 passed=balanced,
                 current=f"{ratio:.1f}:1",
-                value=ratio,
                 required="≤ 10:1",
                 action=f"最大类/最小类 = {ratio:.0f}:1" if not balanced else "",
-                action_key="imbalance" if not balanced else "",
-                action_args={"ratio": ratio} if not balanced else {},
             ))
 
     # 5. Min per class
@@ -172,17 +165,27 @@ def check_task_readiness(dataset: Dataset, task_type: TaskType) -> TaskReadiness
             category="quantity",
             item="每类最少张数",
             short="最少",
-            item_key="minimum",
             passed=enough,
             current=f"最少: {min_cat} ({min_count}张)",
-            value=min_count,
             required="≥ 10",
             action=f"「{min_cat}」仅 {min_count} 张" if not enough else "",
-            action_key="min_class" if not enough else "",
-            action_args={"cat": min_cat, "n": min_count} if not enough else {},
         ))
 
-    # Note: 可用导出格式 not included — it's static task metadata,
-    # shown in the export dialog itself, not a dataset gate.
+    # 6. Annotation quality (SampleSet only) — detect empty label files
+    if sample_set is not None and info and info.needs_shapes:
+        empty_labels = sum(
+            1 for s in sample_set.samples
+            if s.has_label and not s.regions
+        )
+        if empty_labels > 0:
+            checks.append(ReadinessCheck(
+                category="annotation",
+                item="空标注文件",
+                short="空标注",
+                passed=False,
+                current=f"{empty_labels} 个标注文件无内容",
+                required="0",
+                action=f"{empty_labels} 个标注文件存在但无标注对象",
+            ))
 
     return TaskReadinessReport(task_type=task_type, checks=checks)

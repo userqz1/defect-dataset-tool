@@ -167,9 +167,13 @@ class MainWindow(FluentWindow):
         # Home — dataset list
         self.home = DatasetWelcome()
         self.home.open_dataset.connect(self._open_dataset)
+        self.home.create_project.connect(self._create_project)
 
         # Organize — batch import → classify → land (v1.2 §9.3)
+        from gui.controllers.workflow_controller import WorkflowController
+        self._wf_ctrl = WorkflowController(self._state)
         self.organize = OrganizeView()
+        self.organize.set_state(self._state, self._wf_ctrl)
         self.organize.import_done.connect(self._open_dataset)
 
         # Browser — top-level dataset browser
@@ -186,6 +190,12 @@ class MainWindow(FluentWindow):
         self.settings_view.catalog_toggled.connect(
             lambda on: self.browser._set_catalog_open(on)
         )
+        # Project format change from settings → trigger migration in browser
+        self.settings_view.format_change_requested.connect(
+            self.browser._tools.dispatch_migrate_format
+        )
+        # Keep settings popup in sync with current project
+        self._state.project_changed.connect(self.settings_view.set_project)
 
         # Nav — TOP (labels via gui.i18n.t — live-updated on language switch)
         from gui import i18n
@@ -238,6 +248,15 @@ class MainWindow(FluentWindow):
         self._state.open_dataset(root, task_type)
         self.browser.open_directory(root)
         self.switchTo(self.browser)
+
+    def _create_project(self, path_str: str, name: str,
+                        task_type: object) -> None:
+        """Create an empty project and switch to browser."""
+        root = Path(path_str)
+        self._state.open_project(root, name, task_type)  # type: ignore[arg-type]
+        self.browser.open_directory(root)
+        self.switchTo(self.browser)
+        self.home.refresh()
 
     # ---------- i18n ----------
 

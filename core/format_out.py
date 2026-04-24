@@ -1,0 +1,758 @@
+"""Format exporters — write SampleSet to any supported target format.
+
+All writers consume ``SampleSet`` (or ``list[Sample]``) directly — no
+re-parsing label files from disk. This is the single export entry point.
+
+Supported writers:
+  YOLO · COCO · VOC · LabelMe · CSV · JSONL · ImageFolder · MVTec
+  LLaVA · ShareGPT · Swift
+
+Public API:
+  ``export_samples(sample_set, format, out_dir, opts, progress_cb) -> ExportResult``
+
+Pure Python — no PyQt.
+"""
+from __future__ import annotations
+
+import csv
+import json
+import shutil
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from xml.etree import ElementTree as ET
+
+from .unified import BBox, Region, Sample, SampleSet
+
+# ──────────────────────────────────────────────────────────────────────
+# Shared types
+# ──────────────────────────────────────────────────────────────────────
+
+@dataclass
+class ExportOptions:
+    out_dir: Path
+    copy_images: bool = True
+    # LLM-dataset question prompt (LLaVA / ShareGPT / Swift)
+    question: str = "请描述这张图片中的内容。"
+
+
+@dataclass
+class ExportResult:
+    written_images: int = 0
+    written_labels: int = 0
+    skipped: list[tuple[Path, str]] = field(default_factory=list)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Dispatcher
+# ──────────────────────────────────────────────────────────────────────
+
+_WRITERS: dict[str, Any] = {}  # populated at module bottom
+
+
+def export_samples(
+    ss: SampleSet,
+    fmt: str,
+    opts: ExportOptions,
+    *,
+    progress_cb=None,
+) -> ExportResult:
+    """Write *ss* to *fmt* under ``opts.out_dir``.
+
+    ``fmt`` is case-insensitive: ``"YOLO"``, ``"coco"``, ``"voc"``, etc.
+    """
+    key = fmt.lower().replace("-", "_")
+    writer = _WRITERS.get(key)
+    if writer is None:
+        raise ValueError(
+            f"unsupported export format {fmt!r}; "
+            f"available: {', '.join(sorted(_WRITERS))}"
+        )
+    return writer(ss, opts, progress_cb)
+
+
+def available_formats() -> list[str]:
+    """Return sorted list of registered format keys."""
+    return sorted(_WRITERS)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────
+
+def _copy_image(sample: Sample, dst_dir: Path,
+                report: ExportResult) -> str:
+    """Copy image to *dst_dir*, return relative path from out root."""
+    dst = dst_dir / sample.image_path.name
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sample.image_path, dst)
+        report.written_images += 1
+    except OSError as e:
+        report.skipped.append((sample.image_path, str(e)))
+    return dst.name
+
+
+def _iter_splits(ss: SampleSet):
+    """Yield (split_name, samples) for non-empty splits."""
+    for name, samples in [("train", ss.train), ("val", ss.val),
+                          ("test", ss.test)]:
+        if samples:
+            yield name, samples
+    # Unsplit samples go into train
+    unsplit = ss.unsplit
+    if unsplit:
+        yield "train", unsplit
+
+
+def _generate_answer(regions: list[Region]) -> str:
+    """Auto-generate a natural-language answer from regions."""
+    if not regions:
+        return "这张图片中未发现标注目标。"
+    counts = Counter(r.label for r in regions)
+    total = len(regions)
+    if total == 1:
+        return f"图片中存在1个 {regions[0].label}。"
+    parts = [f"{c}个 {l}" for l, c in counts.most_common()]
+    return f"图片中存在{total}个目标：{'、'.join(parts)}。"
+
+
+def _sample_answer(sample: Sample) -> str:
+    """Get VLM answer: prefer caption / conversations, fall back to auto."""
+    if sample.caption:
+        return sample.caption
+    if sample.conversations:
+        for t in sample.conversations:
+            if t.get("from") in ("gpt", "assistant"):
+                return t.get("value", "")
+    return _generate_answer(sample.regions)
+
+
+def _sample_conversations(sample: Sample, question: str) -> list[dict]:
+    """Get VLM conversations: prefer Sample's, fall back to auto-gen."""
+    if sample.conversations:
+        return sample.conversations
+    return [
+        {"from": "human", "value": f"<image>\n{question}"},
+        {"from": "gpt", "value": _sample_answer(sample)},
+    ]
+
+
+def _sample_grounding(sample: Sample) -> list[dict]:
+    """Extract grounding entries from regions that have text."""
+    entries = []
+    for r in sample.regions:
+        if not r.text:
+            continue
+        bb = r.ensure_bbox()
+        entry: dict = {"label": r.label, "text": r.text}
+        if bb is not None:
+            entry["bbox"] = [bb.x1, bb.y1, bb.x2, bb.y2]
+        entries.append(entry)
+    return entries
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Writers
+# ══════════════════════════════════════════════════════════════════════
+
+# ── YOLO ──────────────────────────────────────────────────────────────
+
+def _write_yolo(ss: SampleSet, opts: ExportOptions,
+                progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    cls_idx = ss.class_to_index
+    cls_list = ss.class_names
+
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    for done, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        try:
+            iw, ih = sample.image_width, sample.image_height
+            img_dir = out / "images" / split
+            lbl_dir = out / "labels" / split
+            if opts.copy_images:
+                _copy_image(sample, img_dir, report)
+
+            lines: list[str] = []
+            for r in sample.regions:
+                bb = r.ensure_bbox()
+                if bb is None or iw <= 0 or ih <= 0:
+                    continue
+                if r.label not in cls_idx:
+                    continue
+                cx, cy, w, h = bb.to_yolo(iw, ih)
+                if w <= 0 or h <= 0:
+                    continue
+                lines.append(
+                    f"{cls_idx[r.label]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+            lbl_dir.mkdir(parents=True, exist_ok=True)
+            (lbl_dir / (sample.image_path.stem + ".txt")).write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            report.written_labels += 1
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    # classes.txt + data.yaml
+    (out / "classes.txt").write_text(
+        "\n".join(cls_list) + "\n", encoding="utf-8")
+    yaml = ["path: .", "train: images/train", "val: images/val"]
+    if ss.test:
+        yaml.append("test: images/test")
+    yaml += [f"nc: {len(cls_list)}",
+             "names: [" + ", ".join(f"'{c}'" for c in cls_list) + "]"]
+    (out / "data.yaml").write_text("\n".join(yaml) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── COCO ──────────────────────────────────────────────────────────────
+
+def _write_coco(ss: SampleSet, opts: ExportOptions,
+                progress_cb) -> ExportResult:
+    out = opts.out_dir
+    ann_dir = out / "annotations"
+    ann_dir.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+
+    all_samples = list(_iter_splits(ss))
+    total = sum(len(batch) for _, batch in all_samples)
+    done = 0
+
+    for split, samples in all_samples:
+        images_json: list[dict] = []
+        anns_json: list[dict] = []
+        cat_idx: dict[str, int] = {}
+        next_img = 1
+        next_ann = 1
+
+        for sample in samples:
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, out / split, report)
+                images_json.append({
+                    "id": next_img,
+                    "file_name": sample.image_path.name,
+                    "width": sample.image_width,
+                    "height": sample.image_height,
+                })
+                for r in sample.regions:
+                    bb = r.ensure_bbox()
+                    if bb is None:
+                        continue
+                    if r.label not in cat_idx:
+                        cat_idx[r.label] = len(cat_idx) + 1
+                    x, y, w, h = bb.to_xywh()
+                    if w <= 0 or h <= 0:
+                        continue
+                    anns_json.append({
+                        "id": next_ann,
+                        "image_id": next_img,
+                        "category_id": cat_idx[r.label],
+                        "bbox": [x, y, w, h],
+                        "area": w * h,
+                        "iscrowd": int(r.iscrowd),
+                    })
+                    next_ann += 1
+                next_img += 1
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+
+        cats_json = [
+            {"id": cid, "name": name}
+            for name, cid in sorted(cat_idx.items(), key=lambda x: x[1])
+        ]
+        (ann_dir / f"instances_{split}.json").write_text(
+            json.dumps({"images": images_json, "annotations": anns_json,
+                         "categories": cats_json},
+                        ensure_ascii=False, indent=2),
+            encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── VOC ───────────────────────────────────────────────────────────────
+
+def _write_voc(ss: SampleSet, opts: ExportOptions,
+               progress_cb) -> ExportResult:
+    out = opts.out_dir
+    img_dir = out / "JPEGImages"
+    xml_dir = out / "Annotations"
+    sets_dir = out / "ImageSets" / "Main"
+    for d in (img_dir, xml_dir, sets_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+
+    all_samples = list(_iter_splits(ss))
+    total = sum(len(batch) for _, batch in all_samples)
+    done = 0
+
+    for split, samples in all_samples:
+        stems: list[str] = []
+        for sample in samples:
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                root = ET.Element("annotation")
+                ET.SubElement(root, "folder").text = "JPEGImages"
+                ET.SubElement(root, "filename").text = sample.image_path.name
+                sz = ET.SubElement(root, "size")
+                ET.SubElement(sz, "width").text = str(sample.image_width)
+                ET.SubElement(sz, "height").text = str(sample.image_height)
+                ET.SubElement(sz, "depth").text = "3"
+                for r in sample.regions:
+                    bb = r.ensure_bbox()
+                    if bb is None or bb.width <= 0 or bb.height <= 0:
+                        continue
+                    obj = ET.SubElement(root, "object")
+                    ET.SubElement(obj, "name").text = r.label
+                    ET.SubElement(obj, "difficult").text = (
+                        "1" if r.difficult else "0")
+                    ET.SubElement(obj, "truncated").text = (
+                        "1" if r.truncated else "0")
+                    bnd = ET.SubElement(obj, "bndbox")
+                    ET.SubElement(bnd, "xmin").text = f"{int(bb.x1)}"
+                    ET.SubElement(bnd, "ymin").text = f"{int(bb.y1)}"
+                    ET.SubElement(bnd, "xmax").text = f"{int(bb.x2)}"
+                    ET.SubElement(bnd, "ymax").text = f"{int(bb.y2)}"
+                (xml_dir / (sample.image_path.stem + ".xml")).write_bytes(
+                    ET.tostring(root, encoding="utf-8", xml_declaration=True))
+                report.written_labels += 1
+                stems.append(sample.image_path.stem)
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+        (sets_dir / f"{split}.txt").write_text(
+            "\n".join(stems) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── LabelMe ───────────────────────────────────────────────────────────
+
+def _write_labelme(ss: SampleSet, opts: ExportOptions,
+                   progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    for done, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        try:
+            img_dir = out / "images" / split
+            lbl_dir = out / "labels" / split
+            if opts.copy_images:
+                _copy_image(sample, img_dir, report)
+            shapes: list[dict] = []
+            for r in sample.regions:
+                pts = _region_points(r)
+                if not pts:
+                    continue
+                shapes.append({
+                    "label": r.label,
+                    "points": [[x, y] for x, y in pts],
+                    "group_id": None,
+                    "shape_type": r.shape_type,
+                    "flags": {},
+                })
+            lme = {
+                "version": "5.0.0",
+                "flags": {},
+                "imagePath": sample.image_path.name,
+                "imageData": None,
+                "imageWidth": sample.image_width,
+                "imageHeight": sample.image_height,
+                "shapes": shapes,
+            }
+            lbl_dir.mkdir(parents=True, exist_ok=True)
+            (lbl_dir / (sample.image_path.stem + ".json")).write_text(
+                json.dumps(lme, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            report.written_labels += 1
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+def _region_points(r: Region) -> list[tuple[float, float]]:
+    """Extract the best point list for LabelMe serialization."""
+    if r.polygon:
+        return r.polygon
+    if r.bbox:
+        bb = r.bbox
+        if r.shape_type == "rectangle":
+            return [(bb.x1, bb.y1), (bb.x2, bb.y2)]
+        # polygon from bbox
+        return [(bb.x1, bb.y1), (bb.x2, bb.y1),
+                (bb.x2, bb.y2), (bb.x1, bb.y2)]
+    if r.keypoints:
+        return [(x, y) for x, y, _v in r.keypoints]
+    return []
+
+
+# ── CSV ───────────────────────────────────────────────────────────────
+
+_CSV_COLS = [
+    "image_path", "category", "label",
+    "x1", "y1", "x2", "y2", "shape_type", "split",
+]
+
+
+def _write_csv(ss: SampleSet, opts: ExportOptions,
+               progress_cb) -> ExportResult:
+    out = opts.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    csv_path = out / "annotations.csv"
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(_CSV_COLS)
+        for done, (split, sample) in enumerate(all_samples):
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                img_dir = out / "images" / split
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                    rel = f"images/{split}/{sample.image_path.name}"
+                else:
+                    rel = str(sample.image_path)
+                if sample.regions:
+                    for r in sample.regions:
+                        bb = r.ensure_bbox()
+                        if bb:
+                            writer.writerow([
+                                rel, sample.category, r.label,
+                                f"{bb.x1:.1f}", f"{bb.y1:.1f}",
+                                f"{bb.x2:.1f}", f"{bb.y2:.1f}",
+                                r.shape_type, split,
+                            ])
+                        else:
+                            writer.writerow([
+                                rel, sample.category, r.label,
+                                "", "", "", "", r.shape_type, split,
+                            ])
+                else:
+                    writer.writerow([
+                        rel, sample.category, "", "", "", "", "", "", split])
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── JSONL ─────────────────────────────────────────────────────────────
+
+def _write_jsonl(ss: SampleSet, opts: ExportOptions,
+                 progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    all_splits = list(_iter_splits(ss))
+    total = sum(len(b) for _, b in all_splits)
+    done = 0
+
+    for split, samples in all_splits:
+        lines: list[str] = []
+        img_dir = out / "images" / split
+        for sample in samples:
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                    rel = f"images/{split}/{sample.image_path.name}"
+                else:
+                    rel = str(sample.image_path)
+                annots = []
+                for r in sample.regions:
+                    bb = r.ensure_bbox()
+                    d: dict[str, Any] = {
+                        "label": r.label,
+                        "shape_type": r.shape_type,
+                    }
+                    if bb:
+                        d["bbox"] = [bb.x1, bb.y1, bb.x2, bb.y2]
+                    if r.polygon:
+                        d["points"] = [[x, y] for x, y in r.polygon]
+                    annots.append(d)
+                rec = {
+                    "image": rel,
+                    "width": sample.image_width,
+                    "height": sample.image_height,
+                    "category": sample.category,
+                    "annotations": annots,
+                }
+                lines.append(json.dumps(rec, ensure_ascii=False))
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+        (out / f"{split}.jsonl").parent.mkdir(parents=True, exist_ok=True)
+        (out / f"{split}.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── ImageFolder ───────────────────────────────────────────────────────
+
+def _write_imagefolder(ss: SampleSet, opts: ExportOptions,
+                       progress_cb) -> ExportResult:
+    out = opts.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    for done, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        try:
+            cat = (sample.category or "").strip()
+            if not cat:
+                report.skipped.append((sample.image_path, "no category"))
+                continue
+            _copy_image(sample, out / split / cat, report)
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── MVTec ─────────────────────────────────────────────────────────────
+
+def _write_mvtec(ss: SampleSet, opts: ExportOptions,
+                 progress_cb) -> ExportResult:
+    out = opts.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+
+    def is_good(s: Sample) -> bool:
+        return (s.category or "").strip().lower() == "good"
+
+    train_good = [s for s in ss.train if is_good(s)]
+    train_defect = [s for s in ss.train if not is_good(s)]
+    test_all = list(ss.val) + list(ss.test) + train_defect
+
+    total = len(train_good) + len(test_all)
+    done = 0
+
+    for sample in train_good:
+        done += 1
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        try:
+            _copy_image(sample, out / "train" / "good", report)
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    for sample in test_all:
+        done += 1
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        try:
+            cat = (sample.category or "").strip()
+            if not cat:
+                report.skipped.append((sample.image_path, "no category"))
+                continue
+            bucket = "good" if cat.lower() == "good" else cat
+            _copy_image(sample, out / "test" / bucket, report)
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── LLaVA ─────────────────────────────────────────────────────────────
+
+def _write_llava(ss: SampleSet, opts: ExportOptions,
+                 progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    all_splits = list(_iter_splits(ss))
+    total = sum(len(b) for _, b in all_splits)
+    done = 0
+
+    for split, samples in all_splits:
+        lines: list[str] = []
+        img_dir = out / "images" / split
+        for i, sample in enumerate(samples):
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                    rel = f"images/{split}/{sample.image_path.name}"
+                else:
+                    rel = str(sample.image_path)
+                convos = _sample_conversations(sample, opts.question)
+                rec: dict = {
+                    "id": f"{split}_{i:06d}",
+                    "image": rel,
+                    "conversations": convos,
+                }
+                gnd = _sample_grounding(sample)
+                if gnd:
+                    rec["grounding"] = gnd
+                lines.append(json.dumps(rec, ensure_ascii=False))
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"llava_{split}.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── ShareGPT ──────────────────────────────────────────────────────────
+
+def _write_sharegpt(ss: SampleSet, opts: ExportOptions,
+                    progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    all_splits = list(_iter_splits(ss))
+    total = sum(len(b) for _, b in all_splits)
+    done = 0
+
+    for split, samples in all_splits:
+        records: list[dict] = []
+        img_dir = out / "images" / split
+        for sample in samples:
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                    rel = f"images/{split}/{sample.image_path.name}"
+                else:
+                    rel = str(sample.image_path)
+                convos = _sample_conversations(sample, opts.question)
+                rec: dict = {
+                    "conversations": convos,
+                    "images": [rel],
+                }
+                gnd = _sample_grounding(sample)
+                if gnd:
+                    rec["grounding"] = gnd
+                records.append(rec)
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"sharegpt_{split}.json").write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+
+    # dataset_info.json for LLaMA-Factory
+    info = {}
+    for split, _ in all_splits:
+        info[f"my_dataset_{split}"] = {
+            "file_name": f"sharegpt_{split}.json",
+            "formatting": "sharegpt",
+            "columns": {"messages": "conversations", "images": "images"},
+        }
+    (out / "dataset_info.json").write_text(
+        json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ── Swift ─────────────────────────────────────────────────────────────
+
+def _write_swift(ss: SampleSet, opts: ExportOptions,
+                 progress_cb) -> ExportResult:
+    out = opts.out_dir
+    report = ExportResult()
+    all_splits = list(_iter_splits(ss))
+    total = sum(len(b) for _, b in all_splits)
+    done = 0
+
+    for split, samples in all_splits:
+        lines: list[str] = []
+        img_dir = out / "images" / split
+        for sample in samples:
+            done += 1
+            if progress_cb:
+                progress_cb(done, total, sample.image_path.name)
+            try:
+                if opts.copy_images:
+                    _copy_image(sample, img_dir, report)
+                    rel = f"images/{split}/{sample.image_path.name}"
+                else:
+                    rel = str(sample.image_path)
+                rec = {
+                    "query": f"<image>{opts.question}",
+                    "response": _sample_answer(sample),
+                    "images": [rel],
+                }
+                lines.append(json.dumps(rec, ensure_ascii=False))
+                report.written_labels += 1
+            except Exception as e:
+                report.skipped.append((sample.image_path, str(e)))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"swift_{split}.jsonl").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Registry
+# ──────────────────────────────────────────────────────────────────────
+
+_WRITERS.update({
+    "yolo": _write_yolo,
+    "coco": _write_coco,
+    "voc": _write_voc,
+    "labelme": _write_labelme,
+    "csv": _write_csv,
+    "jsonl": _write_jsonl,
+    "imagefolder": _write_imagefolder,
+    "mvtec": _write_mvtec,
+    "llava": _write_llava,
+    "sharegpt": _write_sharegpt,
+    "swift": _write_swift,
+})

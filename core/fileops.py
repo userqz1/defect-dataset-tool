@@ -164,12 +164,14 @@ def rename_pair(image: ImageInfo, new_stem: str) -> OpResult:
 
         label = image.label_path or label_path_for_image(image.path)
         if label and label.is_file():
-            # Preserve the label's original extension (.json/.txt/.xml) —
-            # hardcoding .json silently mis-converted YOLO/VOC labels
-            # (review #3). _update_image_path_in_json is LabelMe-only so
-            # we gate the in-JSON rewrite on suffix match too.
             new_label = label.with_name(new_stem + label.suffix)
-            label.rename(new_label)
+            try:
+                label.rename(new_label)
+            except Exception:
+                # Rollback: restore the image to its original name so the
+                # pair stays consistent on disk.
+                new_image.rename(image.path)
+                raise
             if new_label.suffix.lower() == ".json":
                 _update_image_path_in_json(new_label, new_image.name)
 
@@ -183,6 +185,7 @@ def batch_rename(
     images: list[ImageInfo],
     pattern: str = "{cat}_{idx:04d}",
     start: int = 1,
+    progress_cb=None,
 ) -> OpResult:
     """Batch rename using a Python format pattern.
 
@@ -190,11 +193,20 @@ def batch_rename(
         {cat}    - category name
         {idx}    - 1-based index
         {stem}   - original stem
+
+    Progress is reported as ``(i, 2*N, name)`` — the denominator doubles
+    because each item pays two filesystem rename ops (stage-1 temp, then
+    stage-2 final). Otherwise the bar would hit 50% at end-of-phase-1
+    and sit there while phase-2 completes silently.
     """
     result = OpResult()
+    total = len(images) * 2
+    done = 0
     # 两阶段重命名以避免冲突：先全部加临时前缀
     temp_paths: list[tuple[ImageInfo, Path, Path | None]] = []
     for i, img in enumerate(images):
+        if progress_cb:
+            progress_cb(done, total, img.path.name)
         try:
             tmp = img.path.with_name(f"__renaming__{i}__{img.path.name}")
             img.path.rename(tmp)
@@ -206,8 +218,11 @@ def batch_rename(
             temp_paths.append((img, tmp, tmp_label))
         except Exception as e:  # noqa: BLE001
             result.failed.append((img.path, f"stage1: {e}"))
+        done += 1
 
     for i, (img, tmp_image, tmp_label) in enumerate(temp_paths):
+        if progress_cb:
+            progress_cb(done, total, tmp_image.name)
         try:
             new_stem = pattern.format(cat=img.category, idx=start + i, stem=img.path.stem)
             new_image = tmp_image.with_name(new_stem + img.path.suffix)
@@ -225,6 +240,10 @@ def batch_rename(
             result.succeeded.append(new_image)
         except Exception as e:  # noqa: BLE001
             result.failed.append((tmp_image, f"stage2: {e}"))
+        done += 1
+
+    if progress_cb:
+        progress_cb(total, total, "")
     return result
 
 

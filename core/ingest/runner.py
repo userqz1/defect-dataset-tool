@@ -62,6 +62,7 @@ class IngestResult:
 
     copied: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    destinations: list[Path] = field(default_factory=list)  # dest paths of copied files
     target_root: Path = field(default_factory=lambda: Path("."))
     # Populated by execute_with_checks (§6.4 integration)
     dataset: "object | None" = None            # core.models.Dataset
@@ -184,6 +185,7 @@ def execute(
                     dst = _unique(dst)
                 op(str(src), str(dst))
                 result.copied += 1
+                result.destinations.append(dst)
             except Exception as e:  # noqa: BLE001
                 result.skipped.append((src, str(e)))
 

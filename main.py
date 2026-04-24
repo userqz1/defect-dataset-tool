@@ -1,11 +1,15 @@
 """Application entry point."""
 from __future__ import annotations
 
+import faulthandler
 import logging
 import logging.handlers
 import sys
+import threading
+import traceback
 from pathlib import Path
 
+from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -17,13 +21,27 @@ _LOG_DIR = _APP_DATA / "logs"
 
 APP_NAME = "数据工坊"  # DataForge
 
+# Module-level ref to keep the fault-handler file alive for process
+# lifetime. If this gets garbage-collected, faulthandler's fd becomes
+# invalid and a future segfault would land nowhere.
+_fault_file = None
+
 
 def _setup_logging() -> None:
-    """Configure root logger with rotating file + stderr handlers.
+    """Configure root logger + route uncaught errors into the same log.
 
-    Log file lives at ``~/.dataforge/logs/app.log`` (rotates at 1 MB,
-    keeps 5 backups). All modules do ``logger = logging.getLogger(__name__)``
-    and inherit this config.
+    Paths:
+        ~/.dataforge/logs/app.log   — Python-level (rotates 1 MB × 5)
+        ~/.dataforge/logs/fault.log — C-level tracebacks (segfault / SEH)
+
+    Captured:
+        1. All ``logger.*`` calls from any module (inherited config).
+        2. Uncaught Python exceptions on the main thread (sys.excepthook).
+        3. Uncaught exceptions from QThread / threading.Thread workers
+           (threading.excepthook).
+        4. Qt C++ warnings / critical / fatal messages (Qt message handler).
+        5. Native crashes — segfault, SEH, access violation — dumped to
+           fault.log via faulthandler before the process exits.
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +69,79 @@ def _setup_logging() -> None:
     stderr_h.setFormatter(fmt)
     stderr_h.setLevel(logging.WARNING)
     root.addHandler(stderr_h)
+
+    _install_excepthooks()
+    _install_qt_message_handler()
+    _install_faulthandler()
+
+
+def _install_excepthooks() -> None:
+    """Route uncaught Python exceptions (main + worker threads) to logger."""
+    log = logging.getLogger("uncaught")
+
+    def _hook(exc_type, exc_value, tb):
+        # Let KeyboardInterrupt propagate so Ctrl+C still exits cleanly.
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, tb)
+            return
+        log.error("uncaught exception",
+                  exc_info=(exc_type, exc_value, tb))
+
+    sys.excepthook = _hook
+
+    def _thread_hook(args: threading.ExceptHookArgs):
+        if issubclass(args.exc_type, SystemExit):
+            return
+        log.error("uncaught thread exception in %s",
+                  args.thread.name if args.thread else "?",
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    threading.excepthook = _thread_hook
+
+
+def _install_qt_message_handler() -> None:
+    """Forward Qt's own C++ qWarning/qCritical/qFatal to logging."""
+    log = logging.getLogger("qt")
+    level_map = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
+
+    def _handler(msg_type, context, msg):
+        level = level_map.get(msg_type, logging.INFO)
+        # Some Qt messages bring file+line via context; include when present.
+        where = ""
+        if context and context.file:
+            where = f" ({context.file}:{context.line})"
+        log.log(level, "%s%s", msg, where)
+
+    qInstallMessageHandler(_handler)
+
+
+def _install_faulthandler() -> None:
+    """Dump the C-level traceback of any native crash to fault.log.
+
+    Opened with ``buffering=1`` (line-buffered) and a module-level
+    reference so the fd stays valid for the whole process. faulthandler
+    writes via raw fd on crash, so Python-side buffering isn't a concern.
+    """
+    global _fault_file
+    fault_path = _LOG_DIR / "fault.log"
+    # Line-mark run boundaries so multiple crashes across sessions stay
+    # distinguishable in the appended file.
+    _fault_file = open(fault_path, "a", buffering=1, encoding="utf-8")
+    try:
+        import datetime as _dt
+        _fault_file.write(
+            f"\n===== run started {_dt.datetime.now().isoformat()} =====\n"
+        )
+        _fault_file.flush()
+    except Exception:
+        pass
+    faulthandler.enable(file=_fault_file, all_threads=True)
 
 
 def _migrate_cache_dir() -> None:

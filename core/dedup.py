@@ -1,5 +1,11 @@
 """Perceptual-hash based image deduplication.
 
+Two entry points:
+  - ``find_duplicates(images)`` — legacy, iterates ``ImageInfo`` objects.
+  - ``find_duplicates_from_samples(sample_set)`` — preferred when a
+    SampleSet is available. Builds the ``ImageInfo`` list from Samples
+    so all analysis reads from the same unified source.
+
 Optimized: parallel hash computation via ThreadPoolExecutor,
 images resized to 128x128 before hashing to reduce I/O.
 """
@@ -8,11 +14,15 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import imagehash
 from PIL import Image
 
 from .models import ImageInfo
+
+if TYPE_CHECKING:
+    from .unified import SampleSet
 
 
 @dataclass
@@ -171,3 +181,33 @@ def _group_by_hamming(
             images=[hashes[m][0] for m in members],
         ))
     return groups
+
+
+# ---------- SampleSet entry point ----------
+
+def find_duplicates_from_samples(
+    sample_set: SampleSet,
+    threshold: int = 5,
+    progress_cb=None,
+) -> list[DuplicateGroup]:
+    """Preferred dedup entry when SampleSet is available.
+
+    Builds ``ImageInfo`` objects from the unified model so the entire
+    analysis chain reads from one source. The returned ``DuplicateGroup``
+    items contain the same ``ImageInfo`` objects as the legacy path.
+    """
+    from .unified import SampleSet as _SS  # noqa: F811
+
+    images = [
+        ImageInfo(
+            path=Path(s.image_path),
+            category=s.category,
+            has_label=s.has_label,
+            label_path=s.label_path,
+        )
+        for s in sample_set.samples
+    ]
+    return find_duplicates(
+        images, threshold=threshold,
+        progress_cb=progress_cb, total=len(images),
+    )

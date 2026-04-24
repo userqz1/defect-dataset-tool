@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**数据坊 (DataForge)** — A Windows desktop tool (Python 3.11 + PyQt6 + qfluentwidgets) for managing image datasets across CV task types (classification, detection, segmentation, anomaly detection). Users build visual processing pipelines on an n8n-style node canvas: drag tool nodes (quality check, dedup, augment, split, export…) onto a canvas, connect them, configure parameters, and execute.
+**数据坊 (DataForge)** — A Windows desktop tool (Python 3.11 + PyQt6 + qfluentwidgets) for managing image datasets across CV task types (classification, detection, segmentation, anomaly detection). The tool covers three dataset lifecycle stages: **fresh** (raw images, no labels), **semi-finished** (partial labels), **existing** (fully labeled — format conversion, augmentation, re-split, LLM-dataset export).
 
 Annotation formats: LabelMe JSON (primary), YOLO, Pascal VOC, COCO. Expected disk layout: `<root>/<category>/images/` + `<root>/<category>/labels/` (auto-detected; also handles flat, single-category, and recursive layouts).
 
-App data lives in `~/.dataforge/` (schemes, cache, settings).
+App data lives in `~/.dataforge/` (project metadata, cache, settings).
 
 ## Commands
 
@@ -37,18 +37,19 @@ No test suite exists yet. When added, use pytest.
   - Data models: `models.py` (dataclasses: `Dataset`, `Category`, `ImageInfo`, `Annotation`, `Shape`).
   - Scanning: `dataset.py` (two-phase scan + layout detection), `index_cache.py` (SQLite cache).
   - Annotation: `annotation.py` (LabelMe parser), `annotation_formats.py` (multi-format), `annotation_writer.py` (write-back).
-  - Processing: `quality.py`, `dedup.py`, `augment.py`, `transform.py`, `convert.py`, `predictor.py`, `splitter.py`.
-  - Node system: `nodes.py` (ProcessingNode protocol + NODES registry), `pipeline.py` (graph execution engine), `scheme.py` (scheme serialization).
+  - Processing: `quality.py`, `dedup.py`, `augment.py`, `transform.py`, `convert.py`, `predictor.py`, `splitter.py`, `task_readiness.py`.
+  - Pipeline / ingest / schema: `pipeline/`, `ingest/`, `schema/` packages (run-config, file-ingest rules, per-format compliance).
   - Exporters: `exporter/{yolo,coco,voc,subset,report,csv_export,jsonl,llava,sharegpt,swift}.py` — each behind a common interface.
-  - Infrastructure: `config.py`, `project.py`, `recent.py`, `user_settings.py`, `fileops.py`, `stats.py`, `compliance.py`, `format_grid.py`, `task_types.py`, `standards.py`, `thumbnail_cache.py`.
+  - Infrastructure: `config.py`, `project.py`, `recent.py`, `user_settings.py`, `fileops.py`, `stats.py`, `thumbnail_cache.py`, `history.py`, `api.py`, `task_types.py`.
 
 - **`gui/`** — PyQt6 + qfluentwidgets.
-  - `main_window.py` — `FluentWindow` with three primary interfaces: Home (SchemeWelcome), Editor (PipelineView), Settings. Tools sidebar populated dynamically from `core.nodes.NODES`.
-  - `views/` — One per feature. Primary views: `scheme_welcome_view.py` (home/scheme manager), `pipeline_view.py` (node canvas editor), `settings_view.py`. Node workspace views (opened via double-click on canvas node): `augment_view`, `cleaning_view`, `dedup_view`, `export_view`, `predict_view`, `quality_view`, `split_view`, `standards_view`, `transform_view`.
-  - `widgets/` — Reusable components. Most important: `node_editor.py` (NodeCanvas, NodeItem, PortItem, ConnectionItem — the entire n8n-style graph editor, ~34K).
-  - `workers/` — QThread wrappers: `BatchWorker` (generic), `ScanWorker` (dataset scan), `ThumbnailWorker` (lazy thumbnails).
-  - `dialogs/` — Parameter-collection dialogs. `node_config_dialog.py` (per-node config forms), `op_dialogs.py` (progress, transform ops), `category_dialogs.py`, `export_validation_dialog.py`.
-  - `theme.py` + `styles/app.qss` — Three-layer styling system.
+  - `main_window.py` — `FluentWindow` with Home (`DatasetWelcome`), Organize (`organize_view`), Browser (`DatasetBrowserView`), plus a Settings popup (`settings_view`).
+  - `views/` — `dataset_welcome.py` (recents + open/create), `organize_view.py` (ingest/organize helper), `dataset_browser_view.py` (outer shell: top bar + category catalog + browser + detail), `browser_view.py` (grid + filter chips + pagination), `detail_view.py` (single-image viewer + annotation editor), `settings_view.py` (floating popup).
+  - `widgets/` — Reusable components: `thumbnail_grid.py` (card grid + delegate), `image_viewer.py` (pan/zoom + shape overlay), `category_tree.py`, `catalog_panel.py`, `dataset_bar.py`, `distribution_chart.py`, `brand_title_bar.py`, `tool_sidebar.py`, `chips.py`, `preview_pane.py`.
+  - `workers/` — QThread wrappers: `BatchWorker` (generic `fn(progress_cb)` runner), `BatchRunner` (worker + progress dialog + result handler), `ScanWorker` (dataset scan), `ThumbnailWorker` (lazy thumbnails).
+  - `dialogs/` — Parameter-collection + progress dialogs: `op_dialogs.py` (progress, failure detail, move-to-category), `tool_dialogs.py` (quality / stats / dedup config + results), `batch_ops.py`, `history_dialog.py`, `export_wizard.py`, `export_validation_dialog.py`, `category_dialogs.py`, `task_type_dialog.py` (task-type picker on first dataset open).
+  - `theme.py` + `styles/app.qss` + `i18n.py` — Three-layer styling system + minimal i18n.
+  - `app_state.py` — Shared `AppState` (dataset + project + derived artifacts), Qt-signal-based.
 
 - **`config/default_config.yaml`** — Externalized config (cache paths, image extensions, theme).
 - **`main.py`** — Entry point. App data dir: `~/.dataforge/`.
@@ -57,35 +58,24 @@ No test suite exists yet. When added, use pytest.
 
 ```
 MainWindow (FluentWindow)
-├── Home (SchemeWelcome)
-│   ├── New scheme → _new_scheme() → enters editor with blank canvas
-│   ├── Open scheme → _open_scheme(path) → deserializes JSON, populates canvas
-│   └── Use template → _use_template(idx)
-├── Editor (PipelineView)
-│   ├── NodeCanvas (graph editing surface)
-│   │   ├── NodeItem(s) — draggable, double-click → open workspace
-│   │   └── ConnectionItem(s) — Bézier curves between ports
-│   └── Workspace views (stacked, one per node type)
-├── Tools sidebar group
-│   └── Each tool → _tool_click() → creates NodeItem on canvas (requires active scheme)
-└── Settings (SettingsView)
+├── Home (DatasetWelcome)
+│   ├── Recents list + "open dataset" / "create project"
+│   └── open_dataset(path, task_type) → _open_dataset() → switchTo(browser)
+├── Organize (OrganizeView)
+│   └── File-ingest helper (copy/rename into the <root>/<cat>/ structure)
+├── Browser (DatasetBrowserView)
+│   ├── DatasetBar (top strip: title, path, stat pills, open/analyse buttons)
+│   ├── ToolSidebar (analysis / process / output / other groups)
+│   ├── CatalogPanel (category tree + distribution chart)
+│   ├── BrowserView (grid + filter chips + pagination)  ← browser_stack idx 0
+│   └── DetailView (single-image viewer + annotation editor) ← browser_stack idx 1
+└── Settings (SettingsView popup)
     └── theme_changed → _on_theme_changed()
 ```
 
-Signal wiring lives directly in `MainWindow.__init__()` connecting view signals to handler methods. There is no separate `_connect_signals()` method.
+Signal wiring lives directly in `MainWindow.__init__()` and `DatasetBrowserView.__init__()` connecting view signals to handler methods. There is no separate `_connect_signals()` method.
 
-### Node system (`core/nodes.py`)
-
-Each processing step implements the `ProcessingNode` protocol:
-- `PortDef` (name, label, direction, data_type) — defines input/output ports.
-- `ParamDef` (name, label, type, default, choices, min/max) — defines configurable parameters.
-- `StepResult` (ok_count, fail_count, output_paths, details) — execution result.
-- Concrete nodes: `DataSourceNode`, `QualityCheckNode`, `DedupNode`, `AugmentNode`, `PredictNode`, `SplitNode`, `ExportNode`.
-- All registered in global `NODES: dict[str, ProcessingNode]`.
-
-### Scheme persistence (`core/scheme.py`)
-
-Schemes serialize the canvas state (nodes + connections + positions) to JSON in `~/.dataforge/schemes/<name>.json`. Dataclasses: `Scheme`, `SchemeNode`, `SchemeConnection`.
+`AppState` is the single source of truth for dataset + project + derived artifacts (quality issues, dedup groups, extended stats). Views subscribe via `dataset_changed` / `quality_changed` / `duplicates_changed` / `ext_stats_changed` and re-render from the state.
 
 ### Key patterns
 
@@ -106,26 +96,15 @@ Schemes serialize the canvas state (nodes + connections + positions) to JSON in 
 
 **Thumbnails**: Lazy-loaded via `ThumbnailWorker` with on-disk cache (`diskcache`).
 
-**Pipeline-first execution**: Only the canvas "执行流程" button runs processing. Workspace views are for config + result display, not independent execution. `GraphEngine` topologically sorts nodes, executes each, routes data between ports.
+**Worker cleanup**: Before `deleteLater()`ing a view that owns a `ThumbnailWorker` / `ScanWorker`, stop the worker first — otherwise dangling thread references can segfault.
 
-**Workspace param sync**: Each workspace view implements `get_params() → dict` and `set_params(dict)`. Params sync to `NodeItem._params` when returning to canvas (`_back_to_canvas`) and before saving (`_on_save_clicked`). When opening a workspace, `NodeItem.params` are pushed into the UI via `set_params()`.
+**Styling exceptions**: `gui/widgets/image_viewer.py:PALETTE` and `gui/widgets/category_tree.py:_EARTHEN`/`_NAMED` hold hex color literals. These are **category-identity** palettes (same colors must read against both light and dark themes), not theme colors; they are the only allowed hex-literal sites in `gui/`. All other colors must come from `gui.theme.T`.
 
-**Worker cleanup**: `clear_workspaces()` must stop `ThumbnailWorker` and `ScanWorker` before `deleteLater()` to avoid segfaults from dangling thread references.
+### Adding a new processing operation
 
-### Adding a new processing node
-
-1. Create or extend `core/<feature>.py` (pure Python).
-2. Add a `ProcessingNode` implementation in `core/nodes.py` with ports, params, and `execute()`.
-3. Register in the `NODES` dict — it auto-appears in the sidebar tools group.
-4. If the node needs a dedicated workspace view, create `gui/views/<feature>_view.py` and register it in the editor's workspace stack.
-5. Add a node config builder in `gui/dialogs/node_config_dialog.py` (`_BUILDERS` dict).
-
-### Node canvas internals (`gui/widgets/node_editor.py`)
-
-- `NodeCanvas(QGraphicsView)` — 20px dot grid, zoom controls, context menu, drag-to-connect.
-- `NodeItem(QGraphicsItem)` — 160px wide, category-colored header, dynamic ports, states (idle/running/done/error), 20px grid snapping.
-- `PortItem(QGraphicsEllipseItem)` — Input (left) / output (right), 15px hit area, visual highlight on hover/connect.
-- `ConnectionItem(QGraphicsPathItem)` — Cubic Bézier between ports, 8px hit area, selectable + deletable.
+1. Create or extend `core/<feature>.py` (pure Python, `progress_cb` supported for anything > ~100ms).
+2. Hook it into the UI from `DatasetBrowserView` — usually as a toolbar button that opens a config dialog (`gui/dialogs/tool_dialogs.py`) and runs via `BatchRunner(parent, title).run(task=…, on_done=…)`.
+3. If it produces a derived artifact (quality issues, dedup groups, stats), store it on `AppState` via a `set_*` method so other views can subscribe.
 
 ## Gotchas
 
@@ -134,5 +113,5 @@ Schemes serialize the canvas state (nodes + connections + positions) to JSON in 
 - **Annotation schema drift**: Parser must be tolerant of malformed JSON and record failures.
 - **SSL/proxy on this machine**: Unset `HTTP_PROXY`/`HTTPS_PROXY` before pip/conda installs; use Tsinghua mirrors.
 - **Config is read-once**: `core/config.load()` is `@lru_cache(maxsize=1)`. Changes need app restart.
-- **Tool clicks require active scheme**: Sidebar tool clicks only work when `_scheme_active=True`; otherwise an info bar prompts the user to create a scheme first.
+- **Tool clicks require a loaded dataset**: Sidebar tool buttons are disabled until `AppState.dataset` has `total_images > 0`.
 - **Nav rail auto-collapse**: Sidebar collapses/expands at 1100px window width threshold.

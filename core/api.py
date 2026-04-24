@@ -76,15 +76,41 @@ from .ingest import (
 from .ingest import RULES as INGEST_RULES
 
 # ---- Quality / dedup (§6.4) ----
-from .dedup import DuplicateGroup, find_duplicates
-from .quality import QualityIssue, QualityOptions, check_images
+from .dedup import DuplicateGroup, find_duplicates, find_duplicates_from_samples
+from .quality import QualityIssue, QualityOptions, check_annotations, check_images
 
 # ---- Split ----
 from .splitter import SplitOptions, SplitResult, split_dataset
 
-# ---- Annotation I/O ----
+# ---- Project ----
+from .project import WRITEBACK_FORMATS
+
+# ---- Annotation I/O (legacy per-file) ----
 from .annotation_formats import parse_annotation
 from .annotation_writer import write_annotation
+
+# ---- Unified annotation model + format hub ----
+from .unified import BBox, Region, Sample, SampleSet
+from .format_in import load_sample, load_samples, load_samples_from_split, load_vlm_jsonl
+from .format_out import (
+    ExportOptions as UnifiedExportOptions,
+    ExportResult as UnifiedExportResult,
+    available_formats as unified_formats,
+    export_samples,
+)
+from .format_convert import (
+    ConversionHint,
+    FieldSupport,
+    FormatInfo,
+    FORMATS as FORMAT_REGISTRY,
+    available_export_formats,
+    available_import_formats,
+    conversion_hints,
+    format_display_name,
+    writeback_formats,
+)
+from .format_rt import RoundTripResult, RTDiff, validate_roundtrip
+from .annotation_writer import label_path_for_format, write_annotation_as
 
 # ---- History / undo MVP ----
 from .history import (
@@ -121,6 +147,15 @@ def run_export(key: str, split, out_dir, copy_images: bool = True,
     return schema.writer(split, options, progress_cb=progress_cb)
 
 
+# ---- Workflow (production lifecycle) ----
+from .workflow import (
+    WorkflowState,
+    WorkflowSummary,
+    WorkItem,
+    WorkStatus,
+    sync_samples as sync_workflow_to_samples,
+)
+
 # ---- Pipeline (v1.2 §4.3 + §7, memory-level; YAML is v0.2) ----
 from .pipeline import (
     DedupStep,
@@ -152,8 +187,8 @@ __all__ = [
     "ByExifDateRule", "ByFilenamePrefixRule", "BySubdirRule", "ManualRule",
     "discover", "execute", "execute_with_checks", "preview",
     # Quality / dedup
-    "QualityIssue", "QualityOptions", "check_images",
-    "DuplicateGroup", "find_duplicates",
+    "QualityIssue", "QualityOptions", "check_annotations", "check_images",
+    "DuplicateGroup", "find_duplicates", "find_duplicates_from_samples",
     # Split
     "SplitOptions", "SplitResult", "split_dataset",
     # Annotation I/O
@@ -163,6 +198,20 @@ __all__ = [
     "find_last_undoable", "try_undo_last",
     # Export dispatcher
     "run_export",
+    # Unified model + format hub
+    "BBox", "Region", "Sample", "SampleSet",
+    "load_sample", "load_samples", "load_vlm_jsonl",
+    "UnifiedExportOptions", "UnifiedExportResult",
+    "export_samples", "unified_formats",
+    # Format center
+    "ConversionHint", "FieldSupport", "FormatInfo", "FORMAT_REGISTRY",
+    "available_export_formats", "available_import_formats",
+    "conversion_hints", "format_display_name", "writeback_formats",
+    "RoundTripResult", "RTDiff", "validate_roundtrip",
+    "label_path_for_format", "write_annotation_as",
+    # Workflow
+    "WorkflowState", "WorkflowSummary", "WorkItem", "WorkStatus",
+    "sync_workflow_to_samples",
     # Pipeline
     "Pipeline", "PipelineContext", "PipelineResult", "Step",
     "DedupStep", "ExportStep", "IngestStep",

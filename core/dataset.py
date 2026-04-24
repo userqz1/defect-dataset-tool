@@ -43,6 +43,7 @@ MAX_DEPTH = 4
 PROGRESS_CHUNK = 200  # 每扫描这么多张图就回调一次进度
 IGNORE_DIRS = {
     ".git", ".svn", ".hg",
+    "_inbox",
     "node_modules", "__pycache__", ".idea", ".vscode",
     "dist", "build", "venv", ".venv", "env",
 }
@@ -270,10 +271,10 @@ def _scan_categorical(
             img_root = cat_dir
             lbl_root = cat_dir
 
-        # Gate progress_cb behind a lock — callers may touch GUI state
-        # (the scan worker proxies to Qt signals, so thread-safety is
-        # handled there, but a lock still avoids interleaved ``name``
-        # updates flickering "cat-a cat-b cat-a" on the status line).
+        # Gate progress_cb behind a lock — callers running this on a
+        # worker thread are expected to provide their own thread-safe
+        # proxy, but a lock here still avoids interleaved ``name``
+        # updates flickering "cat-a cat-b cat-a" on the status line.
         def local_cb(done: int, total: int, name: str) -> None:
             if progress_cb is None:
                 return
