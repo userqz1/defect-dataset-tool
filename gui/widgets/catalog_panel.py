@@ -1,6 +1,8 @@
-"""Catalog panel — right-hand 340px column for class distribution + tree.
+"""Catalog panel — class distribution + tree, hosted in WorkspaceSidebar.
 
-Follows the design handoff's 4-region layout:
+IA v3 hosts this panel as a page in the WorkspaceSidebar's context
+column; it is NO longer a free-standing right-hand column. Layout
+follows the design handoff's 4-region pattern:
 
 - Header: serif "类别分布 · Class distribution" + uppercase sub "CATALOGUE · N · sum".
 - Distribution card (reuse gui.widgets.distribution_chart.DistributionChart):
@@ -10,9 +12,9 @@ Follows the design handoff's 4-region layout:
 - Class tree (reuse CategoryTree) — gets the existing rename / merge /
   split signals so all data-ops continue working.
 
-Lives outside BrowserView so the design's 3-column body layout
-(Tools | Viewer | Catalog) can be expressed naturally in
-DatasetBrowserView.
+Width is now controlled by the parent context column
+(:data:`gui.theme.Tokens.WORKSPACE_CONTEXT_WIDTH`), not by the panel
+itself.
 """
 from __future__ import annotations
 
@@ -42,7 +44,8 @@ class CatalogPanel(QFrame):
         super().__init__()
         self.setObjectName("catalogPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(340)
+        # Width is controlled by the parent context column
+        # (WorkspaceSidebar holds a fixed-width context page).
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -76,7 +79,7 @@ class CatalogPanel(QFrame):
 
         close_btn = ToolButton(FIF.CLOSE)
         close_btn.setFixedSize(22, 22)
-        close_btn.setToolTip("关闭类别面板(DatasetBar 切换按钮可重新打开)")
+        close_btn.setToolTip("收起上下文面板(DatasetBar 类别按钮可重新打开)")
         close_btn.clicked.connect(self.close_requested.emit)
         head_lay.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -136,11 +139,21 @@ class CatalogPanel(QFrame):
 
     # ---------- public API ----------
 
-    def set_dataset(self, ds: Dataset) -> None:
+    def set_dataset(
+        self,
+        ds: Dataset,
+        select_category: str | None = None,
+    ) -> None:
+        """Re-render distribution + tree.
+
+        ``select_category`` is forwarded to the tree so a rescan keeps
+        the user's previous selection visible (the controller looks up
+        the surviving category before calling this).
+        """
         self._dataset = ds
         self._distribution.set_dataset(ds)
         self._refresh_subtitle(ds)
-        self._resort(self._sort)
+        self._resort(self._sort, select_category=select_category)
         self._coco_hint.setVisible(ds.layout == "coco")
 
     def clear(self) -> None:
@@ -165,7 +178,11 @@ class CatalogPanel(QFrame):
         total = sum(c.image_count for c in ds.categories)
         self._subtitle.setText(f"{i18n.t('catalog.subtitle')} · {n_cls} · {total:,}")
 
-    def _resort(self, mode: str) -> None:
+    def _resort(
+        self,
+        mode: str,
+        select_category: str | None = None,
+    ) -> None:
         self._sort = mode
         if self._dataset is None:
             return
@@ -180,4 +197,4 @@ class CatalogPanel(QFrame):
         # Build a shallow-sorted copy (Dataset is dataclass w/ frozen=False).
         from dataclasses import replace
         sorted_ds = replace(self._dataset, categories=cats)
-        self._tree.load_dataset(sorted_ds)
+        self._tree.load_dataset(sorted_ds, select_category=select_category)

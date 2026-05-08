@@ -241,9 +241,21 @@ def sync_samples(
             # Existing tracked item — stamp status onto sample
             sample.work_status = wi.status.value
         elif auto_create:
-            # New image discovered by scan — assign initial status
+            # New image discovered by scan — assign initial status.
+            # An image counts as "pre-labeled" if it already has any
+            # annotation data the project might care about: traditional
+            # regions, image-level multi-label tags, OR LLM data
+            # (caption / conversations / grounding).  Looking only at
+            # ``sample.regions`` mis-classifies LLM-only annotated
+            # images as NEW and undercounts the pre-labeled bucket.
+            has_traditional = bool(sample.regions or sample.image_labels)
+            has_llm = bool(
+                (sample.caption or "").strip()
+                or sample.conversations
+                or sample.grounding
+            )
             initial = (
-                WorkStatus.PRELABELED if sample.regions
+                WorkStatus.PRELABELED if (has_traditional or has_llm)
                 else WorkStatus.NEW
             )
             new_item = WorkItem(

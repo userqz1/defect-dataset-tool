@@ -110,6 +110,34 @@ def remove_items(root: Path, item_ids: list[str]) -> WorkflowState:
     return state
 
 
+def reconcile(root: Path, valid_relative_paths: set[str]) -> int:
+    """Drop workflow items whose ``relative_path`` no longer exists.
+
+    Called after a fresh dataset scan finishes so stats derived from
+    workflow state (home launchpad cards, DatasetBar production strip,
+    ReviewHub summary) reflect actual disk state — without this,
+    deleting images via the workbench leaves orphan items pointing at
+    paths that are gone, and counts stay inflated.
+
+    Returns the number of items removed. ``0`` when the workflow file
+    is missing or every item is still valid; nothing is written in
+    that case.
+    """
+    with _LOCK:
+        state = load(root)
+        before = len(state.items)
+        if before == 0:
+            return 0
+        state.items = [
+            i for i in state.items
+            if i.relative_path in valid_relative_paths
+        ]
+        removed = before - len(state.items)
+        if removed:
+            _save_unlocked(root, state)
+        return removed
+
+
 def items_by_status(root: Path, status: WorkStatus) -> list[WorkItem]:
     """Return items matching a given status."""
     state = load(root)

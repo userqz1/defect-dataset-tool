@@ -44,8 +44,8 @@ No test suite exists yet. When added, use pytest.
 
 - **`gui/`** — PyQt6 + qfluentwidgets.
   - `main_window.py` — `FluentWindow` with Home (`DatasetWelcome`), Organize (`organize_view`), Browser (`DatasetBrowserView`), plus a Settings popup (`settings_view`).
-  - `views/` — `dataset_welcome.py` (recents + open/create), `organize_view.py` (ingest/organize helper), `dataset_browser_view.py` (outer shell: top bar + category catalog + browser + detail), `browser_view.py` (grid + filter chips + pagination), `detail_view.py` (single-image viewer + annotation editor), `settings_view.py` (floating popup).
-  - `widgets/` — Reusable components: `thumbnail_grid.py` (card grid + delegate), `image_viewer.py` (pan/zoom + shape overlay), `category_tree.py`, `catalog_panel.py`, `dataset_bar.py`, `distribution_chart.py`, `brand_title_bar.py`, `tool_sidebar.py`, `chips.py`, `preview_pane.py`.
+  - `views/` — `dataset_welcome.py` (recents + open/create), `organize_view.py` (ingest/organize helper), `dataset_browser_view.py` (outer shell: top bar + stage nav + 4-page stage stack + catalog), `browser_view.py` (grid + filter chips + pagination), `detail_view.py` (single-image viewer + annotation editor), `settings_view.py` (floating popup).
+  - `widgets/` — Reusable components: `thumbnail_grid.py` (card grid + delegate), `image_viewer.py` (pan/zoom + shape overlay), `category_tree.py`, `catalog_panel.py`, `dataset_bar.py` (top strip + global toolbar: refresh/undo), `distribution_chart.py`, `brand_title_bar.py`, `project_hub.py` (项目中心 stage body — capabilities + format + process + export + records), `review_hub.py` (审核 stage body — quality / dedup / stats), `stage_nav.py`, `chips.py`, `preview_pane.py`.
   - `workers/` — QThread wrappers: `BatchWorker` (generic `fn(progress_cb)` runner), `BatchRunner` (worker + progress dialog + result handler), `ScanWorker` (dataset scan), `ThumbnailWorker` (lazy thumbnails).
   - `dialogs/` — Parameter-collection + progress dialogs: `op_dialogs.py` (progress, failure detail, move-to-category), `tool_dialogs.py` (quality / stats / dedup config + results), `batch_ops.py`, `history_dialog.py`, `export_wizard.py`, `export_validation_dialog.py`, `category_dialogs.py`, `task_type_dialog.py` (task-type picker on first dataset open).
   - `theme.py` + `styles/app.qss` + `i18n.py` — Three-layer styling system + minimal i18n.
@@ -64,11 +64,13 @@ MainWindow (FluentWindow)
 ├── Organize (OrganizeView)
 │   └── File-ingest helper (copy/rename into the <root>/<cat>/ structure)
 ├── Browser (DatasetBrowserView)
-│   ├── DatasetBar (top strip: title, path, stat pills, open/analyse buttons)
-│   ├── ToolSidebar (analysis / process / output / other groups)
-│   ├── CatalogPanel (category tree + distribution chart)
-│   ├── BrowserView (grid + filter chips + pagination)  ← browser_stack idx 0
-│   └── DetailView (single-image viewer + annotation editor) ← browser_stack idx 1
+│   ├── DatasetBar (title, path, stat pills, refresh/undo, catalog toggle, open)
+│   ├── StageNav (收件箱 / 标注 / 审核 / 项目中心) + stage stack:
+│   │   ├── 收件箱 — BatchListPanel
+│   │   ├── 标注 — BrowserView ↔ DetailView (browser_stack)
+│   │   ├── 审核 — ReviewHub (quality / dedup / stats)
+│   │   └── 项目中心 — ProjectHub (capabilities / format / process / export / history)
+│   └── CatalogPanel (category tree + distribution chart; 标注-scoped)
 └── Settings (SettingsView popup)
     └── theme_changed → _on_theme_changed()
 ```
@@ -113,5 +115,5 @@ Signal wiring lives directly in `MainWindow.__init__()` and `DatasetBrowserView.
 - **Annotation schema drift**: Parser must be tolerant of malformed JSON and record failures.
 - **SSL/proxy on this machine**: Unset `HTTP_PROXY`/`HTTPS_PROXY` before pip/conda installs; use Tsinghua mirrors.
 - **Config is read-once**: `core/config.load()` is `@lru_cache(maxsize=1)`. Changes need app restart.
-- **Tool clicks require a loaded dataset**: Sidebar tool buttons are disabled until `AppState.dataset` has `total_images > 0`.
+- **Hub buttons require a loaded dataset**: ProjectHub + ReviewHub action buttons + DatasetBar refresh are gated off `AppState.dataset.total_images > 0`. Capability checkboxes on ProjectHub gate separately on `project is not None` — a project can be reconfigured before the scan lands.
 - **Nav rail auto-collapse**: Sidebar collapses/expands at 1100px window width threshold.

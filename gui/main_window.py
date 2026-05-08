@@ -1,8 +1,11 @@
 """Main window — dataset-browser-first layout.
 
-Navigation:
+Navigation (IA v2):
   TOP    — 首页 (DatasetWelcome)  |  浏览器 (DatasetBrowserView)
-  BOTTOM — 设置 (SettingsView)
+  BOTTOM — 设置 (SettingsView popup)
+
+OrganizeView is registered on the stack but NOT on the nav rail; it's
+reached from inside Browser's 收件箱 stage.
 
 AppState owns the shared Dataset/Project. All views react to its signals.
 """
@@ -11,6 +14,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QColor
 from qfluentwidgets import (
     FluentIcon as FIF,
@@ -106,31 +110,24 @@ class MainWindow(FluentWindow):
         self.setStyleSheet(load_qss())
 
         self.setWindowTitle("数据工坊")
-        # Screen-aware initial size — target 1360×820 but cap at 90% of the
-        # available screen so small laptops don't get a too-big window
-        # (or a window that overflows the taskbar). Minimum width 1080
-        # keeps the 3-column body (248 tools + 560 viewer + 272 catalog min)
-        # from horizontal-overflowing; users can close the catalog for
-        # narrower screens.
-        from PyQt6.QtGui import QGuiApplication
-        geom = QGuiApplication.primaryScreen().availableGeometry()
-        w = min(1360, int(geom.width() * 0.9))
-        h = min(820, int(geom.height() * 0.9))
-        self.resize(w, h)
+        # Geometry is finalized AFTER the first show so we know which
+        # screen the window actually landed on (primary vs. extended
+        # desktop) — sizing eagerly here would always pick primary and
+        # mis-place on multi-monitor setups.  Minimum width is set now
+        # so the layout solver has a floor to work against during
+        # construction.
         self.setMinimumSize(1080, 680)
-        # Center on the primary screen — without this, Qt leaves the window
-        # at whatever the window manager picked (usually top-left on Windows),
-        # which felt wrong on first launch.
-        self.move(
-            geom.x() + (geom.width() - w) // 2,
-            geom.y() + (geom.height() - h) // 2,
-        )
 
         # Shared state
         self._state = AppState(parent=self)
         # Title-bar breadcrumbs follow the active dataset.
         self._state.dataset_changed.connect(
             lambda ds: self._brand_bar.set_path(ds.root_path if ds else None)
+        )
+        # Click brand → return to launchpad. Discoverable single-click
+        # exit from any project, no matter how deep the user is.
+        self._brand_bar.home_clicked.connect(
+            lambda: self.switchTo(self.home)
         )
 
         try:
@@ -140,6 +137,11 @@ class MainWindow(FluentWindow):
             logger.debug("hide returnButton failed", exc_info=True)
 
         self._build_views()
+        # Nav-rail clicks set the stackedWidget directly, bypassing
+        # our overridden switchTo. Hooking currentChanged catches both
+        # paths so the home launchpad refreshes on re-entry whenever
+        # the user has mutated a dataset elsewhere.
+        self.stackedWidget.currentChanged.connect(self._on_stack_changed)
         self.switchTo(self.home)
 
         # Design §NavRail is a 60px icon-only rail — *never* auto-expand.
@@ -157,6 +159,49 @@ class MainWindow(FluentWindow):
         except Exception:
             logger.debug("nav rail lockdown failed", exc_info=True)
 
+        # Geometry: set on the first show so the chosen screen reflects
+        # where the window actually landed (multi-monitor setups would
+        # otherwise always pick primary).  Guarded against re-firing
+        # via _geometry_set.
+        self._geometry_set: bool = False
+
+    # ---------- Geometry ----------
+
+    def showEvent(self, event):  # type: ignore[override]
+        super().showEvent(event)
+        if not self._geometry_set:
+            self._geometry_set = True
+            # Defer one event-loop tick so QWindow.screen() reports the
+            # final landing screen rather than primary.
+            QTimer.singleShot(0, self._fit_and_center)
+
+    def _fit_and_center(self) -> None:
+        """Pick a sensible default size and center on the active screen.
+
+        Targets 82% × 82% of available screen, capped at 1500×920 so
+        ultra-wide displays don't render an unwieldy window.  Prefers
+        the screen the window currently lives on (multi-monitor); falls
+        back to primary.
+        """
+        from PyQt6.QtGui import QGuiApplication
+
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geom = screen.availableGeometry()
+        w = min(int(geom.width() * 0.82), 1500)
+        h = min(int(geom.height() * 0.82), 920)
+        # Floor at the minimum size so tiny screens still get a usable
+        # window — setMinimumSize already enforces this on resize but
+        # we want the post-center math to read the same numbers.
+        w = max(w, self.minimumWidth())
+        h = max(h, self.minimumHeight())
+        self.resize(w, h)
+        self.move(
+            geom.x() + (geom.width() - w) // 2,
+            geom.y() + (geom.height() - h) // 2,
+        )
+
     # ---------- Build ----------
 
     def _build_views(self) -> None:
@@ -169,19 +214,34 @@ class MainWindow(FluentWindow):
         self.home.open_dataset.connect(self._open_dataset)
         self.home.create_project.connect(self._create_project)
 
-        # Organize — batch import → classify → land (v1.2 §9.3)
+        # Organize — batch import → classify → land (v1.2 §9.3).
+        # IA v2: OrganizeView is internal-only — registered on the stack so
+        # `switchTo(self.organize)` still works for Inbox→import jumps, but
+        # NOT added as a nav rail item. The user-visible import entry point
+        # is the Browser's "收件箱" stage.
         from gui.controllers.workflow_controller import WorkflowController
         self._wf_ctrl = WorkflowController(self._state)
         self.organize = OrganizeView()
         self.organize.set_state(self._state, self._wf_ctrl)
         self.organize.import_done.connect(self._open_dataset)
+        self.stackedWidget.addWidget(self.organize)
 
         # Browser — top-level dataset browser
         self.browser = DatasetBrowserView(self._state)
+        # Inbox stage's "导入新批次" button jumps to OrganizeView; when a
+        # project is active, OrganizeView auto-targets project/_inbox/ so
+        # the import lands in the current project's inbox. OrganizeView's
+        # own import_done signal already bounces back into _open_dataset,
+        # which re-enters the browser on completion.
+        self.browser.request_organize_view.connect(
+            lambda: self.switchTo(self.organize))
 
         # Settings lives as a floating popup (design handoff §Tweaks) —
         # NOT a routable subInterface. It's parented to MainWindow so popup
-        # geometry + Qt.Popup click-outside handling work.
+        # geometry + Qt.Popup click-outside handling work. Settings only
+        # holds global preferences (theme / language / catalog / cache);
+        # project-scoped actions (format migration, capabilities, etc.)
+        # live in the Browser's 项目中心 stage.
         self.settings_view = SettingsView(self)
         self.settings_view.theme_changed.connect(self._on_theme_changed)
         # The catalog toggle from the popup drives the DatasetBrowserView's
@@ -190,18 +250,12 @@ class MainWindow(FluentWindow):
         self.settings_view.catalog_toggled.connect(
             lambda on: self.browser._set_catalog_open(on)
         )
-        # Project format change from settings → trigger migration in browser
-        self.settings_view.format_change_requested.connect(
-            self.browser._tools.dispatch_migrate_format
-        )
-        # Keep settings popup in sync with current project
-        self._state.project_changed.connect(self.settings_view.set_project)
 
-        # Nav — TOP (labels via gui.i18n.t — live-updated on language switch)
+        # Nav — TOP (labels via gui.i18n.t — live-updated on language switch).
+        # IA v2: only Home and Browser. Organize is reached from inside the
+        # Browser's 收件箱 stage; Settings is the bottom gear popup.
         from gui import i18n
         self.addSubInterface(self.home, FIF.HOME_FILL, i18n.t("nav.home"),
-                             position=NavigationItemPosition.TOP)
-        self.addSubInterface(self.organize, FIF.FOLDER_ADD, i18n.t("nav.organize"),
                              position=NavigationItemPosition.TOP)
         self.addSubInterface(self.browser, FIF.PHOTO, i18n.t("nav.browser"),
                              position=NavigationItemPosition.TOP)
@@ -223,8 +277,14 @@ class MainWindow(FluentWindow):
 
     # ---------- Dataset operations ----------
 
-    def _open_dataset(self, path_str: str) -> None:
-        """Open a dataset directory — show task type dialog if new."""
+    def _open_dataset(self, path_str: str, intent: str = "") -> None:
+        """Open a dataset directory — show task type dialog if new.
+
+        ``intent`` (P1.8): one of ``"inbox" / "annotate" / "review" /
+        "delivery" / "manage"`` — routes the post-open landing to the
+        matching workbench stage.  Empty string defaults to 标注工作台
+        (the conventional starting surface).
+        """
         root = Path(path_str)
         if not root.is_dir():
             InfoBar.warning("", "目录不存在", parent=self,
@@ -248,15 +308,44 @@ class MainWindow(FluentWindow):
         self._state.open_dataset(root, task_type)
         self.browser.open_directory(root)
         self.switchTo(self.browser)
+        self._apply_intent(intent)
 
     def _create_project(self, path_str: str, name: str,
-                        task_type: object) -> None:
-        """Create an empty project and switch to browser."""
+                        preset_id: str, task_type: object) -> None:
+        """Create an empty project and switch to browser.
+
+        New projects always land on 新数据 — there's no data yet, so
+        the conventional default (标注工作台) would show an empty grid
+        and confuse the user.  Inbox is where they need to be.
+        """
         root = Path(path_str)
-        self._state.open_project(root, name, task_type)  # type: ignore[arg-type]
+        self._state.open_project(  # type: ignore[arg-type]
+            root, name, task_type, preset_id=preset_id)
         self.browser.open_directory(root)
         self.switchTo(self.browser)
+        self._apply_intent("inbox")
         self.home.refresh()
+
+    def _apply_intent(self, intent: str) -> None:
+        """Map a welcome-page intent string → workbench stage swap.
+
+        Empty intent / unknown intent → keep the workbench's own default
+        landing (which since IA v2 phase 1 is the OVERVIEW stage).
+        """
+        if not intent:
+            return
+        from gui.widgets.workspace_sidebar import StageIndex
+        intent_to_stage = {
+            "overview": StageIndex.OVERVIEW,
+            "inbox":    StageIndex.INBOX,
+            "process":  StageIndex.PROCESS,
+            "annotate": StageIndex.ANNOTATE,
+            "review":   StageIndex.REVIEW,
+            "delivery": StageIndex.DELIVERY,
+        }
+        stage = intent_to_stage.get(intent)
+        if stage is not None:
+            self.browser.set_active_stage(stage)
 
     # ---------- i18n ----------
 
@@ -271,7 +360,6 @@ class MainWindow(FluentWindow):
         panel = self.navigationInterface.panel
         mapping = {
             self.home.objectName(): i18n.t("nav.home"),
-            self.organize.objectName(): i18n.t("nav.organize"),
             self.browser.objectName(): i18n.t("nav.browser"),
             "settings-trigger": i18n.t("nav.settings"),
         }
@@ -305,9 +393,30 @@ class MainWindow(FluentWindow):
     # ---------- Navigation ----------
 
     def switchTo(self, interface):
-        if interface is self.home:
-            self.home.refresh()
+        # Refresh logic lives on the stackedWidget hook below so nav-rail
+        # clicks (which bypass this override) get the same treatment.
         super().switchTo(interface)
+
+    def _on_stack_changed(self, index: int) -> None:
+        """Refresh the home page whenever it becomes the visible interface.
+
+        The nav rail's "首页" click routes through ``stackedWidget``
+        directly, bypassing our overridden :meth:`switchTo`. Hooking
+        ``currentChanged`` catches every path — programmatic
+        ``switchTo`` plus user clicks on the rail — so deletions /
+        adds in the workbench show up the next time the user lands
+        on the home launchpad without any manual refresh.
+
+        Refresh is cheap: reads ``recent.json`` + each project's
+        ``.dataforge/*.json``; firing it on every interface swap is
+        fine.
+        """
+        try:
+            if self.stackedWidget.widget(index) is self.home:
+                self.home.refresh()
+        except Exception:
+            logger.debug("home refresh on stack-change failed",
+                          exc_info=True)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

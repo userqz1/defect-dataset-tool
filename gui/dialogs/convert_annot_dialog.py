@@ -80,8 +80,9 @@ class ConvertAnnotDialog(MessageBoxBase):
         self._out_label = CaptionLabel("未选择", self)
         self._out_label.setWordWrap(True)
         path_row.addWidget(self._out_label, 1)
+        # CLAUDE.md gotcha: no setFixedWidth on text-bearing buttons
+        # — let the button shrink-wrap its label.
         pick_btn = PushButton("选择", self)
-        pick_btn.setFixedWidth(80)
         pick_btn.clicked.connect(self._pick_output)
         path_row.addWidget(pick_btn)
         self.viewLayout.addLayout(path_row)

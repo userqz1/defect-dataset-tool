@@ -43,6 +43,9 @@ class Tokens:
     ACCENT_SOFT: str
     SUCCESS: str
     WARNING: str
+    # Tinted background for "modifies project" / "danger" badges that
+    # need to read warm without screaming. Defined per theme below.
+    WARNING_SOFT: str = "#fbe9c8"
     ERROR: str = "#c0392b"
     # Text/glyph color that reads against ACCENT (e.g. brand chip "D",
     # button-on-accent labels). Override per theme if ACCENT shifts hue.
@@ -101,6 +104,18 @@ class Tokens:
     # ---- Sizes ----
     SIDEBAR_WIDTH: int = 240
     DETAIL_SIDEBAR_WIDTH: int = 280
+    # Workspace sidebar (vertical stage nav) inside the workbench shell.
+    # Slim list-style nav — narrow enough to keep visual weight on the
+    # left modest, wide enough that the longest localized stage label
+    # ("Annotation Workbench") fits without truncation. Row height
+    # tracks Fluent's standard touch-target.
+    WORKSPACE_SIDEBAR_WIDTH: int = 180
+    WORKSPACE_SIDEBAR_PILL_HEIGHT: int = 36
+    # Right-side context panel — hosts the catalog (in 标注工作台 grid
+    # mode) and the future per-image Inspector.  Width matches the
+    # legacy CatalogPanel column so its class tree + distribution
+    # chart layout doesn't shift.
+    CONTEXT_PANEL_WIDTH: int = 340
     THUMB_SIZE: int = 170
     # Card dimensions for the thumbnail grid (delegate uses these to
     # paint; grid uses them for the layout pitch). Values match the
@@ -133,6 +148,7 @@ LIGHT = Tokens(
     ACCENT_SOFT="#f4e8e2",
     SUCCESS="#5a7a3c",
     WARNING="#ce8a2c",
+    WARNING_SOFT="#fbeac8",
     ERROR="#b5453c",
     ON_ACCENT="#ffffff",
     POPUP_SHADOW="#3c28143c",  # warm brown @ 24% alpha — ivory-friendly
@@ -164,6 +180,7 @@ DARK = Tokens(
     ACCENT_SOFT="#3d2a22",
     SUCCESS="#7a9a4c",
     WARNING="#e0a84a",
+    WARNING_SOFT="#3d2e1f",
     ERROR="#d26a60",
     ON_ACCENT="#ffffff",
     POPUP_SHADOW="#00000080",

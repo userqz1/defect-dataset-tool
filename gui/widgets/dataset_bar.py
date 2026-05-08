@@ -23,7 +23,6 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
-    PrimaryPushButton,
     ToolButton,
 )
 
@@ -137,6 +136,11 @@ class DatasetBar(QFrame):
 
     open_clicked = pyqtSignal()
     catalog_toggled = pyqtSignal(bool)
+    # Global actions — live here after the tool_sidebar retirement.  The
+    # controller runs the operation (``refresh`` → session rescan;
+    # ``undo`` → ``core.history.try_undo_last`` + rescan).
+    refresh_clicked = pyqtSignal()
+    undo_clicked = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -216,18 +220,34 @@ class DatasetBar(QFrame):
 
         lay.addWidget(strip)
 
-        # --- Right: catalog toggle + primary open button ---
+        # --- Right: global actions + catalog toggle + primary open ---
+        # Refresh + Undo are the two "global" actions that used to live
+        # at the top of the tool_sidebar.  They stay alongside the
+        # catalog toggle / open button so the user has exactly one
+        # place to look for toolbar-level commands.
+        self._refresh_btn = ToolButton(FIF.SYNC)
+        self._refresh_btn.setToolTip(i18n.t("tools.refresh"))
+        self._refresh_btn.setEnabled(False)
+        self._refresh_btn.clicked.connect(self.refresh_clicked.emit)
+        lay.addWidget(self._refresh_btn)
+
+        self._undo_btn = ToolButton(FIF.RETURN)
+        self._undo_btn.setToolTip(i18n.t("tools.undo"))
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self.undo_clicked.emit)
+        lay.addWidget(self._undo_btn)
+
         self._catalog_btn = ToolButton(FIF.PIE_SINGLE)
         self._catalog_btn.setCheckable(True)
         self._catalog_btn.setChecked(True)
         self._catalog_btn.toggled.connect(self.catalog_toggled.emit)
         lay.addWidget(self._catalog_btn)
 
-        self._open_btn = PrimaryPushButton(i18n.t("ds.open_dir"))
-        self._open_btn.setIcon(FIF.FOLDER)
-        # Width expands to fit "Open dataset" (EN) without truncation; zh
-        # "选择目录" is narrower and just gets extra padding, which is fine.
-        self._open_btn.setMinimumWidth(140)
+        # "Open another dataset" is a secondary in-workbench action —
+        # the primary entry lives on the home page.  Render as a small
+        # tool button (icon-only) instead of the v3 PrimaryPushButton.
+        self._open_btn = ToolButton(FIF.FOLDER)
+        self._open_btn.setToolTip(i18n.t("ds.open_dir"))
         self._open_btn.clicked.connect(self.open_clicked.emit)
         lay.addWidget(self._open_btn)
 
@@ -242,13 +262,43 @@ class DatasetBar(QFrame):
                       self._stat_ratio, self._stat_flagged,
                       self._stat_pending, self._stat_review, self._stat_ready):
             cell.retranslate()
-        self._open_btn.setText(i18n.t("ds.open_dir"))
+        self._open_btn.setToolTip(i18n.t("ds.open_dir"))
         self._loading_label.setText(i18n.t("ds.loading"))
+        self._refresh_btn.setToolTip(i18n.t("tools.refresh"))
+        # Undo tooltip mixes a translated prefix with a mutable summary
+        # (``撤销: <op>`` / ``没有可撤销的操作``) owned by
+        # ``set_undo_tooltip``; retranslate only resets the "no-undo"
+        # fallback when that's currently shown.
+        if not self._undo_btn.isEnabled():
+            self._undo_btn.setToolTip(i18n.t("tools.undo.none"))
+        else:
+            # Preserve the per-entry summary the controller pushed;
+            # only the "撤销:" prefix would change across languages,
+            # which is negligible against the summary visibility win.
+            pass
 
     # ---------- public setters ----------
 
     def set_open_enabled(self, enabled: bool) -> None:
         self._open_btn.setEnabled(enabled)
+
+    def set_refresh_enabled(self, enabled: bool) -> None:
+        """Gate the refresh button on "dataset loaded"."""
+        self._refresh_btn.setEnabled(enabled)
+
+    def set_undo_enabled(self, enabled: bool) -> None:
+        """Gate the undo button on "history has an undoable op".
+
+        When disabled, the tooltip resets to the "no undoable op" fallback
+        so the user isn't left staring at a stale ``撤销: <op>`` label.
+        """
+        self._undo_btn.setEnabled(enabled)
+        if not enabled:
+            self._undo_btn.setToolTip(i18n.t("tools.undo.none"))
+
+    def set_undo_tooltip(self, text: str) -> None:
+        """Push a per-entry undo summary (``撤销: <op>``) from the controller."""
+        self._undo_btn.setToolTip(text)
 
     def clear(self) -> None:
         self._name_label.setText(i18n.t("ds.empty"))
@@ -268,6 +318,12 @@ class DatasetBar(QFrame):
         root = ds.root_path
         self._name_label.setText(root.name if root else ds.name or "数据集")
         self._path_label.setText(self._fmt_path(root))
+        # Full path lives in the tooltip — the displayed path is
+        # aggressively elided to keep the bar narrow.
+        if root is not None:
+            self._path_label.setToolTip(str(root))
+        else:
+            self._path_label.setToolTip("")
 
         self._stat_images.set_value(f"{ds.total_images:,}")
         self._stat_classes.set_value(str(len(ds.categories)))
@@ -345,6 +401,15 @@ class DatasetBar(QFrame):
         self._catalog_btn.setChecked(open_)
         self._catalog_btn.blockSignals(False)
 
+    def set_catalog_btn_visible(self, visible: bool) -> None:
+        """Show/hide the catalog toggle button.
+
+        Catalog only exists on the 标注工作台 stage; on every other
+        stage the context panel is force-hidden, so showing this button
+        anyway would let the user click a control with no visible effect.
+        """
+        self._catalog_btn.setVisible(bool(visible))
+
     def set_annotation_format(self, fmt: str) -> None:
         """Show the project's active annotation format as a badge."""
         if fmt:
@@ -376,8 +441,9 @@ class DatasetBar(QFrame):
         if p is None:
             return ""
         text = str(p)
-        # Keep path compact so the header fits narrower windows without
-        # overflow. Middle-elide once past ~46 chars.
-        if len(text) > 46:
-            return text[:16] + "…" + text[-28:]
+        # Aggressive elision — DatasetBar shares its row with stats and
+        # global toolbar buttons; long paths used to push them off-
+        # screen. Full path is in the tooltip (see set_dataset).
+        if len(text) > 32:
+            return text[:10] + "…" + text[-20:]
         return text

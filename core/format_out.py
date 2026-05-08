@@ -42,6 +42,14 @@ class ExportResult:
     written_images: int = 0
     written_labels: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    # LLM grounding bookkeeping (LLaVA / ShareGPT / Swift only).
+    # ``grounding_fallback_count`` — regions without ``r.text`` that fell
+    # back to the class-template caption "该区域为 {label} 缺陷。".
+    # ``grounding_dropped_no_bbox`` — regions with text but no derivable
+    # bbox (no polygon / keypoints either) — silently dropped to keep
+    # downstream training data clean.
+    grounding_fallback_count: int = 0
+    grounding_dropped_no_bbox: int = 0
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -139,18 +147,107 @@ def _sample_conversations(sample: Sample, question: str) -> list[dict]:
     ]
 
 
-def _sample_grounding(sample: Sample) -> list[dict]:
-    """Extract grounding entries from regions that have text."""
-    entries = []
+def _sample_grounding(
+    sample: Sample, report: ExportResult | None = None,
+) -> list[dict]:
+    """Extract LLM grounding entries from a sample's regions.
+
+    Returns one dict per region:
+        {"label": str, "text": str, "bbox": [x1, y1, x2, y2]  (int)}
+
+    Behavior (matches the export-pipeline contract documented in
+    ``CLAUDE.md`` §"Adding a new processing operation"):
+
+    1. Bbox is required.  If the region only has a polygon /
+       keypoints, ``Region.ensure_bbox`` derives the axis-aligned
+       outer box.  If neither is available, the region is dropped
+       and ``report.grounding_dropped_no_bbox`` is incremented (only
+       when ``r.text`` was authored — silently dropping unlabeled
+       regions would distort the count).
+    2. Text fallback: when ``r.text`` is empty, fill with the class
+       template ``该区域为 {label} 缺陷。`` so the assistant message
+       still anchors the bbox to a referring expression, and bump
+       ``report.grounding_fallback_count`` so the export dialog can
+       surface "N 个区域使用了类别模板".
+    3. Bbox coords are clamped to ints (xyxy pixel) — VLM grounding
+       is usually trained against integer pixel coords; floats add
+       noise without precision benefit.
+    """
+    entries: list[dict] = []
     for r in sample.regions:
-        if not r.text:
-            continue
         bb = r.ensure_bbox()
-        entry: dict = {"label": r.label, "text": r.text}
-        if bb is not None:
-            entry["bbox"] = [bb.x1, bb.y1, bb.x2, bb.y2]
-        entries.append(entry)
+        if bb is None:
+            if r.text and report is not None:
+                report.grounding_dropped_no_bbox += 1
+            continue
+        text = r.text
+        if not text:
+            text = f"该区域为 {r.label} 缺陷。"
+            if report is not None:
+                report.grounding_fallback_count += 1
+        entries.append({
+            "label": r.label,
+            "text": text,
+            "bbox": [int(round(bb.x1)), int(round(bb.y1)),
+                     int(round(bb.x2)), int(round(bb.y2))],
+        })
     return entries
+
+
+def _grounding_answer(entries: list[dict]) -> str:
+    """Compose a Chinese assistant answer that embeds bbox + text.
+
+    One sentence per entry — keeps the structure greppable by training
+    pipelines that need to extract bbox spans (e.g. Qwen-VL post-
+    processing).  Format::
+
+        "图中 {label} 位于 [x1, y1, x2, y2] 区域。{text}"
+    """
+    parts: list[str] = []
+    for e in entries:
+        bb = e["bbox"]
+        bbox_str = f"[{bb[0]}, {bb[1]}, {bb[2]}, {bb[3]}]"
+        parts.append(f"图中 {e['label']} 位于 {bbox_str} 区域。{e['text']}")
+    return " ".join(parts)
+
+
+def _grounding_objects(entries: list[dict]) -> dict:
+    """Return ms-swift / Qwen-VL-style ``objects`` block."""
+    return {
+        "ref": [e["label"] for e in entries],
+        "bbox": [e["bbox"] for e in entries],
+    }
+
+
+def _to_openai_messages(convos: list[dict]) -> list[dict]:
+    """Map ShareGPT-style ``{from, value}`` turns to OpenAI / ms-swift
+    ``{role, content}`` turns.  Unknown ``from`` values pass through
+    unchanged so the writer stays format-agnostic."""
+    role_map = {"human": "user", "gpt": "assistant"}
+    return [{"role": role_map.get(t.get("from", ""), t.get("from", "user")),
+             "content": t.get("value", "")}
+            for t in convos]
+
+
+def _sample_conversations_grounded(
+    sample: Sample, question: str, grounding: list[dict],
+) -> list[dict]:
+    """ShareGPT-shape conversations that embed grounding into the
+    assistant turn when ``grounding`` is non-empty.  Falls back to
+    ``_sample_conversations`` (caption / auto-answer) otherwise.
+
+    User-authored ``sample.conversations`` always win — we don't
+    overwrite hand-written multi-turn data even if grounding is
+    available, because the user's intent is explicit.
+    """
+    if sample.conversations:
+        return sample.conversations
+    if grounding:
+        return [
+            {"from": "human", "value": f"<image>\n{question}"},
+            {"from": "gpt", "value": _grounding_answer(grounding)},
+        ]
+    return _sample_conversations(sample, question)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -620,13 +717,17 @@ def _write_llava(ss: SampleSet, opts: ExportOptions,
                     rel = f"images/{split}/{sample.image_path.name}"
                 else:
                     rel = str(sample.image_path)
-                convos = _sample_conversations(sample, opts.question)
+                gnd = _sample_grounding(sample, report)
+                convos = _sample_conversations_grounded(
+                    sample, opts.question, gnd)
                 rec: dict = {
                     "id": f"{split}_{i:06d}",
                     "image": rel,
                     "conversations": convos,
                 }
-                gnd = _sample_grounding(sample)
+                # Side-channel ``grounding`` field stays — pipelines that
+                # parse the assistant text can ignore it; pipelines that
+                # train on structured grounding can read it directly.
                 if gnd:
                     rec["grounding"] = gnd
                 lines.append(json.dumps(rec, ensure_ascii=False))
@@ -665,13 +766,19 @@ def _write_sharegpt(ss: SampleSet, opts: ExportOptions,
                     rel = f"images/{split}/{sample.image_path.name}"
                 else:
                     rel = str(sample.image_path)
-                convos = _sample_conversations(sample, opts.question)
+                gnd = _sample_grounding(sample, report)
+                convos = _sample_conversations_grounded(
+                    sample, opts.question, gnd)
                 rec: dict = {
                     "conversations": convos,
                     "images": [rel],
                 }
-                gnd = _sample_grounding(sample)
                 if gnd:
+                    # ``objects`` block is the LLaMA-Factory / ms-swift
+                    # convention for structured grounding; ``grounding``
+                    # mirrors the rich entries (label + text + bbox) for
+                    # pipelines that need the per-region caption too.
+                    rec["objects"] = _grounding_objects(gnd)
                     rec["grounding"] = gnd
                 records.append(rec)
                 report.written_labels += 1
@@ -702,6 +809,23 @@ def _write_sharegpt(ss: SampleSet, opts: ExportOptions,
 
 def _write_swift(ss: SampleSet, opts: ExportOptions,
                  progress_cb) -> ExportResult:
+    """ms-swift / Qwen-VL JSONL writer.
+
+    Output schema per line (one sample per line):
+
+        {
+          "messages": [{"role": "user", "content": "<image>..."},
+                       {"role": "assistant", "content": "..."}],
+          "images":   ["images/train/foo.jpg"],
+          "objects":  {"ref": ["Loose"], "bbox": [[120, 86, 240, 180]]}
+        }
+
+    ``objects`` is only emitted for samples with at least one grounding
+    region (text or fallback) and a derivable bbox.  When grounding is
+    present, the assistant message embeds the bbox in natural language
+    (via ``_grounding_answer``) so models trained on the text channel
+    learn the localization too.
+    """
     out = opts.out_dir
     report = ExportResult()
     all_splits = list(_iter_splits(ss))
@@ -721,11 +845,15 @@ def _write_swift(ss: SampleSet, opts: ExportOptions,
                     rel = f"images/{split}/{sample.image_path.name}"
                 else:
                     rel = str(sample.image_path)
-                rec = {
-                    "query": f"<image>{opts.question}",
-                    "response": _sample_answer(sample),
+                gnd = _sample_grounding(sample, report)
+                convos = _sample_conversations_grounded(
+                    sample, opts.question, gnd)
+                rec: dict = {
+                    "messages": _to_openai_messages(convos),
                     "images": [rel],
                 }
+                if gnd:
+                    rec["objects"] = _grounding_objects(gnd)
                 lines.append(json.dumps(rec, ensure_ascii=False))
                 report.written_labels += 1
             except Exception as e:

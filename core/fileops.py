@@ -86,7 +86,7 @@ def _update_image_path_in_json(json_path: Path, new_image_name: str) -> None:
 
 def delete_pairs(images: list[ImageInfo], to_trash: bool = True,
                   progress_cb=None) -> OpResult:
-    """Delete image + corresponding label JSON. Defaults to Recycle Bin."""
+    """Delete image + corresponding label JSON. Defaults to OS Recycle Bin."""
     result = OpResult()
     total = len(images)
     for i, img in enumerate(images):

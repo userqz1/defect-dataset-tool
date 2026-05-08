@@ -27,10 +27,15 @@ WRITEBACK_FORMATS: tuple[str, ...] = ("labelme", "yolo", "voc")
 
 @dataclass
 class BrowseState:
+    """Persisted browse-page state — what the user was last looking at.
+
+    Pagination retired in v3.4 (infinite-scroll); legacy ``page`` keys
+    on disk are silently ignored on load and not written back.
+    """
+
     category: str = ""
-    filter: str = "all"      # all / labeled / unlabeled
+    filter: str = "all"      # all / labeled / unlabeled / issues / dups / wf_*
     search: str = ""
-    page: int = 0
 
 
 @dataclass
@@ -70,6 +75,22 @@ class Project:
     notes: str = ""
     class_names: list[str] = field(default_factory=list)
     annotation_format: str = "labelme"      # must be one of WRITEBACK_FORMATS
+    # --- Annotation preset (single source of truth for task + VLM caps) ---
+    # Picked at project creation; deterministically sets ``task_type`` +
+    # the three ``enable_*`` capability flags below via the table in
+    # :mod:`core.annotation_preset`.  ``"custom"`` (or empty) means the
+    # user opted out of presets and is configuring caps manually.
+    preset_id: str = ""
+    # --- Optional capability flags (derived from preset for non-custom) ---
+    # These add on top of the base ``task_type`` template.  A detection
+    # project with ``enable_grounding=True`` shows the per-shape region-
+    # text editor; with ``enable_caption=True`` / ``enable_conversations
+    # =True`` it also grows a VLM segment in DetailView.  A
+    # classification project can opt into VLM the same way.  All default
+    # to False — legacy projects behave exactly as before.
+    enable_caption: bool = False
+    enable_conversations: bool = False
+    enable_grounding: bool = False
     browse_state: BrowseState = field(default_factory=BrowseState)
     split_state: SplitState = field(default_factory=SplitState)
     export_config: ExportConfig = field(default_factory=ExportConfig)
@@ -118,6 +139,17 @@ def load_project(root: Path) -> Project | None:
     if ann_fmt not in WRITEBACK_FORMATS:
         ann_fmt = "labelme"
 
+    enable_caption = bool(raw.get("enable_caption", False))
+    enable_conversations = bool(raw.get("enable_conversations", False))
+    enable_grounding = bool(raw.get("enable_grounding", False))
+
+    preset_id = raw.get("preset_id", "")
+    if not preset_id:
+        from .annotation_preset import detect_preset_id
+        preset_id = detect_preset_id(
+            task_type, enable_caption, enable_conversations, enable_grounding,
+        )
+
     return Project(
         root_path=root,
         name=raw.get("name", root.name),
@@ -128,11 +160,18 @@ def load_project(root: Path) -> Project | None:
         notes=raw.get("notes", ""),
         class_names=raw.get("class_names", []),
         annotation_format=ann_fmt,
+        preset_id=preset_id,
+        # Capability flags — default off for legacy projects that were
+        # saved before these fields existed.
+        enable_caption=enable_caption,
+        enable_conversations=enable_conversations,
+        enable_grounding=enable_grounding,
         browse_state=BrowseState(
             category=bs.get("category", ""),
             filter=bs.get("filter", "all"),
             search=bs.get("search", ""),
-            page=bs.get("page", 0),
+            # legacy "page" key on disk is silently dropped — pagination
+            # retired in v3.4 in favor of infinite-scroll.
         ),
         split_state=SplitState(
             mode=ss.get("mode", "ratio"),
@@ -172,6 +211,10 @@ def save_project(project: Project) -> None:
         "notes": project.notes,
         "class_names": project.class_names,
         "annotation_format": project.annotation_format,
+        "preset_id": project.preset_id,
+        "enable_caption": project.enable_caption,
+        "enable_conversations": project.enable_conversations,
+        "enable_grounding": project.enable_grounding,
         "browse_state": asdict(project.browse_state),
         "split_state": asdict(project.split_state),
         "export_config": asdict(project.export_config),
@@ -184,12 +227,35 @@ def save_project(project: Project) -> None:
 
 
 def create_project(root: Path, name: str | None = None,
-                    task_type: TaskType = TaskType.DETECTION) -> Project:
-    """Create a new project for a dataset directory."""
+                    task_type: TaskType = TaskType.DETECTION,
+                    preset_id: str = "") -> Project:
+    """Create a new project for a dataset directory.
+
+    When ``preset_id`` matches an entry in :mod:`core.annotation_preset`,
+    its task_type + caps override the explicit ``task_type`` arg — picking
+    a preset is the user's way of saying "I want this exact recipe", so
+    we don't second-guess it from a stale arg.  An unknown id (including
+    ``"custom"``) leaves the project on the explicit ``task_type`` with
+    all caps off.
+    """
+    from .annotation_preset import preset_by_id
+
+    caption = conversations = grounding = False
+    preset = preset_by_id(preset_id)
+    if preset is not None:
+        task_type = preset.task_type
+        caption = preset.caption
+        conversations = preset.conversations
+        grounding = preset.grounding
+
     project = Project(
         root_path=root,
         name=name or root.name,
         task_type=task_type,
+        preset_id=preset_id,
+        enable_caption=caption,
+        enable_conversations=conversations,
+        enable_grounding=grounding,
         created_at=_now_iso(),
         updated_at=_now_iso(),
     )
@@ -197,18 +263,54 @@ def create_project(root: Path, name: str | None = None,
     return project
 
 
+def apply_preset(project: Project, preset_id: str) -> bool:
+    """Re-apply ``preset_id`` to *project*; return True when caps changed.
+
+    Used by the 更改预设 dialog to flip an existing project to a new
+    recipe.  ``preset_id == "custom"`` (or empty) is a no-op on the caps
+    — the user is opting *out* of preset-driven caps and intends to
+    toggle the three checkboxes manually, so we leave the current caps
+    intact and just flag the project as ``preset_id="custom"``.
+    """
+    from .annotation_preset import CUSTOM_ID, preset_by_id
+
+    project.preset_id = preset_id
+    preset = preset_by_id(preset_id)
+    if preset is None or preset_id == CUSTOM_ID:
+        return False
+    changed = (project.task_type != preset.task_type
+               or project.enable_caption != preset.caption
+               or project.enable_conversations != preset.conversations
+               or project.enable_grounding != preset.grounding)
+    project.task_type = preset.task_type
+    project.enable_caption = preset.caption
+    project.enable_conversations = preset.conversations
+    project.enable_grounding = preset.grounding
+    return changed
+
+
 @dataclass
 class ProjectSummary:
-    """Lightweight info for the welcome page project list."""
+    """Lightweight info for the welcome page project list.
+
+    Reads JSON files only — no full filesystem scan — so the page can
+    refresh quickly even with many recents.
+    """
     root_path: Path
     name: str
     updated_at: str
-    exists: bool  # whether the directory still exists
-    # Workflow stats (optional — populated when workflow.json exists)
+    exists: bool                       # directory still exists
+    has_project: bool = False          # .dataforge/project.json present
+    # Project metadata (populated when has_project is True)
+    task_type: TaskType | None = None
+    annotation_format: str = ""
+    class_count: int = 0
+    # Workflow stats (populated when workflow.json exists; otherwise 0)
     wf_total: int = 0
     wf_ready: int = 0
     wf_review: int = 0
     wf_new: int = 0
+    wf_in_progress: int = 0            # annotating + others mid-pipeline
 
 
 def list_known_projects() -> list[ProjectSummary]:
@@ -226,23 +328,35 @@ def list_known_projects() -> list[ProjectSummary]:
         proj = load_project(root)
         # Quick workflow summary (reads JSON, no scan)
         ws = workflow_store.summarize(root)
+        wf_in_progress = max(0, ws.total - (
+            (ws.ready + ws.exported)
+            + (ws.review_pending + ws.needs_fix)
+            + (ws.new + ws.prelabeled)
+        ))
         if proj:
             summaries.append(ProjectSummary(
                 root_path=root,
                 name=proj.name,
                 updated_at=proj.updated_at,
                 exists=True,
+                has_project=True,
+                task_type=proj.task_type,
+                annotation_format=proj.annotation_format,
+                class_count=len(proj.class_names),
                 wf_total=ws.total,
                 wf_ready=ws.ready + ws.exported,
                 wf_review=ws.review_pending + ws.needs_fix,
                 wf_new=ws.new + ws.prelabeled,
+                wf_in_progress=wf_in_progress,
             ))
         else:
             summaries.append(ProjectSummary(
                 root_path=root, name=root.name, updated_at="", exists=True,
+                has_project=False,
                 wf_total=ws.total,
                 wf_ready=ws.ready + ws.exported,
                 wf_review=ws.review_pending + ws.needs_fix,
                 wf_new=ws.new + ws.prelabeled,
+                wf_in_progress=wf_in_progress,
             ))
     return summaries

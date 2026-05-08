@@ -23,6 +23,20 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
 )
 
+# Geometry of the always-visible top-right checkbox. Shared by the
+# delegate (paint) and the grid (hit-test) so the visual and the
+# clickable area can never drift apart.
+_CHECKBOX_SIZE = 22
+_CHECKBOX_RADIUS = 6
+
+
+def _checkbox_rect_for(card_rect: QRect, pad: int) -> QRect:
+    """Return the checkbox rect inside *card_rect* (top-right corner)."""
+    border_w = 1
+    sx = card_rect.right() - _CHECKBOX_SIZE - pad - border_w
+    sy = card_rect.top() + pad + border_w
+    return QRect(sx, sy, _CHECKBOX_SIZE, _CHECKBOX_SIZE)
+
 from core.models import ImageInfo
 from gui.theme import T
 from gui.widgets.category_tree import _color_for  # reuse earthen palette
@@ -169,18 +183,31 @@ class _ThumbDelegate(QStyledItemDelegate):
         if img.has_label:
             draw_badge("已标", QColor(T.BADGE_GHOST_BG), QColor(T.BADGE_FG_LIGHT))
 
-        # ---- Corner-select box top-right (only when selected) ----
+        # ---- Corner-select box top-right (always visible) ----
+        # Always rendered so the user can build a multi-selection
+        # without first toggling a separate "multi" mode — clicking
+        # the box adds/removes that one card from the selection (the
+        # grid's mousePressEvent treats the box region specially).
+        cb = _checkbox_rect_for(card, self.PAD)
         if is_selected:
-            sel_size = 20
-            sx = thumb_rect.right() - sel_size - self.PAD
-            sy = thumb_rect.y() + self.PAD
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(T.ACCENT))
-            painter.drawRoundedRect(sx, sy, sel_size, sel_size, 6, 6)
-            # ✓ mark — on-accent foreground so it tracks theme
+            painter.drawRoundedRect(cb, _CHECKBOX_RADIUS, _CHECKBOX_RADIUS)
             painter.setPen(QPen(QColor(T.ON_ACCENT), 2))
-            painter.drawLine(sx + 5, sy + 10, sx + 9, sy + 14)
-            painter.drawLine(sx + 9, sy + 14, sx + 15, sy + 7)
+            painter.drawLine(cb.x() + 6, cb.y() + 11,
+                             cb.x() + 10, cb.y() + 16)
+            painter.drawLine(cb.x() + 10, cb.y() + 16,
+                             cb.x() + 17, cb.y() + 7)
+        else:
+            # Hollow checkbox over the image — translucent dark fill +
+            # light hairline border so the affordance reads against
+            # both bright and dark photos. Tokens used here are the
+            # same "ghost badge" pair we use for DUP / 已标 chips.
+            ghost_bg = QColor(T.BADGE_GHOST_BG)
+            ghost_fg = QColor(T.BADGE_FG_LIGHT)
+            painter.setPen(QPen(ghost_fg, 1.4))
+            painter.setBrush(ghost_bg)
+            painter.drawRoundedRect(cb, _CHECKBOX_RADIUS, _CHECKBOX_RADIUS)
 
         # ---- Meta area ----
         meta_top = card.y() + self.THUMB_H
@@ -276,20 +303,51 @@ class ThumbnailGrid(QListWidget):
         images: list[ImageInfo],
         quality_map: dict[str, list[str]] | None = None,
     ) -> None:
-        """Render given images. quality_map (path str → list of issue kinds)
-        is consulted to paint a warn badge + stripe on problematic thumbnails."""
+        """Render given images (replaces any existing items).
+
+        ``quality_map`` (path str → list of issue kinds) is consulted to
+        paint a warn badge + stripe on problematic thumbnails.
+
+        For infinite-scroll usage, prefer :meth:`append_images` after
+        an initial :meth:`set_images` to add more rows incrementally
+        without clearing the grid.
+        """
         self.clear()
         self._path_to_row.clear()
-        qm = quality_map or {}
-        for i, img in enumerate(images):
+        self._append_chunk(images, quality_map or {}, base_index=0)
+
+    def append_images(
+        self,
+        images: list[ImageInfo],
+        quality_map: dict[str, list[str]] | None = None,
+    ) -> None:
+        """Append images without clearing — used by infinite-scroll loader.
+
+        New items are added at the bottom and their thumbnail requests
+        are emitted in the same per-item style as :meth:`set_images`.
+        Safe to call repeatedly with empty lists (no-op).
+        """
+        if not images:
+            return
+        self._append_chunk(images, quality_map or {},
+                           base_index=self.count())
+
+    def _append_chunk(
+        self,
+        images: list[ImageInfo],
+        quality_map: dict[str, list[str]],
+        base_index: int,
+    ) -> None:
+        """Add ``images`` starting at ``base_index`` in the row map."""
+        for offset, img in enumerate(images):
             item = QListWidgetItem()
             item.setSizeHint(QSize(T.CARD_WIDTH, T.CARD_HEIGHT))
             item.setData(ROLE_IMG, img)
-            kinds = qm.get(str(img.path))
+            kinds = quality_map.get(str(img.path))
             if kinds:
                 item.setData(ROLE_QUALITY, kinds)
             self.addItem(item)
-            self._path_to_row[str(img.path)] = i
+            self._path_to_row[str(img.path)] = base_index + offset
             self.request_thumb.emit(img.path)
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
@@ -310,6 +368,30 @@ class ThumbnailGrid(QListWidget):
             for item in self.selectedItems()
             if item.data(ROLE_IMG) is not None
         ]
+
+    def mousePressEvent(self, event):  # type: ignore[override]
+        """Treat clicks landing on the top-right checkbox as toggles.
+
+        Any other click falls through to QListWidget's normal
+        ExtendedSelection logic (single-click replaces, Ctrl/Shift add
+        or range-select). The checkbox lets the user build a multi-
+        selection without first flipping a separate "multi" mode.
+        """
+        if event.button() == Qt.MouseButton.LeftButton:
+            idx = self.indexAt(event.pos())
+            if idx.isValid():
+                cb = _checkbox_rect_for(self.visualRect(idx), T.CARD_PAD)
+                # 4-px hit slop so a touch / fat-finger click near the
+                # checkbox still toggles instead of body-selecting.
+                hit = cb.adjusted(-4, -4, 4, 4)
+                if hit.contains(event.pos()):
+                    item = self.item(idx.row())
+                    if item is not None:
+                        item.setSelected(not item.isSelected())
+                        self.viewport().update(self.visualRect(idx))
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
 
     def _on_double_click(self, item: QListWidgetItem) -> None:
         img = item.data(ROLE_IMG)

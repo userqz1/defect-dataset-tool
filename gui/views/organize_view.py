@@ -79,9 +79,11 @@ class OrganizeView(QWidget):
         src_row = QHBoxLayout()
         src_row.addWidget(StrongBodyLabel("① 选择源目录"))
         src_row.addStretch(1)
+        # No setFixedWidth — icon (~16px) + zh "选择" (~28px) + button
+        # padding leaves no slack at 80; en "Choose" / longer i18n
+        # would clip. Let sizeHint do the job (CLAUDE.md gotcha).
         src_btn = PushButton("选择")
         src_btn.setIcon(FIF.FOLDER)
-        src_btn.setFixedWidth(80)
         src_btn.clicked.connect(self._pick_source)
         src_row.addWidget(src_btn)
         src_lay.addLayout(src_row)
@@ -110,9 +112,10 @@ class OrganizeView(QWidget):
         rule_row.addWidget(self._rule_combo)
         rule_lay.addLayout(rule_row)
 
+        # 预览分类 (4 cjk chars + icon) is borderline at 120; en
+        # "Preview classification" overflows. Drop fixed width.
         preview_btn = PushButton("预览分类")
         preview_btn.setIcon(FIF.VIEW)
-        preview_btn.setFixedWidth(120)
         preview_btn.clicked.connect(self._run_preview)
         rule_lay.addWidget(preview_btn)
         root.addWidget(rule_frame)
@@ -151,7 +154,6 @@ class OrganizeView(QWidget):
         tgt_row.addStretch(1)
         self._tgt_btn = PushButton("选择")
         self._tgt_btn.setIcon(FIF.FOLDER)
-        self._tgt_btn.setFixedWidth(80)
         self._tgt_btn.clicked.connect(self._pick_target)
         tgt_row.addWidget(self._tgt_btn)
         exec_lay.addLayout(tgt_row)
@@ -223,7 +225,7 @@ class OrganizeView(QWidget):
             self._tgt_title.setText("④ 导入到项目")
             self._tgt_label.setText(self._short_path(project.root_path))
             self._target_dir = project.root_path
-            self._import_btn.setText("导入到收件箱")
+            self._import_btn.setText("导入到新数据")
         else:
             self._title.setText("整理台")
             self._tgt_title.setText("④ 目标目录")
@@ -333,7 +335,7 @@ class OrganizeView(QWidget):
             )
 
         from gui.workers.batch_runner import BatchRunner
-        runner = BatchRunner(self.window(), "导入到收件箱")
+        runner = BatchRunner(self.window(), "导入到新数据")
         runner.run(task, on_done=self._on_inbox_done)
 
     def _on_inbox_done(self, count: int) -> None:
@@ -341,7 +343,7 @@ class OrganizeView(QWidget):
         name = project.name if project else ""
         InfoBar.success(
             "导入完成",
-            f"{count:,} 张图片已导入收件箱 — {name}",
+            f"{count:,} 张图片已导入新数据 — {name}",
             parent=self.window(), duration=6000,
             position=InfoBarPosition.TOP,
         )

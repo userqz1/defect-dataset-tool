@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QEvent, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPen,
 )
-from PyQt6.QtWidgets import QFrame, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel
 from qfluentwidgets.window.fluent_window import FluentTitleBar
 
@@ -97,7 +97,14 @@ class _BrandChip(QWidget):
 
 
 class BrandTitleBar(FluentTitleBar):
-    """FluentWindow title bar themed with a brand chip + breadcrumbs."""
+    """FluentWindow title bar themed with a brand chip + breadcrumbs.
+
+    Clicking the brand block (chip + name) emits ``home_clicked`` —
+    the shell wires it to ``switchTo(self.home)`` so the launchpad is
+    a one-click return from anywhere.
+    """
+
+    home_clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -108,36 +115,58 @@ class BrandTitleBar(FluentTitleBar):
         self.iconLabel.setVisible(False)
         self.titleLabel.setVisible(False)
 
-        # Brand block (chip + name)
+        # Brand block — single clickable QFrame wrapping chip + name so
+        # both share the click target.  Cursor + tooltip make the
+        # affordance explicit; the rest of the title bar still drags
+        # the window normally.
+        self._brand_area = QFrame(self)
+        self._brand_area.setObjectName("brandHomeArea")
+        brand_lay = QHBoxLayout(self._brand_area)
+        brand_lay.setContentsMargins(0, 0, 0, 0)
+        brand_lay.setSpacing(8)
         self._chip = _BrandChip()
-        self._name = BodyLabel(i18n.t("nav.home") and "数据工坊")
+        brand_lay.addWidget(self._chip)
+        self._name = BodyLabel("数据工坊")
         self._name.setObjectName("brandName")
+        brand_lay.addWidget(self._name)
+        self._brand_area.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._brand_area.installEventFilter(self)
 
         # Crumbs block — start with a placeholder; `set_path` fills it.
         self._crumbs = QFrame()
         self._crumbs.setObjectName("crumbsBox")
-        from PyQt6.QtWidgets import QHBoxLayout
         self._crumbs_lay = QHBoxLayout(self._crumbs)
         self._crumbs_lay.setContentsMargins(0, 0, 0, 0)
         self._crumbs_lay.setSpacing(4)
 
-        # Insert: brand chip (0), name (1), a 16px gap, crumbs (3)
-        # FluentTitleBar keeps the hidden iconLabel at 0 and titleLabel at 1;
-        # we prepend our own widgets BEFORE them so visually they come first.
+        # Insert: brand area (0), 16px gap, crumbs (2).  FluentTitleBar
+        # keeps the hidden iconLabel + titleLabel at the original 0/1
+        # positions; we prepend our own widgets BEFORE them so visually
+        # they come first.
         self.hBoxLayout.insertWidget(
-            0, self._chip, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.hBoxLayout.insertSpacing(1, 8)
+            0, self._brand_area, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.hBoxLayout.insertSpacing(1, 16)
         self.hBoxLayout.insertWidget(
-            2, self._name, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.hBoxLayout.insertSpacing(3, 16)
-        self.hBoxLayout.insertWidget(
-            4, self._crumbs, 1, Qt.AlignmentFlag.AlignVCenter)
+            2, self._crumbs, 1, Qt.AlignmentFlag.AlignVCenter)
 
         # No language_changed subscription: the brand name is a product
         # name that stays in Chinese, and breadcrumb segments are file-path
         # segments not subject to translation — there is literally nothing
         # to re-apply on language switch, so we skip the wire rather than
         # keep an empty hook.
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        """Catch left-clicks on the brand area → emit ``home_clicked``.
+
+        We use an event filter (rather than overriding mousePressEvent
+        on the wrapper) so the window's drag-by-title-bar behaviour
+        stays intact for every region *outside* the brand block.
+        """
+        if obj is self._brand_area and event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.home_clicked.emit()
+                return True
+        return super().eventFilter(obj, event)
 
     # ---------- public API ----------
 

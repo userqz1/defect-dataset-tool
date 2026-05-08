@@ -113,11 +113,14 @@ class SplitCategoryDialog(_OpDialogBase):
         # Check-all helper row
         tools_row = QHBoxLayout()
         tools_row.setSpacing(T.GAP)
+        # CLAUDE.md gotcha: don't setFixedWidth on Chinese-text buttons.
+        # adjustSize() lets the buttons shrink-wrap their actual text +
+        # padding, so they fit zh-2-char "全选" and en "Select all" alike.
         all_btn = PushButton("全选", self)
-        all_btn.setFixedWidth(70)
+        all_btn.adjustSize()
         all_btn.clicked.connect(self._select_all)
         none_btn = PushButton("清空", self)
-        none_btn.setFixedWidth(70)
+        none_btn.adjustSize()
         none_btn.clicked.connect(self._select_none)
         tools_row.addWidget(all_btn)
         tools_row.addWidget(none_btn)

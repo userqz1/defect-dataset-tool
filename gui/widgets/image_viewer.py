@@ -161,12 +161,34 @@ class ImageViewer(QGraphicsView):
         else:
             self._cancel_polygon()
 
+    def has_selection(self) -> bool:
+        """True when a shape is currently selected on the canvas.
+
+        Lets callers (DetailView) decide *before* calling
+        :meth:`delete_selected` whether to push an undo snapshot.
+        """
+        return (self._annotation is not None
+                and 0 <= self._selected_index < len(self._annotation.shapes))
+
     def delete_selected(self) -> bool:
         if self._annotation is None or self._selected_index < 0:
             return False
-        if self._selected_index >= len(self._annotation.shapes):
+        return self.delete_shape_at(self._selected_index)
+
+    def delete_shape_at(self, index: int) -> bool:
+        """Delete the shape at *index* without requiring it to be selected.
+
+        Used by the AnnotationPane's right-click "删除此标注" entry —
+        the user can delete any list row directly without first
+        clicking it on the canvas. Mirrors the post-delete contract of
+        :meth:`delete_selected`: shapes_changed fires, selection
+        clears, and the annotation buffer is rewritten.
+        """
+        if self._annotation is None:
             return False
-        del self._annotation.shapes[self._selected_index]
+        if not (0 <= index < len(self._annotation.shapes)):
+            return False
+        del self._annotation.shapes[index]
         self.set_annotation(self._annotation)
         self.shapes_changed.emit()
         self.selection_changed.emit(-1)

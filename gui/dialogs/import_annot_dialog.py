@@ -26,7 +26,10 @@ _FORMAT_ITEMS = [
     ("yolo", "YOLO TXT (.txt)"),
     ("voc", "Pascal VOC XML (.xml)"),
     ("coco", "COCO JSON (.json)"),
-    ("vlm_jsonl", "VLM JSONL (.jsonl)"),
+    ("vlm_jsonl", "VLM JSONL — LLaVA / ShareGPT / Swift (.jsonl)"),
+    ("caption_sidecar", "Caption sidecars (folder · *.txt)"),
+    ("conversations_sidecar", "Conversations sidecars (folder · *.conversations.json)"),
+    ("image_labels_sidecar", "Multi-label sidecars (folder · *.labels.json)"),
 ]
 
 
@@ -55,8 +58,8 @@ class ImportAnnotDialog(MessageBoxBase):
         self._path_label = CaptionLabel("未选择", self)
         self._path_label.setWordWrap(True)
         path_row.addWidget(self._path_label, 1)
+        # CLAUDE.md gotcha: no setFixedWidth on text-bearing buttons.
         pick_btn = PushButton("选择", self)
-        pick_btn.setFixedWidth(80)
         pick_btn.clicked.connect(self._pick_source)
         path_row.addWidget(pick_btn)
         self.viewLayout.addLayout(path_row)
@@ -70,8 +73,10 @@ class ImportAnnotDialog(MessageBoxBase):
 
     def _pick_source(self) -> None:
         fmt_key = self._format_key()
-        if fmt_key == "coco" or fmt_key == "vlm_jsonl":
-            # Single file
+        # File-based formats need the file picker; folder-based formats
+        # (per-image sidecars) need the directory picker.
+        single_file_fmts = {"coco", "vlm_jsonl"}
+        if fmt_key in single_file_fmts:
             filters = {
                 "coco": "COCO JSON (*.json)",
                 "vlm_jsonl": "JSONL (*.jsonl);;JSON (*.json)",
@@ -83,7 +88,7 @@ class ImportAnnotDialog(MessageBoxBase):
                 self._source_path = Path(path)
                 self._path_label.setText(str(self._source_path))
         else:
-            # Directory
+            # Directory (per-image annotation files / sidecars)
             d = QFileDialog.getExistingDirectory(
                 self, "选择标注目录", str(Path.home()))
             if d:

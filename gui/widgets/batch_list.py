@@ -6,8 +6,10 @@ Displays each IngestBatch as a card with:
 - Item count + status breakdown bar
 - Commit button (for items still in _inbox)
 
-Designed as a toggleable side panel inside DatasetBrowserView,
-similar to CatalogPanel.
+Lives as the body of the 收件箱 stage (``StageIndex.INBOX``) — it's the
+stage's main work surface, not a side panel, so it stretches with the
+stack and has no dismiss affordance of its own (stage nav is the only
+way in and out).
 
 Pure presentation — all mutations go through signals.
 """
@@ -28,7 +30,6 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     PrimaryPushButton,
     PushButton,
-    ToolButton,
 )
 
 from gui import i18n
@@ -156,9 +157,11 @@ class _BatchCard(QFrame):
 
         inbox_count = info.get("inbox_count", 0)
         if inbox_count > 0:
+            # No fixed width — i18n labels can be 2-cjk ("提交") or
+            # 6+ chars en ("Commit batch") and a 70px clamp would
+            # truncate the longer one.
             commit_btn = PushButton(i18n.t("batch.commit"))
             commit_btn.setFixedHeight(26)
-            commit_btn.setFixedWidth(70)
             commit_btn.clicked.connect(
                 lambda: self.commit_clicked.emit(self._batch_id))
             row4.addWidget(commit_btn)
@@ -167,9 +170,8 @@ class _BatchCard(QFrame):
 
 
 class BatchListPanel(QFrame):
-    """Side panel listing all import batches with status progress."""
+    """Inbox stage body — lists all import batches with status progress."""
 
-    close_requested = pyqtSignal()
     import_requested = pyqtSignal()          # user wants to import a new batch
     commit_requested = pyqtSignal(str)       # batch_id to commit
 
@@ -177,13 +179,13 @@ class BatchListPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("batchListPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(320)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Header
+        # Header — title + subtitle only; stage nav handles navigation
+        # in/out so the panel has no close affordance of its own.
         head = QFrame()
         head_lay = QHBoxLayout(head)
         head_lay.setContentsMargins(T.PAD_LG, T.PAD_LG, T.PAD_LG, T.GAP)
@@ -199,11 +201,6 @@ class BatchListPanel(QFrame):
         head_text.addWidget(self._title)
         head_text.addWidget(self._subtitle)
         head_lay.addLayout(head_text, 1)
-
-        close_btn = ToolButton(FIF.CLOSE)
-        close_btn.setFixedSize(22, 22)
-        close_btn.clicked.connect(self.close_requested.emit)
-        head_lay.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignTop)
 
         root.addWidget(head)
 

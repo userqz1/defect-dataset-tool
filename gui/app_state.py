@@ -335,15 +335,21 @@ class AppState(QObject):
         self.ext_stats_changed.emit(stats)
 
     def open_project(self, root: Path, name: str,
-                     task_type: TaskType) -> Project:
+                     task_type: TaskType,
+                     preset_id: str = "") -> Project:
         """Create a brand-new empty project (no scan, no dataset).
 
         Used for the "新建空项目" flow — the directory may contain no
         images yet.  A subsequent scan/import will populate it.
+
+        ``preset_id`` (when non-empty) deterministically sets task_type
+        + VLM caps; ``task_type`` is only consulted under the 自定义
+        preset.  Both are forwarded to :func:`core.project.create_project`.
         """
         self.close_dataset()
         root.mkdir(parents=True, exist_ok=True)
-        project = create_project(root, name=name, task_type=task_type)
+        project = create_project(
+            root, name=name, task_type=task_type, preset_id=preset_id)
         add_recent(root)
         self._project = project
         self.project_changed.emit(project)

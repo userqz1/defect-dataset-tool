@@ -26,7 +26,7 @@ FluentTitleBar {
 /* Brand chip (20×20 clay square w/ italic serif D) — matches design §1 */
 QLabel#brandChip {
     background-color: $ACCENT;
-    color: white;
+    color: $ON_ACCENT;
     border-radius: 5px;
     font-family: "Georgia", "Songti SC", serif;
     font-style: italic;
@@ -72,9 +72,148 @@ QLabel#datasetChipPath { color: $TEXT_3; }
 }
 
 QWidget#overviewView, QWidget#qualityView, QWidget#exportView,
-QWidget#pipelineView, QWidget#datasetWelcome,
+QWidget#pipelineView,
 QStackedWidget#browserStack {
     background-color: $CONTENT;
+}
+/* Welcome / launchpad — uses the warm ivory canvas so project cards
+ * float above it (the brand block sits flush to the canvas). */
+QWidget#datasetWelcome {
+    background-color: $SIDEBAR;
+}
+/* ── Overview console (项目概览) ── */
+SubtitleLabel#overviewProjectName {
+    color: $TEXT;
+}
+CaptionLabel#overviewProjectSub {
+    color: $TEXT_2;
+}
+StrongBodyLabel#overviewStatValue {
+    color: $TEXT;
+    font-size: 20px;
+    font-weight: 600;
+}
+StrongBodyLabel#overviewStatValue[warn="true"] {
+    color: $WARNING;
+}
+CaptionLabel#overviewStatLabel {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+QFrame#overviewClassRow {
+    background-color: transparent;
+    border-bottom: 1px solid $BORDER;
+}
+CaptionLabel#overviewLabelOk { color: $SUCCESS; }
+CaptionLabel#overviewLabelPartial { color: $WARNING; }
+CaptionLabel#overviewLabelNone { color: $TEXT_3; }
+CaptionLabel#overviewNavLabel {
+    color: $TEXT_3;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+TitleLabel#welcomeBrand {
+    color: $TEXT;
+    font-family: "Georgia", "Songti SC", "Noto Serif SC", serif;
+}
+CaptionLabel#welcomeTagline {
+    color: $TEXT_2;
+    font-size: 13px;
+}
+SubtitleLabel#welcomeSectionTitle {
+    color: $TEXT_2;
+    font-size: 14px;
+}
+CaptionLabel#welcomeSectionSubtitle {
+    color: $TEXT_3;
+    font-size: 12px;
+}
+CaptionLabel#welcomeEmptyHint {
+    color: $TEXT_3;
+}
+
+/* Three top entry cards (新建项目 / 打开项目 / 打开普通数据集) — large
+ * tile-style entry points. Primary card promotes ACCENT_SOFT to set
+ * apart "new project" from the other two. */
+QFrame#welcomeEntryCard {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+QFrame#welcomeEntryCard:hover {
+    border-color: $ACCENT;
+}
+QFrame#welcomeEntryCard[primary="true"] {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT;
+}
+StrongBodyLabel#welcomeEntryTitle {
+    color: $TEXT;
+    font-size: 15px;
+}
+QFrame#welcomeEntryCard[primary="true"] StrongBodyLabel#welcomeEntryTitle {
+    color: $ACCENT;
+}
+CaptionLabel#welcomeEntryBody {
+    color: $TEXT_3;
+}
+QFrame#welcomeEntryCard[primary="true"] CaptionLabel#welcomeEntryBody {
+    color: $TEXT_2;
+}
+
+/* Project cards in the welcome list */
+QFrame#projectCard {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+QFrame#projectCard:hover {
+    border-color: $ACCENT_SOFT;
+}
+QFrame#projectCard[missing="true"] {
+    background-color: $SURFACE_DIM;
+    border-color: $BORDER;
+}
+StrongBodyLabel#projectCardName {
+    color: $TEXT;
+    font-size: 15px;
+}
+CaptionLabel#projectCardTag {
+    background-color: $BADGE_GHOST_BG;
+    color: $TEXT_2;
+    border-radius: 6px;
+    padding: 1px 8px;
+    font-size: 11px;
+}
+CaptionLabel#projectCardMeta {
+    color: $TEXT_3;
+    font-size: 12px;
+}
+StrongBodyLabel#projectCardStatValue {
+    color: $TEXT;
+    font-size: 18px;
+    font-weight: 600;
+}
+StrongBodyLabel#projectCardStatValue[warn="true"] {
+    color: $WARNING;
+}
+CaptionLabel#projectCardStatKey {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+PushButton#projectCardCTA {
+    background-color: $ACCENT_SOFT;
+    border: none;
+    border-radius: ${RADIUS}px;
+    color: $ACCENT;
+    padding: 4px 14px;
+    font-weight: 500;
+}
+PushButton#projectCardCTA:hover {
+    background-color: $ACCENT;
+    color: $ON_ACCENT;
 }
 /* browser + detail views use the ivory canvas so cards (thumbnails,
  * distribution chart) float above it — matches Claude-web layering. */
@@ -99,6 +238,231 @@ QFrame#statCard, QFrame#chartFrame {
     background-color: $CONTENT;
     border: 1px solid $BORDER;
     border-radius: ${RADIUS_LG}px;
+}
+
+/* Task card — used by 导出 task tiles + future review/manage
+ * pages.  Same visual base as #chartFrame but objectName-distinct so
+ * task-specific badges / dividers can hang off it. */
+QFrame#taskCard {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+StrongBodyLabel#taskCardTitle {
+    color: $TEXT;
+    font-size: 14px;
+}
+CaptionLabel#taskCardKey {
+    color: $TEXT_3;
+    font-size: 12px;
+}
+CaptionLabel#taskCardValue {
+    color: $TEXT;
+    font-size: 12px;
+}
+CaptionLabel#taskCardHint {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+/* Scope badge — single visual vocabulary for "what does this act on".
+ * Three variants cover every action surface: informational scope
+ * (neutral grey), read-only export (warm tan), project-mutating
+ * (amber + bold).  ScopeBadge widget at gui/widgets/scope_badge.py
+ * is the only place that should set these object names. */
+CaptionLabel#scopeBadge {
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 11px;
+}
+CaptionLabel#scopeBadge[scope="neutral"] {
+    background-color: $SURFACE_DIM;
+    color: $TEXT_2;
+}
+CaptionLabel#scopeBadge[scope="readonly"] {
+    background-color: $ACCENT_SOFT;
+    color: $ACCENT;
+}
+CaptionLabel#scopeBadge[scope="writes"] {
+    background-color: $WARNING_SOFT;
+    color: $WARNING;
+    font-weight: 500;
+}
+
+/* 审核修复 (ReviewHub) — top toolbar + summary + queue card + detail
+ * pane.  Toolbar sits flush to the page top with a hairline separator
+ * to the summary; summary itself sits flush to the queue body. */
+QFrame#reviewToolbar {
+    background-color: $CONTENT;
+    border-bottom: 1px solid $BORDER;
+}
+QFrame#reviewSummary {
+    background-color: $SIDEBAR;
+    border-bottom: 1px solid $BORDER;
+}
+StrongBodyLabel#reviewSummaryValue {
+    color: $TEXT;
+    font-size: 22px;
+    font-weight: 600;
+}
+StrongBodyLabel#reviewSummaryValue[warn="true"] {
+    color: $WARNING;
+}
+CaptionLabel#reviewSummaryKey {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+QFrame#reviewQueueCard {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+QListWidget#reviewQueueList {
+    background-color: $CONTENT;
+    border: none;
+    outline: 0;
+    padding: 4px;
+}
+QListWidget#reviewQueueList::item {
+    color: $TEXT;
+    padding: 8px 10px;
+    border-radius: ${RADIUS}px;
+}
+QListWidget#reviewQueueList::item:hover {
+    background-color: $HOVER;
+}
+QListWidget#reviewQueueList::item:selected {
+    background-color: $ACCENT_SOFT;
+    color: $ACCENT;
+}
+QFrame#reviewDetail {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+TitleLabel#reviewDetailTitle {
+    color: $TEXT;
+    font-size: 16px;
+}
+QLabel#reviewDetailPreview {
+    background-color: $SURFACE_DIM;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+}
+CaptionLabel#reviewDetailMetaKey {
+    color: $TEXT_3;
+}
+BodyLabel#reviewDetailMetaValue {
+    color: $TEXT;
+}
+CaptionLabel#reviewDetailEmpty {
+    color: $TEXT_3;
+}
+
+/* ProjectManageHub — class management rows + preset hint */
+QFrame#manageClassRow {
+    background-color: transparent;
+    border-radius: ${RADIUS}px;
+}
+QFrame#manageClassRow:hover {
+    background-color: $HOVER;
+}
+BodyLabel#manageClassRowName {
+    color: $TEXT;
+}
+CaptionLabel#manageClassRowCount {
+    color: $TEXT_3;
+}
+CaptionLabel#manageClassesEmpty {
+    color: $TEXT_3;
+    padding: 16px 0;
+}
+CaptionLabel#manageClassesCount {
+    color: $TEXT_3;
+}
+CaptionLabel#manageCapsHint {
+    color: $TEXT_3;
+}
+QScrollArea#manageClassesScroll {
+    background-color: transparent;
+    border: none;
+}
+
+/* DeliveryHub LLM-data zone — full P1.7 card with status + format
+ * radio + help link + planned footer.  Inherits #taskCard surface
+ * (set on the host frame) so its outline matches the rest of the
+ * delivery cards. */
+StrongBodyLabel#llmEmptyTitle {
+    color: $TEXT;
+    font-size: 14px;
+}
+CaptionLabel#llmEmptyBody {
+    color: $TEXT_3;
+}
+CaptionLabel#llmStatusHeader {
+    color: $TEXT_3;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+CaptionLabel#llmStatusKey {
+    color: $TEXT_3;
+}
+BodyLabel#llmStatusValue {
+    color: $TEXT;
+}
+RadioButton#llmFormatRadio {
+    color: $TEXT;
+}
+CaptionLabel#llmFormatDesc {
+    color: $TEXT_3;
+}
+HyperlinkButton#llmHelpLink {
+    color: $ACCENT;
+    background: transparent;
+    border: none;
+}
+CaptionLabel#llmPlannedFooter {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+
+/* LLM format reference dialog — table cells + warning */
+CaptionLabel#llmHelpIntro {
+    color: $TEXT_2;
+}
+StrongBodyLabel#llmHelpHeader {
+    color: $TEXT_3;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+StrongBodyLabel#llmHelpFormatName {
+    color: $ACCENT;
+    font-size: 13px;
+}
+BodyLabel#llmHelpCell {
+    color: $TEXT;
+    font-size: 12px;
+}
+CaptionLabel#llmHelpWarn {
+    background-color: $WARNING_SOFT;
+    color: $WARNING;
+    border-radius: ${RADIUS}px;
+    padding: 8px 12px;
+    font-weight: 500;
+}
+
+/* BrowserView footer + empty-state copy */
+CaptionLabel#browserFooterCount {
+    color: $TEXT_2;
+}
+CaptionLabel#browserFooterLoading {
+    color: $ACCENT;
+    font-weight: 500;
+}
+CaptionLabel#browserEmptyHint {
+    color: $TEXT_3;
+    font-size: 13px;
 }
 
 QLabel#hintWarn {
@@ -146,6 +510,88 @@ QPushButton#filterChip:disabled {
     color: $TEXT_3;
 }
 
+/* Workspace sidebar — slim vertical stage nav (5 list rows, 168px).
+ * SIDEBAR bg matches the warm-ivory rail of the design system; right
+ * border separates it from the middle work column.
+ *
+ * Each row is a custom QFrame (not QPushButton) — avoids the qfluentwidgets
+ * PushButton icon-text collision bug for narrow CJK labels. Selected
+ * state is driven by a [selected="true"] dynamic property the row
+ * toggles via unpolish/polish on flip. */
+QFrame#workspaceSidebar {
+    background-color: $SIDEBAR;
+    border-right: 1px solid $BORDER;
+}
+QFrame#workspaceSidebarRow {
+    background-color: transparent;
+    border-radius: ${RADIUS}px;
+}
+QFrame#workspaceSidebarRow:hover {
+    background-color: $HOVER;
+}
+QFrame#workspaceSidebarRow[selected="true"] {
+    background-color: $ACCENT_SOFT;
+}
+BodyLabel#workspaceSidebarRowLabel {
+    color: $TEXT_2;
+    font-size: 13px;
+    background: transparent;
+}
+QFrame#workspaceSidebarRow:hover BodyLabel#workspaceSidebarRowLabel {
+    color: $TEXT;
+}
+QFrame#workspaceSidebarRow[selected="true"] BodyLabel#workspaceSidebarRowLabel {
+    color: $ACCENT;
+    font-weight: 500;
+}
+CaptionLabel#workspaceSidebarRowBadge {
+    background-color: $BADGE_GHOST_BG;
+    color: $TEXT_2;
+    border-radius: 8px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QFrame#workspaceSidebarRow[selected="true"] CaptionLabel#workspaceSidebarRowBadge {
+    background-color: $ACCENT;
+    color: $ON_ACCENT;
+}
+
+/* Right-side context panel — stack of stage- and object-scoped pages
+ * (catalog on 标注工作台 grid; future inspector on detail; future audit
+ * queue on 审核修复). CONTENT bg so its hosted card surfaces read
+ * naturally; left border separates it from the work area. */
+QFrame#contextPanel {
+    background-color: $CONTENT;
+    border-left: 1px solid $BORDER;
+}
+
+/* Placeholder card shown inside an unfinished stage page. */
+QFrame#stagePlaceholder {
+    background-color: $SIDEBAR;
+    border: 1px dashed $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+BodyLabel#stagePlaceholderText {
+    color: $TEXT_3;
+    font-size: 13px;
+}
+
+/* Selection action bar — only visible when the grid has a selection. Soft
+ * accented background distinguishes it from the plain filter bar above so the
+ * user can tell at a glance "these actions target the selection I just made".
+ * Right side hosts destructive + reclassify + export actions; left side has
+ * the count + a one-click clear. */
+QFrame#selectionActionBar {
+    background-color: $ACCENT_SOFT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+}
+BodyLabel#selectionCountLabel {
+    color: $TEXT;
+    font-weight: 500;
+}
+
 /* ============================================================
  * 4. Browser 左侧类别栏
  * ============================================================ */
@@ -153,68 +599,6 @@ QPushButton#filterChip:disabled {
 QFrame#categorySidebar {
     background-color: $SIDEBAR;
     border-right: 1px solid $BORDER;
-}
-
-/* ToolSidebar — left-hand vertical tool panel (replaces old top toolbar) */
-QFrame#toolSidebar {
-    background-color: $SIDEBAR;
-    border-right: 1px solid $BORDER;
-}
-/* Section header: uppercase (done in Python), tracked, muted — matches the
- * design handoff's "ANALYZE / 处理" style. */
-CaptionLabel#toolSidebarSection {
-    color: $TEXT_3;
-    padding: ${GAP_LG}px ${GAP}px ${GAP_XS}px ${GAP}px;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1px;
-}
-/* Tool rows are custom QFrame widgets (QLabel icon + QLabel text inside) —
- * the old QPushButton version collided icon + text on long CN labels like
- * "格式转换" / "AI 预标注". Splitting icon/text into dedicated slots via
- * HBoxLayout keeps them from overlapping regardless of window width. */
-QFrame#toolSidebarButton {
-    background-color: transparent;
-    border: 1px solid transparent;
-    border-radius: ${RADIUS}px;
-}
-QLabel#toolSidebarText {
-    color: $TEXT_2;
-    font-size: 13px;
-}
-QFrame#toolSidebarButton:hover {
-    background-color: $HOVER;
-    border-color: $BORDER;
-}
-QFrame#toolSidebarButton:hover QLabel#toolSidebarText {
-    color: $TEXT;
-}
-/* Featured: elevated white panel w/ subtle border (marquee — e.g. 导出). */
-QFrame#toolSidebarButton[toolKind="featured"] {
-    background-color: $CONTENT;
-    border: 1px solid $BORDER;
-}
-QFrame#toolSidebarButton[toolKind="featured"]:hover {
-    border: 1px solid $HOVER_STRONG;
-}
-QFrame#toolSidebarButton[toolKind="featured"] QLabel#toolSidebarText {
-    color: $TEXT;
-    font-weight: 500;
-}
-/* AI row — accent-soft hover, accent text (differentiated capability). */
-QFrame#toolSidebarButton[toolKind="ai"]:hover {
-    background-color: $ACCENT_SOFT;
-    border-color: $ACCENT_SOFT;
-}
-QFrame#toolSidebarButton[toolKind="ai"]:hover QLabel#toolSidebarText {
-    color: $ACCENT;
-}
-/* Disabled state (cascaded via btnDisabled property). */
-QFrame#toolSidebarButton[btnDisabled="true"] {
-    background-color: transparent;
-}
-QFrame#toolSidebarButton[btnDisabled="true"] QLabel#toolSidebarText {
-    color: $TEXT_3;
 }
 
 QLabel#sectionHeader,
@@ -248,12 +632,11 @@ QListWidget#categoryTree::item:selected {
 }
 
 /* ============================================================
- * 4d. Catalog panel (right-hand 340px column)
+ * 4d. Catalog panel — hosted as a page in the right ContextPanel
  * ============================================================ */
 
 QFrame#catalogPanel {
-    background-color: $SIDEBAR;
-    border-left: 1px solid $BORDER;
+    background-color: $CONTENT;
 }
 BodyLabel#catalogTitle {
     color: $TEXT;
@@ -387,9 +770,38 @@ QFrame#detailTopBar {
     border-bottom: 1px solid $BORDER;
 }
 
-QFrame#detailSidebar {
-    background-color: $SIDEBAR;
-    border-left: 1px solid $BORDER;
+/* Image inspector — hosted inside the right ContextPanel as
+ * ContextPage.INSPECTOR (P1.6).  Bg/border come from the panel
+ * itself; the inner frame stays transparent so its content reads as
+ * part of the panel's surface, not as a card-on-card. */
+QFrame#imageInspector {
+    background-color: transparent;
+}
+
+/* 大模型标注 (VLM) pane empty state — shown when the project hasn't
+ * enabled any of caption / conversations / grounding yet. */
+StrongBodyLabel#vlmEmptyTitle {
+    color: $TEXT;
+    font-size: 14px;
+}
+BodyLabel#vlmEmptyBody {
+    color: $TEXT_3;
+}
+CaptionLabel#vlmPartialHint {
+    color: $TEXT_3;
+    background-color: $SURFACE_DIM;
+    border-radius: ${RADIUS}px;
+    padding: 6px 10px;
+}
+
+/* Grounding hint — when show_region_text is on but the current image
+ * has no shapes yet. Tells the user to draw a shape first instead of
+ * staring at a disabled region-text editor. */
+CaptionLabel#regionTextHint {
+    color: $TEXT_3;
+    background-color: $SURFACE_DIM;
+    border-radius: ${RADIUS}px;
+    padding: 6px 10px;
 }
 
 QListWidget#shapeList {
@@ -457,12 +869,11 @@ PlainTextEdit#regionTextEdit:focus {
 }
 
 /* ============================================================
- * 5b. Batch list panel (left / right toggleable)
+ * 5b. Batch list panel — body of the 收件箱 stage
  * ============================================================ */
 
 QFrame#batchListPanel {
     background-color: $SIDEBAR;
-    border-left: 1px solid $BORDER;
 }
 BodyLabel#batchPanelTitle {
     color: $TEXT;

@@ -60,13 +60,13 @@ class DatasetSessionController(QObject):
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
         self._rt.dataset_bar.set_open_enabled(False)
-        # Keep the tool sidebar disabled for the full scan lifecycle
-        # (Phase 1 + Phase 2 + Phase 3).  Quick-open renders the grid
-        # the moment scan_finished fires, but mutating tools must NOT
-        # race with the worker still reading disk for load_samples /
-        # compute_stats — re-enable only at finished_ok / failed /
-        # canceled.
-        self._rt.tool_sidebar.set_enabled(False)
+        # Keep every dataset-wide action surface disabled for the full
+        # scan lifecycle (Phase 1 + Phase 2 + Phase 3).  Quick-open
+        # renders the grid the moment scan_finished fires, but mutating
+        # tools must NOT race with the worker still reading disk for
+        # load_samples / compute_stats — re-enable only at finished_ok
+        # / failed / canceled.
+        self._set_tools_enabled(False)
         # Flip the global scan-active gate BEFORE any signal emission
         # happens — DetailView and other mutation entry points bind
         # their enabled state to ``state.can_write`` and must see the
@@ -123,6 +123,37 @@ class DatasetSessionController(QObject):
             # tools that need the unified model already guard on
             # ``sample_set_ready`` (falling back to disk until it's READY).
             self._rt.state.set_dataset(ds)
+            # Reconcile workflow.json against the freshly-scanned
+            # filesystem.  Without this, deletions made in the
+            # workbench leave orphan workflow items behind and the
+            # home-launchpad cards / DatasetBar / ReviewHub summary
+            # keep showing pre-deletion counts.  Cheap: a single read,
+            # set comparison, and conditional save.
+            project = self._rt.state.project
+            if project is not None and ds.total_images > 0:
+                from core import workflow_store
+                valid: set[str] = set()
+                for cat in ds.categories:
+                    for img in cat.images:
+                        try:
+                            valid.add(img.path.relative_to(
+                                project.root_path).as_posix())
+                        except ValueError:
+                            # Image path landed outside the project
+                            # root (rare; symlinks). Skip — we can't
+                            # safely match against workflow items.
+                            pass
+                try:
+                    removed = workflow_store.reconcile(
+                        project.root_path, valid)
+                except Exception:
+                    logger.exception("workflow reconcile failed")
+                    removed = 0
+                if removed:
+                    # Re-broadcast so every open view (DatasetBar
+                    # production strip, ReviewHub summary, etc.)
+                    # repaints from the cleaned counts immediately.
+                    self._rt.state.load_workflow()
             if progress.isVisible():
                 progress.accept()
             if ds.total_images == 0:
@@ -225,7 +256,7 @@ class DatasetSessionController(QObject):
         # Same rule as scan() — disable tools for the full worker
         # lifecycle so the in-flight unify/analyze passes don't race
         # with user mutations.  Re-enabled from the terminal handlers.
-        self._rt.tool_sidebar.set_enabled(False)
+        self._set_tools_enabled(False)
         # Close the write gate for every mutation entry point while the
         # worker is live.
         self._rt.state.set_scan_active(True)
@@ -288,7 +319,22 @@ class DatasetSessionController(QObject):
         self._rt.dataset_bar.set_dataset(ds, flagged_count=flagged)
         self._rt.dataset_bar.set_workflow_summary(
             self._rt.state.workflow_summary)
-        self._rt.catalog.set_dataset(ds)
+
+        # Preserve the user's category selection across rescans.
+        # Snapshot the previously-active category, validate it against
+        # the new dataset, and thread the surviving name through both
+        # the catalog tree (visual selection) and the browser (filter
+        # state).  Falls back to "All" only when the category was
+        # itself removed by the just-finished mutation (e.g. delete
+        # cleaned up the last image of "Loose").
+        prev_category = self._rt.browser._current_category
+        valid_names = {c.name for c in ds.categories}
+        surviving_category = (
+            prev_category if prev_category in valid_names else ""
+        )
+
+        self._rt.catalog.set_dataset(
+            ds, select_category=surviving_category or None)
         # Tool enablement is owned by scan()/rescan() terminal handlers
         # — do NOT enable here, or quick-open would unlock mutating
         # tools while Phase 2/3 are still reading disk.  We still want
@@ -309,16 +355,30 @@ class DatasetSessionController(QObject):
         return self._rt.shell.window()
 
     def _set_tools_enabled(self, enabled: bool) -> None:
-        self._rt.tool_sidebar.set_enabled(enabled)
+        """Gate every dataset-wide action surface.
+
+        After the IA v3 split, "tools" is spread across four widgets:
+          - DatasetBar refresh button (global refresh)
+          - DataProcessHub action buttons (import labels / batch operations)
+          - DeliveryHub action buttons (copy conversion / export / VLM export)
+          - ReviewHub action buttons (quality / dedup / stats)
+
+        Undo state is refreshed independently from the history log —
+        enable/disable alone doesn't say whether an op is undoable.
+        """
+        self._rt.dataset_bar.set_refresh_enabled(enabled)
+        self._rt.process_hub.set_actions_enabled(enabled)
+        self._rt.delivery_hub.set_actions_enabled(enabled)
+        self._rt.review_hub.set_actions_enabled(enabled)
         self.refresh_undo_state()
 
     def _enable_tools_if_loaded(self) -> None:
-        """Re-enable the tool sidebar iff a non-empty dataset is loaded.
+        """Re-enable every action surface iff a non-empty dataset is loaded.
 
         Called from every scan/rescan terminal path (finished_ok /
-        failed / canceled) so the sidebar unlocks exactly once the
-        worker thread has stopped touching disk.  Safe to call when
-        no dataset is loaded — it'll keep the sidebar disabled.
+        failed / canceled) so the hubs unlock exactly once the worker
+        thread has stopped touching disk.  Safe to call when no dataset
+        is loaded — it'll keep the surfaces disabled.
         """
         ds = self._rt.state.dataset
         self._set_tools_enabled(ds is not None and ds.total_images > 0)
@@ -364,9 +424,22 @@ class DatasetSessionController(QObject):
         self._rt.state.notify_project_mutated()
 
     def refresh_undo_state(self) -> None:
-        ds = self._rt.state.dataset
+        # DetailView's local shape-undo stack takes precedence while
+        # the user is on the detail page — that's the only way the
+        # button can revert a shape delete.  The bar tooltip
+        # ("撤销: <op>") tracks whichever stack is currently authoritative.
+        rt = self._rt
+        on_detail = (rt.browser_stack is not None
+                     and rt.browser_stack.currentWidget() is rt.detail)
+        if on_detail and rt.detail.can_undo():
+            rt.dataset_bar.set_undo_enabled(True)
+            rt.dataset_bar.set_undo_tooltip(
+                f"撤销: {rt.detail.last_undo_label()}")
+            return
+
+        ds = rt.state.dataset
         if ds is None:
-            self._rt.tool_sidebar.set_undo_enabled(False)
+            rt.dataset_bar.set_undo_enabled(False)
             return
         from core.history import find_last_undoable
 
@@ -375,8 +448,9 @@ class DatasetSessionController(QObject):
         except Exception:
             logger.exception("find_last_undoable failed")
             entry = None
-        self._rt.tool_sidebar.set_undo_enabled(entry is not None)
+        rt.dataset_bar.set_undo_enabled(entry is not None)
         if entry is not None:
-            self._rt.tool_sidebar.set_undo_tooltip(f"撤销: {entry.summary}")
+            rt.dataset_bar.set_undo_tooltip(f"撤销: {entry.summary}")
         else:
-            self._rt.tool_sidebar.set_undo_tooltip("没有可撤销的操作")
+            from gui import i18n
+            rt.dataset_bar.set_undo_tooltip(i18n.t("tools.undo.none"))

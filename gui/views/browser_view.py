@@ -13,12 +13,14 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QMenu,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
+    Action,
+    BodyLabel,
     CaptionLabel,
+    DropDownPushButton,
     FluentIcon as FIF,
     IndeterminateProgressBar,
     InfoBar,
@@ -26,7 +28,8 @@ from qfluentwidgets import (
     LineEdit,
     MessageBox,
     PushButton,
-    ToolButton,
+    RoundMenu,
+    TransparentToolButton,
 )
 
 from core import fileops, index_cache
@@ -40,10 +43,25 @@ from gui.dialogs.op_dialogs import (
 )
 from gui.theme import T
 from gui.widgets.chips import FilterChip
+from gui.widgets.scope_badge import Scope, ScopeBadge
 from gui.widgets.thumbnail_grid import ThumbnailGrid
 from gui.workers.batch_worker import BatchWorker
 
-PAGE_SIZE = 40
+# Infinite-scroll chunk size — how many thumbs to materialize on the
+# initial render and on each "scrolled near bottom" trigger.  80 fits
+# ~5 fully-visible rows on a 1080p workbench at the standard 200px card
+# width, so the first paint already overshoots the viewport (avoids
+# "blank then pop in"); 80-at-a-time keeps the thumb worker queue
+# manageable on the way down.
+CHUNK_SIZE = 80
+# How close to the bottom (in pixels) the user must be before we
+# trigger the next-chunk load. One row of cards is ~222px so 240 gives
+# a one-row look-ahead.
+SCROLL_LOAD_AHEAD_PX = 240
+# How long to keep the "加载中…" indicator visible after a chunk has
+# been appended.  Long enough that the user perceives the trigger,
+# short enough that it doesn't feel sticky.
+LOAD_INDICATOR_HOLD_MS = 800
 
 
 class FilterMode(str, Enum):
@@ -68,9 +86,6 @@ class BrowserView(QWidget):
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
     batch_status_requested = pyqtSignal(list, str)  # (images, new_status_str)
-    # Bubbled from DatasetBar's 选择目录 button — DatasetBrowserView owns
-    # the actual file dialog + scan plumbing.
-    open_clicked = pyqtSignal()
 
     def __init__(self, app_state) -> None:
         """BrowserView requires an AppState — construction with None used to
@@ -90,7 +105,12 @@ class BrowserView(QWidget):
         self._current_category: str = ""
         self._filter_mode: FilterMode = FilterMode.ALL
         self._search_text: str = ""
-        self._page: int = 0
+        # Infinite-scroll state — _filtered is the full filter result;
+        # _visible_count caps how many of those are materialized into
+        # the grid right now. Bumped by CHUNK_SIZE whenever the user
+        # scrolls near the bottom; reset to CHUNK_SIZE on filter /
+        # category / search change so the user sees the new top.
+        self._visible_count: int = CHUNK_SIZE
         self._filtered: list[ImageInfo] = []
         # Per-category image-list cache (review #8). Rebuilt on category
         # switch / dataset change; reused across filter + search typing
@@ -112,30 +132,17 @@ class BrowserView(QWidget):
         self._work_status_cache: dict[str, str] | None = None
 
         # Single-column layout — viewer region per the design handoff.
-        # The 4-column body (NavRail | Tools | Viewer | Catalog) lives in
-        # DatasetBrowserView; BrowserView is just the viewer.
+        # DatasetBar and the stage nav now live on DatasetBrowserView
+        # (above the stage_stack that hosts this view), so BrowserView
+        # is just the "grid/filter/selection" body of the 标注 stage.
         right_layout = QVBoxLayout(self)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        # DatasetBar sits at the top of the viewer, full width.
-        from gui.widgets.dataset_bar import DatasetBar
-        self.dataset_bar = DatasetBar()
-        self.dataset_bar.open_clicked.connect(self.open_clicked.emit)
-        right_layout.addWidget(self.dataset_bar)
+        right_layout.setContentsMargins(T.PAD_XL, T.PAD, T.PAD_XL, T.GAP_LG)
+        right_layout.setSpacing(T.PAD)
 
         # CategoryTree reference is set from outside by DatasetBrowserView
         # (it lives in CatalogPanel now). _do_rename / merge / split still
         # need to know the category list, so we read it from this handle.
         self._catalog_tree: "CategoryTree | None" = None
-
-        # -- Viewer body (filter bar + grid + paging) has its own padding --
-        body = QWidget()
-        body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(T.PAD_XL, T.PAD, T.PAD_XL, T.GAP_LG)
-        body_lay.setSpacing(T.PAD)
-        right_layout.addWidget(body, 1)
-        right_layout = body_lay  # rest of the init uses this name
 
         # 筛选栏
         filter_bar = QHBoxLayout()
@@ -213,46 +220,45 @@ class BrowserView(QWidget):
 
         filter_bar.addStretch(1)
 
-        self.selection_label = CaptionLabel("")
-        filter_bar.addWidget(self.selection_label)
-
-        # "多选" toggle — when on, a single click on a thumbnail toggles
-        # selection (no Ctrl needed), ideal for touchpad / quick bulk picking.
-        # Off = default desktop behavior (单选 + Ctrl/Shift 辅助).
-        # NOTE: no setFixedWidth on these — English labels ("Select all",
-        # "Multi", "Delete") are 7–11 chars and a fixed 80-90px clips them.
-        # Letting the buttons size to content + QSS padding works for both zh/en.
-        self._multi_btn = PushButton(i18n.t("filter.multi"))
-        self._multi_btn.setCheckable(True)
-        self._multi_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._multi_btn.toggled.connect(self._on_multi_toggle)
-        filter_bar.addWidget(self._multi_btn)
-
+        # Filter bar carries scope only: search, filter chips, and the
+        # 全选 toggle. Multi-select doesn't need its own button — every
+        # thumbnail card now ships with a top-right checkbox that
+        # toggles that one card without affecting others, so users can
+        # build a multi-selection by clicking the checkboxes directly
+        # (see ThumbnailGrid.mousePressEvent).
         self._select_all_btn = PushButton(i18n.t("filter.select_all"))
         self._select_all_btn.setFixedHeight(T.CONTROL_HEIGHT)
         self._select_all_btn.setEnabled(False)
         self._select_all_btn.clicked.connect(self._on_select_all_toggle)
         filter_bar.addWidget(self._select_all_btn)
 
-        self._delete_btn = PushButton(i18n.t("filter.delete"))
-        self._delete_btn.setIcon(FIF.DELETE)
-        self._delete_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._delete_btn.setEnabled(False)
-        self._delete_btn.clicked.connect(self._on_delete_clicked)
-        filter_bar.addWidget(self._delete_btn)
-
         # Re-text on language switch
         i18n.bus.language_changed.connect(self._retranslate)
 
         right_layout.addLayout(filter_bar)
 
-        # 缩略图网格
+        # 缩略图网格 — constructed BEFORE the selection-action bar because
+        # the bar's "清空选择" button wires ``clicked → grid.clearSelection``
+        # and Qt resolves the signal target at connect time, not at emit
+        # time.  Layout insertion still happens below via ``_grid_stack``.
         self.grid = ThumbnailGrid()
         self.grid.item_activated.connect(self._on_item_activated)
         self.grid.selection_changed.connect(self._on_selection_changed)
         self.grid.request_thumb.connect(lambda p: self.thumb_request.emit(p))
-        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.grid.customContextMenuRequested.connect(self._on_context_menu)
+
+        # -- Selection action bar (scope: "当前选中") ---------------------
+        # Hidden at count == 0 so it doesn't claim layout space. All write
+        # ops targeting the current selection live here — delete,
+        # move-to-category, add-to-split, workflow transition, export
+        # subset. This replaces the previous right-click-menu surface as
+        # the primary entry point so discoverability doesn't depend on the
+        # user remembering a hidden menu.
+        self._selection_bar = self._build_selection_bar()
+        right_layout.addWidget(self._selection_bar)
+        # Right-click menu intentionally absent — every write op it used
+        # to carry (delete, move, split, workflow, export subset) is now
+        # a button on the selection action bar so the scope is visible at
+        # a glance instead of hidden behind a right-click.
         self._worker: BatchWorker | None = None
         self._progress: ProgressDialog | None = None
 
@@ -263,49 +269,50 @@ class BrowserView(QWidget):
         from PyQt6.QtWidgets import QStackedWidget
         self._grid_stack = QStackedWidget()
         self._grid_stack.addWidget(self.grid)          # index 0
-        self._empty_hint = CaptionLabel(
-            "未发现匹配的图片\n\n"
-            "请确认数据集目录结构：\n"
-            "  <根目录>/<类别>/images/*.jpg\n"
-            "  <根目录>/<类别>/labels/*.json\n\n"
-            "或尝试调整筛选条件"
-        )
+        # Empty-state copy is set per-render in _refresh_empty_hint
+        # so the user gets distinct messaging for "dataset empty" vs
+        # "filter excluded everything".
+        self._empty_hint = CaptionLabel("")
+        self._empty_hint.setObjectName("browserEmptyHint")
         self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint.setWordWrap(True)
         self._grid_stack.addWidget(self._empty_hint)   # index 1
         right_layout.addWidget(self._grid_stack, 1)
 
-        # 分页栏
-        from PyQt6.QtGui import QIntValidator
-        pager = QHBoxLayout()
-        pager.setSpacing(T.GAP)
-        self.prev_btn = ToolButton(FIF.LEFT_ARROW)
-        self.prev_btn.clicked.connect(self._prev_page)
-        self.next_btn = ToolButton(FIF.RIGHT_ARROW)
-        self.next_btn.clicked.connect(self._next_page)
-        # Plain LineEdit instead of SpinBox: the ▲▼ chevrons ate half the
-        # input box on high page counts (user report: "/ 123 页" clipped
-        # the actual value). Direct typing + Enter/blur commits the jump.
-        self.page_input = LineEdit()
-        self.page_input.setFixedWidth(64)
-        self.page_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._page_validator = QIntValidator(1, 1, self)
-        self.page_input.setValidator(self._page_validator)
-        self.page_input.setText("1")
-        self.page_input.editingFinished.connect(self._on_page_jump)
-        self.page_total_label = CaptionLabel("/ 1")
+        # Footer — infinite-scroll status row.  Renders one of:
+        #   "加载中…" + "已显示 80 / 1,114"   (mid-stream)
+        #   "已全部显示 4,900 张"              (every chunk landed)
+        #   "未发现匹配的图片"                 (filter-empty; same widget)
+        # plus a "回到顶部" shortcut once the user has scrolled past
+        # the first chunk.
+        footer = QHBoxLayout()
+        footer.setSpacing(T.GAP)
         self.count_label = CaptionLabel("")
-        self._pager_prefix = CaptionLabel(i18n.t("pager.prefix"))
-        self._pager_suffix = CaptionLabel(i18n.t("pager.suffix"))
-        pager.addStretch(1)
-        pager.addWidget(self.count_label)
-        pager.addSpacing(T.GAP_LG)
-        pager.addWidget(self.prev_btn)
-        pager.addWidget(self._pager_prefix)
-        pager.addWidget(self.page_input)
-        pager.addWidget(self.page_total_label)
-        pager.addWidget(self._pager_suffix)
-        pager.addWidget(self.next_btn)
-        right_layout.addLayout(pager)
+        self.count_label.setObjectName("browserFooterCount")
+        self._loading_more_label = CaptionLabel("")
+        self._loading_more_label.setObjectName("browserFooterLoading")
+        self._loading_more_label.setVisible(False)
+        self._scroll_top_btn = PushButton(i18n.t("pager.top"))
+        self._scroll_top_btn.setIcon(FIF.UP)
+        self._scroll_top_btn.setFixedHeight(28)
+        self._scroll_top_btn.setToolTip(i18n.t("pager.top"))
+        self._scroll_top_btn.setVisible(False)
+        self._scroll_top_btn.clicked.connect(self._scroll_to_top)
+        footer.addStretch(1)
+        footer.addWidget(self._loading_more_label)
+        footer.addWidget(self.count_label)
+        footer.addSpacing(T.GAP_LG)
+        footer.addWidget(self._scroll_top_btn)
+        right_layout.addLayout(footer)
+
+        # Wire scroll-to-bottom detection now that the grid + scrollbar
+        # exist. SCROLL_LOAD_AHEAD_PX gives us a one-row look-ahead so
+        # the next chunk is materializing before the user hits the
+        # absolute bottom.  ``_load_pending`` debounces against rapid
+        # scroll-event bursts.
+        self._load_pending: bool = False
+        self.grid.verticalScrollBar().valueChanged.connect(
+            self._on_grid_scrolled)
 
         # 缩略图加载进度条
         self._thumb_bar = IndeterminateProgressBar(self, start=False)
@@ -319,11 +326,28 @@ class BrowserView(QWidget):
         self.search.setPlaceholderText(i18n.t("filter.search_placeholder"))
         for mode, chip in self._chips.items():
             chip.setText(i18n.t(self._chip_i18n[mode]))
-        self._multi_btn.setText(i18n.t("filter.multi"))
+        # Recompute selection-bar labels via the usual handler — it sets
+        # count + select-all state from the current selection.
         self._on_selection_changed(self.grid.selected_images())
-        self._delete_btn.setText(i18n.t("filter.delete"))
-        self._pager_prefix.setText(i18n.t("pager.prefix"))
-        self._pager_suffix.setText(i18n.t("pager.suffix"))
+        # Selection action bar static text
+        self._sel_clear_btn.setToolTip(i18n.t("sel.clear"))
+        self._sel_delete_btn.setText(i18n.t("sel.delete"))
+        self._sel_move_btn.setText(i18n.t("sel.move"))
+        self._sel_split_btn.setText(i18n.t("sel.split"))
+        self._sel_workflow_btn.setText(i18n.t("sel.workflow"))
+        self._sel_export_btn.setText(i18n.t("sel.export"))
+        self._sel_export_scope.setText(i18n.t("scope.readonly"))
+        for action, key in zip(self._sel_split_actions, (
+                "sel.split.train", "sel.split.val", "sel.split.test")):
+            action.setText(i18n.t(key))
+        for action, key in zip(self._sel_wf_actions, (
+                "wf.submit_review", "wf.approve",
+                "wf.reject", "wf.mark_ready")):
+            action.setText(i18n.t(key))
+        self._scroll_top_btn.setText(i18n.t("pager.top"))
+        self._scroll_top_btn.setToolTip(i18n.t("pager.top"))
+        # Repaint the grid so the footer + empty-state copy
+        # retranslates against the active language.
         self._show_page()
 
     def set_catalog_tree(self, tree) -> None:
@@ -339,6 +363,17 @@ class BrowserView(QWidget):
 
     def select_category(self, category: str) -> None:
         self._on_category_selected(category)
+
+    def active_category(self) -> str:
+        """Return the currently-filtered category (``""`` = all).
+
+        Read by sibling dialogs (大模型标注向导 / 批量填入区域文本 /
+        导出向导) so that picking "Loose" once in the catalog tree
+        propagates as the default scope through the rest of the
+        workflow — instead of forcing the user to re-pick at every
+        step.
+        """
+        return self._current_category or ""
 
     def rename_category(self, name: str) -> None:
         self._do_rename_category(name)
@@ -367,7 +402,6 @@ class BrowserView(QWidget):
             # Persist as plain string so BrowseState stays JSON-clean
             filter=self._filter_mode.value,
             search=self._search_text,
-            page=self._page,
         )
 
     def restore_state(self, state) -> None:
@@ -380,7 +414,6 @@ class BrowserView(QWidget):
         except ValueError:
             self._filter_mode = FilterMode.ALL
         self._search_text = state.search or ""
-        self._page = state.page or 0
         # Update UI widgets
         self.search.setText(self._search_text)
         for btn in self.chip_group.buttons():
@@ -395,10 +428,11 @@ class BrowserView(QWidget):
                 if item.data(Qt.ItemDataRole.UserRole) == self._current_category:
                     tree.setCurrentRow(i)
                     break
+        # Pagination retired — restoring lands the grid at the top of
+        # the freshly-applied filter. Users who want to resume "where
+        # I was" rely on the queue queue (Review) or the recent-action
+        # log instead.
         self._apply_filter_and_show()
-        # Restore page after filter
-        self._page = state.page or 0
-        self._show_page()
 
     # ---------- 外部接口 ----------
 
@@ -409,9 +443,19 @@ class BrowserView(QWidget):
         (typically ``DatasetBrowserView._on_dataset_changed``) has
         already pushed *dataset* into AppState, so subsequent reads
         via ``self._state.dataset`` see the same object.
+
+        Preserves the active category selection across a rescan so a
+        delete (or other in-place mutation) doesn't snap the user back
+        to "All". Falls back to "All" only when the previously-selected
+        category was itself removed (e.g. last image of "Loose" deleted
+        and the empty folder cleaned up).
         """
-        self._current_category = ""
-        self._page = 0
+        valid_names = {c.name for c in dataset.categories}
+        if self._current_category and self._current_category not in valid_names:
+            # Category was removed by the just-finished operation; bail
+            # back to "All" rather than show an empty page rooted on a
+            # ghost category.
+            self._current_category = ""
         # Derived artifacts (quality / dedup) are cleared by AppState when
         # dataset changes; we just reset the dependent chips visually.
         self._chips[FilterMode.ISSUES].setEnabled(bool(self._state.quality_issue_paths))
@@ -491,7 +535,8 @@ class BrowserView(QWidget):
             q = self._search_text.lower()
             imgs = [i for i in imgs if q in i.path.name.lower()]
         self._filtered = imgs
-        self._page = 0
+        # _show_page resets _visible_count + scrolls to top; no separate
+        # page reset needed.
         self._show_page()
 
     def _filter_by_work_status(self, imgs: list[ImageInfo]) -> list[ImageInfo]:
@@ -537,35 +582,153 @@ class BrowserView(QWidget):
         return result
 
     def _show_page(self) -> None:
+        """Render the first chunk of the active filter result.
+
+        Name is kept for legacy retranslate / save-state callers; this
+        is now the "reset to top + render initial chunk" entry. Use
+        :meth:`_load_more` for incremental appends.
+        """
         total = len(self._filtered)
-        page_count = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-        self._page = max(0, min(self._page, page_count - 1))
-        start = self._page * PAGE_SIZE
-        end = min(start + PAGE_SIZE, total)
-        page_imgs = self._filtered[start:end]
-        self.clear_thumb_queue.emit()  # cancel stale thumbnail requests
-        self._thumb_pending = len(page_imgs)
+        self._visible_count = min(CHUNK_SIZE, total)
+        # A filter / category / search change is a hard reset of the
+        # infinite-scroll state — clear the in-flight indicator and
+        # the debounce gate so a load that was queued under the old
+        # filter doesn't ghost into the new view. The 800ms timer
+        # behind ``_end_load_more`` would eventually clear them too,
+        # but doing it eagerly keeps the footer copy honest.
+        self._load_pending = False
+        self._loading_more_label.setVisible(False)
+        self.clear_thumb_queue.emit()   # cancel stale thumbnail requests
+        first_chunk = self._filtered[:self._visible_count]
+        self._thumb_pending = len(first_chunk)
         if self._thumb_pending > 0:
             self._thumb_bar.show()
             self._thumb_bar.start()
-        self.grid.set_images(page_imgs,
-                             quality_map=self._state.quality_issue_paths)
-
-        # 空状态切换 — stack swap keeps the outer layout stable
-        self._grid_stack.setCurrentIndex(1 if total == 0 else 0)
-
-        # 更新分页控件
-        self._page_validator.setTop(page_count)
-        self.page_input.blockSignals(True)
-        self.page_input.setText(str(self._page + 1))
-        self.page_input.blockSignals(False)
-        self.page_total_label.setText(i18n.t("pager.page_of", n=page_count))
-        self.count_label.setText(
-            i18n.t("pager.total", n=total) if total > 0
-            else i18n.t("pager.empty")
+        self.grid.set_images(
+            first_chunk,
+            quality_map=self._state.quality_issue_paths,
         )
-        self.prev_btn.setEnabled(self._page > 0)
-        self.next_btn.setEnabled(self._page < page_count - 1)
+        # Reset scroll position so a freshly-applied filter shows from
+        # the top, not wherever the previous selection was scrolled to.
+        self.grid.verticalScrollBar().setValue(0)
+
+        # Empty-state swap — keeps the outer layout stable.
+        if total == 0:
+            self._refresh_empty_hint()
+            self._grid_stack.setCurrentIndex(1)
+        else:
+            self._grid_stack.setCurrentIndex(0)
+
+        self._refresh_footer()
+
+    def _refresh_empty_hint(self) -> None:
+        """Pick the right empty-state copy for the current view.
+
+        Two cases:
+          - Dataset itself has zero images → 数据集为空 (no scan / no
+            files / pre-import).
+          - Dataset has images but the active filter / search excluded
+            them all → 当前筛选无结果.
+        """
+        # ``_all_images`` walks the active category; for the
+        # "dataset empty" check we want the truly-global count.
+        ds = self._state.dataset
+        global_total = sum(len(cat.images) for cat in ds.categories) \
+            if ds is not None else 0
+        if global_total == 0:
+            self._empty_hint.setText(i18n.t("pager.empty_dataset"))
+        else:
+            self._empty_hint.setText(i18n.t("pager.empty_filter"))
+
+    def _load_more(self) -> None:
+        """Append the next chunk after a scroll-near-bottom trigger.
+
+        Guarded by ``_load_pending`` against rapid valueChanged bursts
+        from a fast scroll: while a chunk is being appended, further
+        scroll events early-return.  Reset on the same QTimer that
+        hides the loading indicator.
+        """
+        if self._load_pending:
+            return
+        total = len(self._filtered)
+        if self._visible_count >= total:
+            return
+        start = self._visible_count
+        end = min(start + CHUNK_SIZE, total)
+        chunk = self._filtered[start:end]
+        if not chunk:
+            return
+        self._load_pending = True
+        self._loading_more_label.setText(i18n.t("pager.loading_more"))
+        self._loading_more_label.setVisible(True)
+        self._thumb_pending += len(chunk)
+        if self._thumb_pending > 0:
+            self._thumb_bar.show()
+            self._thumb_bar.start()
+        self.grid.append_images(
+            chunk,
+            quality_map=self._state.quality_issue_paths,
+        )
+        self._visible_count = end
+        self._refresh_footer()
+        # Keep the indicator visible long enough that a fast scroll
+        # doesn't make it flash; release the debounce gate at the same
+        # time so the next chunk can fire.
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(LOAD_INDICATOR_HOLD_MS, self._end_load_more)
+
+    def _end_load_more(self) -> None:
+        """Hide the in-flight indicator + release the debounce gate."""
+        self._loading_more_label.setVisible(False)
+        self._load_pending = False
+        # If the user kept scrolling while the indicator was held, the
+        # bottom may have crept back into the trigger window. Re-check
+        # so the next chunk loads automatically without waiting for a
+        # fresh scroll event.
+        sb = self.grid.verticalScrollBar()
+        if sb.maximum() > 0 and sb.value() >= sb.maximum() - max(
+                SCROLL_LOAD_AHEAD_PX, sb.pageStep() // 2):
+            self._load_more()
+
+    def _refresh_footer(self) -> None:
+        """Update count label + scroll-to-top button visibility.
+
+        Three visual states:
+          - 数据集为空 / 当前筛选无结果: empty-state hint card is
+            already covering the grid; the footer count goes blank.
+          - 流程中: "已显示 X / Y" while more chunks remain.
+          - 全量已加载: "已全部显示 Y 张" (terminal state).
+        """
+        total = len(self._filtered)
+        if total == 0:
+            self.count_label.setText("")
+        elif self._visible_count >= total:
+            self.count_label.setText(
+                i18n.t("pager.shown_all", total=total))
+        else:
+            self.count_label.setText(i18n.t(
+                "pager.shown", shown=self._visible_count, total=total))
+        self._scroll_top_btn.setVisible(self._visible_count > CHUNK_SIZE)
+
+    def _on_grid_scrolled(self, value: int) -> None:
+        """Trigger the next chunk load when within SCROLL_LOAD_AHEAD_PX.
+
+        Bound to the grid's verticalScrollBar valueChanged signal.  The
+        debounce gate (``_load_pending``) lives on ``_load_more``; this
+        handler stays as a thin "is the user near the bottom" check.
+        """
+        sb = self.grid.verticalScrollBar()
+        if sb.maximum() <= 0:
+            return
+        # ``value`` is page-relative; pageStep is the visible viewport.
+        # Trigger when the next-chunk look-ahead window has been
+        # entered.  Using max(SCROLL_LOAD_AHEAD_PX, pageStep/2) means
+        # very tall viewports still get a sane pre-load distance.
+        if value >= sb.maximum() - max(SCROLL_LOAD_AHEAD_PX, sb.pageStep() // 2):
+            self._load_more()
+
+    def _scroll_to_top(self) -> None:
+        self.grid.verticalScrollBar().setValue(0)
 
     def _on_category_selected(self, category: str) -> None:
         # Reset filter to "全部" on category switch — users who click a
@@ -647,11 +810,14 @@ class BrowserView(QWidget):
     def _on_selection_changed(self, selected: list[ImageInfo]) -> None:
         n = len(selected)
         total_on_page = self.grid.count()
-        self.selection_label.setText(
-            self.tr("已选 {n} 张").format(n=n) if n else ""
-        )
-        self._delete_btn.setEnabled(n > 0)
-        # Toggle select-all button label + enabled state
+        # Selection action bar is the primary surface for batch writes —
+        # show it only when a selection exists, so the chrome doesn't
+        # claim layout space on every dataset open.
+        self._selection_bar.setVisible(n > 0)
+        if n > 0:
+            self._sel_count_label.setText(i18n.t("sel.count", n=n))
+        # Toggle select-all button label + enabled state (stays on the
+        # filter bar — this is a selection-mode control, not a write op).
         self._select_all_btn.setEnabled(total_on_page > 0)
         if total_on_page > 0 and n >= total_on_page:
             self._select_all_btn.setText(i18n.t("filter.unselect_all"))
@@ -668,113 +834,166 @@ class BrowserView(QWidget):
         else:
             self.grid.selectAll()
 
-    def _on_multi_toggle(self, checked: bool) -> None:
-        """Switch grid between Extended (default, Ctrl/Shift) and Multi (click-toggle).
+    # ---------- Selection action bar ----------
 
-        Extended selection is the desktop convention — click one, Ctrl+click
-        to add, Shift+click for range. Some users expect phone-like toggling
-        (single click selects/unselects without a modifier) so this button
-        flips the grid to MultiSelection while pressed. Clearing on exit
-        avoids a mixed state (half the selection from one mode, half the
-        other) that would confuse the delete confirmation.
+    def _build_selection_bar(self) -> QFrame:
+        """Contextual action bar — visible only when count > 0.
+
+        Exposes every write op targeting the current selection so they're
+        no longer buried in the right-click menu. Layout: count/clear on
+        the left, write actions right-aligned so the buttons sit near the
+        mouse after a rubber-band or ctrl-click gesture.
         """
-        from PyQt6.QtWidgets import QAbstractItemView
-        if checked:
-            self.grid.setSelectionMode(
-                QAbstractItemView.SelectionMode.MultiSelection)
-        else:
-            self.grid.setSelectionMode(
-                QAbstractItemView.SelectionMode.ExtendedSelection)
-            self.grid.clearSelection()
+        bar = QFrame()
+        bar.setObjectName("selectionActionBar")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bar.hide()  # shown on first selection_changed with n > 0
+
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(T.PAD_LG, T.GAP, T.PAD_LG, T.GAP)
+        lay.setSpacing(T.GAP)
+
+        # Count label — BodyLabel (semantic, rule-5 happy) with objectName
+        # so app.qss can tone it down to TEXT_2 + font-weight 500.
+        self._sel_count_label = BodyLabel("")
+        self._sel_count_label.setObjectName("selectionCountLabel")
+        lay.addWidget(self._sel_count_label)
+
+        self._sel_clear_btn = TransparentToolButton(FIF.CLOSE)
+        self._sel_clear_btn.setToolTip(i18n.t("sel.clear"))
+        self._sel_clear_btn.setFixedSize(24, 24)
+        self._sel_clear_btn.clicked.connect(self.grid.clearSelection)
+        lay.addWidget(self._sel_clear_btn)
+
+        lay.addStretch(1)
+
+        self._sel_delete_btn = PushButton(i18n.t("sel.delete"))
+        self._sel_delete_btn.setIcon(FIF.DELETE)
+        self._sel_delete_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._sel_delete_btn.clicked.connect(self._on_delete_clicked)
+        lay.addWidget(self._sel_delete_btn)
+
+        self._sel_move_btn = PushButton(i18n.t("sel.move"))
+        self._sel_move_btn.setIcon(FIF.TAG)
+        self._sel_move_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._sel_move_btn.clicked.connect(self._on_move_clicked)
+        lay.addWidget(self._sel_move_btn)
+
+        # Split picker — Train/Val/Test as a RoundMenu so the bar doesn't
+        # spawn three buttons (tight at 1100px window). We keep Action
+        # refs in a tuple so ``_retranslate`` can swap text on language
+        # change (RoundMenu.addAction returns None, not the action).
+        self._sel_split_btn = DropDownPushButton(FIF.SHARE, i18n.t("sel.split"))
+        self._sel_split_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        split_menu = RoundMenu(parent=self._sel_split_btn)
+        self._sel_split_menu = split_menu
+        self._sel_split_actions = (
+            Action(i18n.t("sel.split.train"),
+                   triggered=lambda: self._emit_add_to_split("train")),
+            Action(i18n.t("sel.split.val"),
+                   triggered=lambda: self._emit_add_to_split("val")),
+            Action(i18n.t("sel.split.test"),
+                   triggered=lambda: self._emit_add_to_split("test")),
+        )
+        for act in self._sel_split_actions:
+            split_menu.addAction(act)
+        self._sel_split_btn.setMenu(split_menu)
+        lay.addWidget(self._sel_split_btn)
+
+        # Workflow transition picker — 4 states from the old right-click menu.
+        self._sel_workflow_btn = DropDownPushButton(FIF.FLAG, i18n.t("sel.workflow"))
+        self._sel_workflow_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        wf_menu = RoundMenu(parent=self._sel_workflow_btn)
+        self._sel_workflow_menu = wf_menu
+        self._sel_wf_actions = (
+            Action(i18n.t("wf.submit_review"),
+                   triggered=lambda: self._emit_workflow("review_pending")),
+            Action(i18n.t("wf.approve"),
+                   triggered=lambda: self._emit_workflow("ready")),
+            Action(i18n.t("wf.reject"),
+                   triggered=lambda: self._emit_workflow("needs_fix")),
+            Action(i18n.t("wf.mark_ready"),
+                   triggered=lambda: self._emit_workflow("ready")),
+        )
+        for act in self._sel_wf_actions:
+            wf_menu.addAction(act)
+        self._sel_workflow_btn.setMenu(wf_menu)
+        lay.addWidget(self._sel_workflow_btn)
+
+        self._sel_export_btn = PushButton(i18n.t("sel.export"))
+        self._sel_export_btn.setIcon(FIF.DOWNLOAD)
+        self._sel_export_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._sel_export_btn.clicked.connect(self._on_export_subset_clicked)
+        lay.addWidget(self._sel_export_btn)
+        # Export is the one selection-bar action that doesn't mutate the
+        # project — flag it explicitly so the user knows the rest do.
+        self._sel_export_scope = ScopeBadge(
+            i18n.t("scope.readonly"), Scope.READONLY)
+        lay.addWidget(self._sel_export_scope)
+
+        return bar
+
+    def _guard_write(self) -> bool:
+        """Gate any selection-bar write against the Phase 2 scan.
+
+        Returns True when the write may proceed, False otherwise (and
+        surfaces an InfoBar). Mirrors the existing behavior formerly
+        embedded in ``_on_delete_clicked`` + ``_on_context_menu`` so we
+        keep one rule: the moment ScanWorker flips ``can_write`` back
+        on, all buttons come alive at the same time.
+        """
+        if self._state.can_write:
+            return True
+        InfoBar.warning(
+            title="数据集仍在加载",
+            content="等后台扫描完成再做批量操作，避免和索引构建产生冲突。",
+            isClosable=True, position=InfoBarPosition.TOP,
+            duration=3000, parent=self.window(),
+        )
+        return False
 
     def _on_delete_clicked(self) -> None:
-        # Same rule as the context menu — no mutations while scan is live.
-        if not self._state.can_write:
-            InfoBar.warning(
-                title="数据集仍在加载",
-                content="等后台扫描完成再删除，避免和索引构建产生冲突。",
-                isClosable=True, position=InfoBarPosition.TOP,
-                duration=3000, parent=self.window(),
-            )
+        if not self._guard_write():
             return
         sel = self.grid.selected_images()
         if sel:
             self._do_delete(sel)
 
+    def _on_move_clicked(self) -> None:
+        if not self._guard_write():
+            return
+        sel = self.grid.selected_images()
+        if sel:
+            self._do_move(sel)
+
+    def _on_export_subset_clicked(self) -> None:
+        if not self._guard_write():
+            return
+        sel = self.grid.selected_images()
+        if sel:
+            self._do_export_subset(sel)
+
+    def _emit_add_to_split(self, bucket: str) -> None:
+        if not self._guard_write():
+            return
+        sel = self.grid.selected_images()
+        if sel:
+            self.add_to_split.emit(bucket, sel)
+
+    def _emit_workflow(self, status: str) -> None:
+        if not self._guard_write():
+            return
+        sel = self.grid.selected_images()
+        if sel:
+            self.batch_status_requested.emit(sel, status)
+
     def _on_item_activated(self, img: ImageInfo) -> None:
         self.image_activated.emit(img, self._filtered)
 
-    def _prev_page(self) -> None:
-        self._page -= 1
-        self._show_page()
-
-    def _next_page(self) -> None:
-        self._page += 1
-        self._show_page()
-
-    def _on_page_jump(self) -> None:
-        txt = self.page_input.text().strip()
-        if not txt:
-            # Blank → restore current page display without jumping.
-            self.page_input.setText(str(self._page + 1))
-            return
-        try:
-            n = int(txt)
-        except ValueError:
-            self.page_input.setText(str(self._page + 1))
-            return
-        # Validator bounds the value, but clamp again defensively in case
-        # the text was set programmatically.
-        n = max(1, min(self._page_validator.top(), n))
-        self._page = n - 1
-        self._show_page()
-
-    # ---------- 右键菜单 / 批量操作 ----------
-
-    def _on_context_menu(self, pos) -> None:
-        sel = self.grid.selected_images()
-        if not sel:
-            return
-        # Quick-open write gate.  Every action in this menu mutates the
-        # filesystem or the workflow store — allowing any of them while
-        # the ScanWorker is still building SampleSet in Phase 2/3 lets a
-        # delete/move/status-flip race with the unify pass and leaves
-        # the in-memory model permanently out of sync with disk.  Show a
-        # single InfoBar and do not pop the menu at all; matches the
-        # DetailView save-gate UX.
-        if not self._state.can_write:
-            InfoBar.warning(
-                title="数据集仍在加载",
-                content="等后台扫描完成再做批量操作，避免和索引构建产生冲突。",
-                isClosable=True, position=InfoBarPosition.TOP,
-                duration=3000, parent=self.window(),
-            )
-            return
-        menu = QMenu(self)
-        menu.addAction(
-            self.tr("已选 {n} 张").format(n=len(sel))
-        ).setEnabled(False)
-        menu.addSeparator()
-        menu.addAction(self.tr("删除 (回收站)"), lambda: self._do_delete(sel))
-        menu.addAction(self.tr("移动到类别…"), lambda: self._do_move(sel))
-        menu.addSeparator()
-        split_menu = menu.addMenu(self.tr("加入手动划分"))
-        split_menu.addAction(self.tr("→ Train"), lambda: self.add_to_split.emit("train", sel))
-        split_menu.addAction(self.tr("→ Val"), lambda: self.add_to_split.emit("val", sel))
-        split_menu.addAction(self.tr("→ Test"), lambda: self.add_to_split.emit("test", sel))
-        # Workflow transitions
-        wf_menu = menu.addMenu(i18n.t("wf.submit_review").split()[0] if i18n.lang() == "zh" else "Workflow")
-        wf_menu.addAction(i18n.t("wf.submit_review"),
-                          lambda: self.batch_status_requested.emit(sel, "review_pending"))
-        wf_menu.addAction(i18n.t("wf.approve"),
-                          lambda: self.batch_status_requested.emit(sel, "ready"))
-        wf_menu.addAction(i18n.t("wf.reject"),
-                          lambda: self.batch_status_requested.emit(sel, "needs_fix"))
-        wf_menu.addAction(i18n.t("wf.mark_ready"),
-                          lambda: self.batch_status_requested.emit(sel, "ready"))
-        menu.addSeparator()
-        menu.addAction(self.tr("导出为子集数据集…"), lambda: self._do_export_subset(sel))
-        menu.exec(self.grid.viewport().mapToGlobal(pos))
+    # ---------- 批量操作 ----------
+    # Entry points are on the selection action bar (_build_selection_bar).
+    # No right-click context menu — hidden surfaces duplicated actions and
+    # let the user lose track of what's reachable at a given scope.
 
     # ---- 各操作 ----
 

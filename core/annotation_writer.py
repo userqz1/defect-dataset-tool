@@ -321,6 +321,63 @@ def read_grounding(image_path: Path) -> list[dict]:
     return []
 
 
+# ---------- Image-level multi-label sidecar ----------
+
+def image_labels_sidecar_path(image_path: Path) -> Path:
+    """Return ``<stem>.labels.json`` next to *image_path*.
+
+    Used for multi-label classification where the image carries a set
+    of class tags but no region geometry.  Picked a separate sidecar
+    rather than packing into LabelMe ``flags`` so projects that aren't
+    LabelMe-based (raw image folders, YOLO-only datasets) still get
+    multi-label support without requiring a LabelMe JSON to exist.
+    """
+    return image_path.with_suffix(".labels.json")
+
+
+def write_image_labels(image_path: Path, labels: list[str]) -> Path:
+    """Persist image-level labels (multi-label set) to a JSON sidecar.
+
+    Schema: ``{"labels": ["foo", "bar", ...]}``.  Empty ``labels`` list
+    deletes the sidecar so a stale one doesn't linger when the user
+    clears all tags.
+
+    Returns the path that was written/deleted.
+    """
+    p = image_labels_sidecar_path(image_path)
+    if not labels:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return p
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps({"labels": list(labels)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return p
+
+
+def read_image_labels(image_path: Path) -> list[str]:
+    """Read multi-label set from sidecar, or return ``[]``.
+
+    Tolerant of malformed JSON / missing keys — workflow status checks
+    must NOT crash on a single bad file in a 4 000-image dataset.
+    """
+    p = image_labels_sidecar_path(image_path)
+    if p.is_file():
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                labels = data.get("labels", [])
+                if isinstance(labels, list):
+                    return [str(s) for s in labels if isinstance(s, (str, int))]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return []
+
+
 # ---------- 内部 ----------
 
 def _image_size(image_path: Path) -> tuple[int, int]:

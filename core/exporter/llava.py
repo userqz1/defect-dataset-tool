@@ -19,6 +19,8 @@ class ExportReport:
     written_images: int = 0
     written_labels: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    grounding_fallback_count: int = 0
+    grounding_dropped_no_bbox: int = 0
 
 
 def export_llava(
@@ -41,4 +43,6 @@ def export_llava(
         written_images=result.written_images,
         written_labels=result.written_labels,
         skipped=result.skipped,
+        grounding_fallback_count=result.grounding_fallback_count,
+        grounding_dropped_no_bbox=result.grounding_dropped_no_bbox,
     )

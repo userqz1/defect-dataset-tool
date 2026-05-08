@@ -100,6 +100,8 @@ class ExportWizardDialog(MessageBoxBase):
     def __init__(self, dataset: Dataset, task_type: TaskType | None = None,
                  manual_counts: tuple[int, int, int] = (0, 0, 0),
                  wf_ready_count: int = 0, wf_total_count: int = 0,
+                 initial_fmt: str = "",
+                 initial_category: str = "",
                  parent=None) -> None:
         super().__init__(parent=parent)
         self._dataset = dataset
@@ -111,12 +113,36 @@ class ExportWizardDialog(MessageBoxBase):
         # used to enable the "manual" radio + show "训练 N · 验证 M · 测试 K".
         self._manual_counts = manual_counts
 
-        self.widget.setMinimumWidth(680)
+        # Wider AND taller — content has 3 numbered sections plus
+        # per-format cards plus category filter plus preview, easily
+        # exceeds MessageBoxBase's default squish-on-overflow height.
+        # The QScrollArea below catches anything we still overflow on
+        # large dataset configurations (10+ cards · 30+ categories).
+        self.widget.setMinimumSize(740, 720)
+
+        # All wizard content lives inside a scrollable container — when
+        # the dataset has many categories or the screen is short, the
+        # outer dialog box used to silently overlap rows on top of each
+        # other.  A scroll area gives Qt a single tall viewport to lay
+        # the rows out into and the user just scrolls.
+        _content_widget = QWidget()
+        self._content_lay = QVBoxLayout(_content_widget)
+        self._content_lay.setContentsMargins(0, 0, 0, 0)
+        self._content_lay.setSpacing(T.GAP)
+
+        _scroll = QScrollArea()
+        _scroll.setObjectName("exportWizardScroll")
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        _scroll.setWidget(_content_widget)
+        self.viewLayout.addWidget(_scroll)
 
         # ===== Step 1: Format selection =====
-        self.viewLayout.addWidget(SubtitleLabel("导出向导"))
+        self._content_lay.addWidget(SubtitleLabel("导出向导"))
 
-        self.viewLayout.addWidget(StrongBodyLabel("① 选择导出格式"))
+        self._content_lay.addWidget(StrongBodyLabel("① 选择导出格式"))
 
         cards_grid = QGridLayout()
         cards_grid.setSpacing(T.GAP)
@@ -126,7 +152,7 @@ class ExportWizardDialog(MessageBoxBase):
             card.mousePressEvent = lambda e, k=fmt["key"]: self._select_format(k)
             self._format_cards[fmt["key"]] = card
             cards_grid.addWidget(card, i // 2, i % 2)
-        self.viewLayout.addLayout(cards_grid)
+        self._content_lay.addLayout(cards_grid)
 
         # Filter by task type — Schema-driven (v1.2 §5.5)
         if task_type:
@@ -151,16 +177,73 @@ class ExportWizardDialog(MessageBoxBase):
         self._readiness_pills_row.addStretch(1)
         ready_lay.addLayout(self._readiness_pills_row)
 
-        self.viewLayout.addWidget(self._readiness_frame)
+        self._content_lay.addWidget(self._readiness_frame)
 
         # ===== Step 2: Parameters =====
-        self.viewLayout.addWidget(StrongBodyLabel("② 配置参数"))
+        self._content_lay.addWidget(StrongBodyLabel("② 配置参数"))
 
         param_frame = QFrame()
         param_frame.setObjectName("chartFrame")
         p_lay = QVBoxLayout(param_frame)
         p_lay.setContentsMargins(T.PAD_XL, T.PAD_LG, T.PAD_XL, T.PAD_LG)
         p_lay.setSpacing(T.GAP)
+
+        # Category filter — "只导出某几个类目" (e.g. only Loose for VLM
+        # grounding training).  Hidden when the dataset has 0 or 1
+        # categories because there's nothing meaningful to pick.
+        #
+        # Layout note: the checkbox grid lives inside an explicit QFrame
+        # container (not a bare QGridLayout addLayout'd into p_lay).
+        # Bare nested layouts intermittently fail to report their full
+        # sizeHint to the parent QVBoxLayout — neighbour rows then
+        # render on top of the grid instead of below it.  The QFrame
+        # wrapper forces a real geometry contract.  Internal QScrollArea
+        # caps the visible height so 30+-category datasets stay usable.
+        self._cat_checks: dict[str, CheckBox] = {}
+        cat_names = [c.name for c in dataset.categories]
+        if len(cat_names) >= 2:
+            cat_header_row = QHBoxLayout()
+            cat_header_row.setSpacing(T.GAP)
+            cat_header_row.addWidget(BodyLabel("类目"))
+            cat_header_row.addStretch(1)
+            cat_all_btn = PushButton("全选")
+            cat_all_btn.setFixedHeight(28)
+            cat_all_btn.clicked.connect(lambda: self._set_all_categories(True))
+            cat_header_row.addWidget(cat_all_btn)
+            cat_none_btn = PushButton("反选")
+            cat_none_btn.setFixedHeight(28)
+            cat_none_btn.clicked.connect(self._invert_categories)
+            cat_header_row.addWidget(cat_none_btn)
+            p_lay.addLayout(cat_header_row)
+
+            cat_container = QFrame()
+            cat_grid = QGridLayout(cat_container)
+            cat_grid.setContentsMargins(0, 0, 0, 0)
+            cat_grid.setSpacing(T.GAP)
+            cols = 4
+            # When the caller passed initial_category="Loose", only
+            # that one starts checked — saves the user from clicking
+            # 反选 + clicking Loose every single time they came from
+            # the catalog tree with Loose already active.  Empty hint
+            # falls back to "all checked".
+            preselect_one = initial_category if initial_category in cat_names else ""
+            for i, name in enumerate(cat_names):
+                chk = CheckBox(name)
+                chk.setChecked(name == preselect_one if preselect_one else True)
+                chk.toggled.connect(self._update_preview)
+                self._cat_checks[name] = chk
+                cat_grid.addWidget(chk, i // cols, i % cols)
+
+            cat_scroll = QScrollArea()
+            cat_scroll.setObjectName("categoryFilterScroll")
+            cat_scroll.setWidgetResizable(True)
+            cat_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            cat_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            # Cap at ~3 rows of checkboxes; any extra scrolls vertically.
+            cat_scroll.setMaximumHeight(108)
+            cat_scroll.setWidget(cat_container)
+            p_lay.addWidget(cat_scroll)
 
         # Split mode — ratio (auto) vs manual (right-click 加入手动划分 result)
         mode_row = QHBoxLayout()
@@ -238,7 +321,7 @@ class ExportWizardDialog(MessageBoxBase):
 
         p_lay.addWidget(self._ratio_widget)
 
-        self._copy_chk = CheckBox("复���图片到导出目录")
+        self._copy_chk = CheckBox("复制图片到导出目录")
         self._copy_chk.setChecked(True)
         p_lay.addWidget(self._copy_chk)
 
@@ -272,38 +355,48 @@ class ExportWizardDialog(MessageBoxBase):
                         self._update_preview())
         )
 
-        # VLM question (review #8) — shown only for schemas whose options_class
-        # declares a ``question`` field (ShareGPT / LLaVA / Swift). For CV
-        # formats the row stays hidden so the form doesn't balloon.
+        # VLM question — the user-role text in each training sample
+        # (paired with the assistant's grounding/caption answer).
+        # Shown only for schemas whose options_class declares a
+        # ``question`` field (ShareGPT / LLaVA / Swift); CV formats
+        # hide it so the form doesn't balloon.
         self._question_row_widget = QFrame()
         q_row = QHBoxLayout(self._question_row_widget)
         q_row.setContentsMargins(0, 0, 0, 0)
         q_row.setSpacing(T.GAP)
-        q_row.addWidget(BodyLabel("Q&A 问题"))
+        q_row.addWidget(BodyLabel("用户提问"))
         from qfluentwidgets import LineEdit
         self._question_edit = LineEdit()
-        self._question_edit.setPlaceholderText("留空则用 Schema 默认问题")
+        self._question_edit.setPlaceholderText(
+            "训练时用户对模型说的话 (留空用默认: 请描述这张图片中的内容。)"
+        )
         q_row.addWidget(self._question_edit, 1)
         p_lay.addWidget(self._question_row_widget)
         self._question_row_widget.hide()  # toggled in _update_preview
 
-        # Output directory
+        # Output directory — promoted to a primary action row.  The
+        # "开始导出" button stays disabled until a directory is chosen,
+        # so this picker is effectively the gate.  Using
+        # PrimaryPushButton + a wider hit area + dedicated row makes
+        # the gate visible (review: users were missing the small
+        # "选择" button squeezed into a row of mixed controls).
         dir_row = QHBoxLayout()
         dir_row.setSpacing(T.GAP)
         dir_row.addWidget(BodyLabel("输出目录"))
-        self._dir_label = CaptionLabel("未选择")
+        self._dir_label = CaptionLabel("未选择 — 点右侧选择导出目录")
         dir_row.addWidget(self._dir_label, 1)
-        dir_btn = PushButton("选择")
-        dir_btn.setIcon(FIF.FOLDER)
-        dir_btn.setFixedWidth(80)
-        dir_btn.clicked.connect(self._pick_dir)
-        dir_row.addWidget(dir_btn)
+        self._dir_btn = PrimaryPushButton("选择导出目录…")
+        self._dir_btn.setIcon(FIF.FOLDER)
+        self._dir_btn.setMinimumWidth(180)
+        self._dir_btn.setFixedHeight(32)
+        self._dir_btn.clicked.connect(self._pick_dir)
+        dir_row.addWidget(self._dir_btn)
         p_lay.addLayout(dir_row)
 
-        self.viewLayout.addWidget(param_frame)
+        self._content_lay.addWidget(param_frame)
 
         # ===== Step 3: Preview + Execute =====
-        self.viewLayout.addWidget(StrongBodyLabel("③ 预览"))
+        self._content_lay.addWidget(StrongBodyLabel("③ 预览"))
 
         preview_frame = QFrame()
         preview_frame.setObjectName("chartFrame")
@@ -325,18 +418,24 @@ class ExportWizardDialog(MessageBoxBase):
         self._structure.setWordWrap(True)
         pv_lay.addWidget(self._structure)
 
-        self.viewLayout.addWidget(preview_frame)
+        self._content_lay.addWidget(preview_frame)
 
         # Buttons
         self.yesButton.setText("开始导出")
         self.cancelButton.setText("取消")
         self.yesButton.setEnabled(False)
 
-        # Initial selection — first visible schema (task_type may hide YOLO)
-        initial = next(
-            (k for k, c in self._format_cards.items() if c.isVisible()),
-            next(iter(self._format_cards), "YOLO"),
-        )
+        # Initial selection — caller-provided hint takes precedence
+        # (e.g. LlmDataCard already asked the user to pick ms-swift),
+        # otherwise fall back to the first visible card for this task
+        # type.  Match is case-insensitive AND aliases the LLM card's
+        # short keys (``swift`` → ``Swift``, ``caption_jsonl`` → ``JSONL``).
+        initial = self._resolve_format_hint(initial_fmt)
+        if not initial:
+            initial = next(
+                (k for k, c in self._format_cards.items() if c.isVisible()),
+                next(iter(self._format_cards), "YOLO"),
+            )
         self._select_format(initial)
         self._update_preview()
 
@@ -344,6 +443,51 @@ class ExportWizardDialog(MessageBoxBase):
         self._train.valueChanged.connect(self._update_preview)
         self._val.valueChanged.connect(self._update_preview)
         self._test.valueChanged.connect(self._update_preview)
+
+    # ---------- Format hint ----------
+
+    def _resolve_format_hint(self, hint: str) -> str:
+        """Map a caller-supplied format hint to a registered + visible
+        Schema key.  Returns ``""`` when no match.
+
+        Accepts case-insensitive aliases so callers like LlmDataCard
+        (which speaks ``swift`` / ``llava`` / ``sharegpt`` /
+        ``caption_jsonl``) don't have to know the canonical Schema
+        keys (``Swift`` / ``LLaVA`` / ``ShareGPT`` / ``JSONL``).
+        """
+        if not hint:
+            return ""
+        # caption_jsonl is a use-case alias for the JSONL schema —
+        # resolve it before the generic case fold.
+        h = hint.strip().lower()
+        if h == "caption_jsonl":
+            h = "jsonl"
+        for key, card in self._format_cards.items():
+            if key.lower() == h and card.isVisible():
+                return key
+        return ""
+
+    # ---------- Category filter ----------
+
+    def _selected_categories(self) -> list[str]:
+        """Return names of currently-checked categories.
+
+        Empty list means the row was never built (single-category
+        dataset) — callers should treat that as "no filter, export
+        all".  When the row exists but the user unchecked everything
+        we return the empty list too; the export pipeline guards
+        against that with an info bar before starting.
+        """
+        return [name for name, chk in self._cat_checks.items()
+                if chk.isChecked()]
+
+    def _set_all_categories(self, checked: bool) -> None:
+        for chk in self._cat_checks.values():
+            chk.setChecked(checked)
+
+    def _invert_categories(self) -> None:
+        for chk in self._cat_checks.values():
+            chk.setChecked(not chk.isChecked())
 
     # ---------- Format selection ----------
 
@@ -366,26 +510,52 @@ class ExportWizardDialog(MessageBoxBase):
         if len(text) > 50:
             text = "..." + text[-47:]
         self._dir_label.setText(text)
+        # Once a dir is locked in, the button switches to "更改…" so
+        # the row stops shouting "I'm the gate".  The 开始导出 CTA
+        # below now becomes the next obvious action.
+        self._dir_btn.setText("更改…")
         self.yesButton.setEnabled(True)
 
     # ---------- Preview ----------
 
     def _update_preview(self) -> None:
+        # Category filter shrinks the working set before split math.
+        # Empty selected list (everything unchecked) reads as 0 — the
+        # preview just says 0 / 0 / 0 and the export pipeline rejects
+        # the run with an info bar.
+        sel = set(self._selected_categories())
+        if self._cat_checks and sel:
+            n_total = sum(c.image_count for c in self._dataset.categories
+                          if c.name in sel)
+            n_cats = len(sel)
+        elif self._cat_checks and not sel:
+            n_total = 0
+            n_cats = 0
+        else:
+            n_total = sum(c.image_count for c in self._dataset.categories)
+            n_cats = len(self._dataset.categories)
+
+        # Top-line summary mirrors the filter state too — without this
+        # the user kept seeing "12 个类别" even after unchecking all but
+        # Loose (review feedback).
+        self._summary.setText(
+            f"共 {n_total:,} 张图片 · {n_cats:,} 个类别"
+        )
+
         if self._mode_manual_rb.isChecked():
             n_tr, n_va, n_te = self._manual_counts
             self._split_preview.setText(
                 f"手动 · 训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
             )
         else:
-            n = sum(c.image_count for c in self._dataset.categories)
             tr, va, te = self._train.value(), self._val.value(), self._test.value()
             s = tr + va + te
             if s > 0:
-                n_tr = int(round(n * tr / s))
-                n_va = int(round(n * va / s))
-                n_te = n - n_tr - n_va
+                n_tr = int(round(n_total * tr / s))
+                n_va = int(round(n_total * va / s))
+                n_te = n_total - n_tr - n_va
             else:
-                n_tr, n_va, n_te = n, 0, 0
+                n_tr, n_va, n_te = n_total, 0, 0
             self._split_preview.setText(
                 f"训练 {n_tr} · 验证 {n_va} · 测试 {n_te}"
             )
@@ -446,6 +616,14 @@ class ExportWizardDialog(MessageBoxBase):
     def export_options(self) -> dict:
         """Return the configured export parameters."""
         seed_val = self._seed.value()
+        # Category filter — see ``_selected_categories`` for empty-list
+        # semantics.  ``None`` here means "row not built (single-category
+        # dataset)" which downstream treats as no-op.  Empty list means
+        # "user unchecked everything" which the controller rejects.
+        if self._cat_checks:
+            categories: list[str] | None = self._selected_categories()
+        else:
+            categories = None
         return {
             "format": self._selected_fmt,
             "out_dir": self._out_dir,
@@ -461,4 +639,6 @@ class ExportWizardDialog(MessageBoxBase):
             "question": self._question_edit.text().strip(),
             # Workflow scope: "all" or "ready_only"
             "export_scope": "ready_only" if self._scope_ready_rb.isChecked() else "all",
+            # None = no filter (single-category dataset); list = filter to those names.
+            "categories": categories,
         }

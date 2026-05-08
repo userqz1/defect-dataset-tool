@@ -5,6 +5,7 @@ layout and widget assembly.
 """
 from __future__ import annotations
 
+import json
 import logging
 from itertools import chain
 from typing import TYPE_CHECKING
@@ -19,7 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class BrowserToolController:
-    """Dispatches tool-sidebar clicks to core operations."""
+    """Executes dataset-wide operations triggered by the stage hubs.
+
+    Hubs (``ProjectHub`` / ``ReviewHub``) and the ``DatasetBar`` emit
+    zero-arg "requested" signals; the shell wires each to a ``run_*``
+    wrapper here.  There is no string-keyed dispatch anymore — every
+    entry point is a typed method so callers get compile-time
+    verification that the handler exists.
+    """
 
     def __init__(
         self,
@@ -31,11 +39,6 @@ class BrowserToolController:
         self._export_worker = None
 
     # -- Public API --
-
-    def dispatch(self, kind: str) -> None:
-        handler = self._HANDLERS.get(kind)
-        if handler is not None:
-            handler(self)
 
     def refresh_undo_state(self) -> None:
         self._session.refresh_undo_state()
@@ -50,6 +53,71 @@ class BrowserToolController:
         if self._export_worker is not None:
             self._export_worker.quit()
             self._export_worker.wait(3000)
+
+    # -- Run handlers (called by DatasetBar / stage hubs) --
+
+    # DatasetBar — global toolbar actions
+    def run_refresh(self) -> None:
+        self._session.refresh()
+
+    def run_undo(self) -> None:
+        self._on_undo()
+
+    # ProjectHub — format center
+    def run_import_annot(self) -> None:
+        self._on_import_annot()
+
+    def run_convert_annot(self) -> None:
+        self._on_convert_annot()
+
+    def run_migrate_format(self) -> None:
+        self._on_migrate_format()
+
+    # ProjectHub — processing (batch image ops on the loaded dataset)
+    def run_resize(self) -> None:
+        self._on_resize()
+
+    def run_crop(self) -> None:
+        self._on_crop()
+
+    def run_rotate(self) -> None:
+        self._on_rotate()
+
+    def run_flip(self) -> None:
+        self._on_flip()
+
+    def run_convert(self) -> None:
+        self._on_convert()
+
+    def run_augment(self) -> None:
+        self._on_augment()
+
+    def run_predict(self) -> None:
+        self._on_predict()
+
+    # ProjectHub — output & records
+    def run_export(self, initial_fmt: str = "") -> None:
+        """Open the export wizard.
+
+        ``initial_fmt`` (optional) preselects a format card — used when
+        the trigger is the LlmDataCard which already asked the user to
+        pick LLaVA / ShareGPT / Swift / Caption JSONL.  Empty string
+        falls back to "first visible card for the current task type".
+        """
+        self._on_export(initial_fmt)
+
+    def run_history(self) -> None:
+        self._on_history()
+
+    # ReviewHub
+    def run_quality(self) -> None:
+        self._on_quality_check()
+
+    def run_dedup(self) -> None:
+        self._on_dedup()
+
+    def run_stats(self) -> None:
+        self._on_stats()
 
     # -- Helpers --
 
@@ -68,7 +136,7 @@ class BrowserToolController:
 
     # -- Tool handlers --
 
-    def _on_export(self) -> None:
+    def _on_export(self, initial_fmt: str = "") -> None:
         ds = self._rt.state.dataset
         if ds is None:
             return
@@ -89,31 +157,124 @@ class BrowserToolController:
             wf_ready = wf_summary.ready + wf_summary.exported
             wf_total = wf_summary.total
 
+        # Carry the catalog tree's current category through as the
+        # default scope so users coming from "I'm working on Loose"
+        # don't have to reselect Loose from a 12-checkbox grid.
+        try:
+            initial_category = self._rt.browser.active_category()
+        except AttributeError:
+            initial_category = ""
+
         from gui.dialogs.export_wizard import ExportWizardDialog
         dlg = ExportWizardDialog(ds, task_type,
                                   manual_counts=manual_counts,
                                   wf_ready_count=wf_ready,
                                   wf_total_count=wf_total,
+                                  initial_fmt=initial_fmt,
+                                  initial_category=initial_category,
                                   parent=self._window())
         if not dlg.exec():
             return
         opts = dlg.export_options()
         if opts["out_dir"] is None:
             return
+        # Reject "all categories unchecked" before any worker spins up.
+        # ``categories=None`` means the wizard didn't show the row
+        # (single-category dataset) — that's fine.  ``[]`` means the
+        # user actively unchecked everything — refuse.
+        if opts.get("categories") == []:
+            InfoBar.warning(
+                "未选类目", "请至少勾选一个类目",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
         self._run_export(ds, opts)
 
     def _run_export(self, dataset, opts: dict) -> None:
-        if self._export_worker is not None and self._export_worker.isRunning():
-            return
+        # Guard: a previous worker may have completed and had its
+        # underlying QObject destroyed by Qt (deleteLater) while the
+        # Python ``self._export_worker`` reference still points at the
+        # dead wrapper.  Calling ``isRunning()`` on a deleted wrapper
+        # raises ``RuntimeError: wrapped C/C++ object ... has been
+        # deleted``.  Treat any RuntimeError there as "no live
+        # worker" and clear the stale ref so the new run can start.
+        if self._export_worker is not None:
+            try:
+                if self._export_worker.isRunning():
+                    return
+            except RuntimeError:
+                self._export_worker = None
+
+        # --- Category filter (applies to BOTH paths) ---
+        # When a non-None list is given, restrict the dataset (and the
+        # SampleSet, downstream) to only those categories.  Done HERE,
+        # before path selection, so the unified and pipeline branches
+        # see consistent input.  ``None`` short-circuits — single-
+        # category datasets never see the row in the wizard.
+        cat_filter = opts.get("categories")
+        if cat_filter is not None:
+            dataset = self._filter_dataset_by_categories(dataset, cat_filter)
 
         # Unified model path: only when SampleSet is READY (authoritative).
         # STALE or UNAVAILABLE → fall back to pipeline (re-parse from disk).
         from gui.app_state import SampleSetStatus
         ss = self._rt.state.sample_set
         if ss is not None and self._rt.state.sample_set_ready:
+            if cat_filter is not None:
+                ss = self._filter_sampleset_by_categories(ss, cat_filter)
             self._run_export_unified(dataset, ss, opts)
             return
         self._run_export_pipeline(dataset, opts)
+
+    @staticmethod
+    def _filter_dataset_by_categories(dataset, names: list[str]):
+        """Return a shallow-filtered Dataset containing only the named
+        categories.  Counts are recomputed from kept categories so the
+        downstream splitter / preview / pipeline see a self-consistent
+        snapshot.  The original Dataset is never mutated.
+        """
+        from core.models import Dataset
+        keep = set(names)
+        kept_cats = [c for c in dataset.categories if c.name in keep]
+        return Dataset(
+            name=dataset.name,
+            root_path=dataset.root_path,
+            categories=kept_cats,
+            total_images=sum(c.image_count for c in kept_cats),
+            total_annotations=sum(c.label_count for c in kept_cats),
+            layout=dataset.layout,
+            fingerprint="",  # filtered view — invalidate fingerprint
+        )
+
+    @staticmethod
+    def _filter_sampleset_by_categories(sample_set, names: list[str]):
+        """Return a SampleSet containing only samples whose ``category``
+        is in *names*.  Original is not mutated."""
+        from core.unified import SampleSet
+        keep = set(names)
+        return SampleSet(samples=[s for s in sample_set.samples
+                                  if s.category in keep])
+
+    @staticmethod
+    def _wrap_export_out_dir(picked_dir, fmt: str):
+        """Wrap the user-picked directory in a self-contained subfolder.
+
+        Why: format writers spray ``<out>/images/...`` AND
+        ``<out>/swift_train.jsonl`` (etc.) into ``out``.  When the user
+        picked their Desktop, the JSONLs ended up loose next to .lnk
+        files and the images folder ended up alongside.  Forcing a
+        subfolder named ``<format>_<timestamp>`` keeps every artifact
+        of one export in one bag the user can move / delete / archive
+        atomically.
+        """
+        import datetime
+        from pathlib import Path
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = (fmt or "export").lower().replace(" ", "_")
+        target = Path(picked_dir) / f"{slug}_{ts}"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
     def _run_export_unified(self, dataset, sample_set, opts: dict) -> None:
         """Export via format_out (unified SampleSet path)."""
@@ -122,7 +283,7 @@ class BrowserToolController:
         from core.splitter import SplitOptions, split_dataset
         from core.unified import SampleSet as _SS
 
-        out_dir = opts["out_dir"]
+        out_dir = self._wrap_export_out_dir(opts["out_dir"], opts["format"])
         fmt = opts["format"]
         extra = {}
         q = opts.get("question") or ""
@@ -234,7 +395,7 @@ class BrowserToolController:
             )
             return
 
-        out_dir = opts["out_dir"]
+        out_dir = self._wrap_export_out_dir(opts["out_dir"], opts["format"])
         extra = {}
         q = opts.get("question") or ""
         if q:
@@ -321,6 +482,24 @@ class BrowserToolController:
         self._export_worker = worker
 
     def _on_undo(self) -> None:
+        # While the user is on DetailView, the local shape-edit stack
+        # takes priority over the dataset-level history. This is the
+        # only path that can revert a shape delete — history.jsonl
+        # only knows about file-level metadata ops.
+        rt = self._rt
+        if (rt.browser_stack is not None
+                and rt.browser_stack.currentWidget() is rt.detail
+                and rt.detail.can_undo()):
+            label = rt.detail.undo()
+            if label:
+                InfoBar.success(
+                    "撤销成功", label,
+                    parent=self._window(), duration=2500,
+                    position=InfoBarPosition.TOP,
+                )
+            self._session.refresh_undo_state()
+            return
+
         ds = self._rt.state.dataset
         if ds is None:
             return
@@ -1054,10 +1233,14 @@ class BrowserToolController:
         skipped = 0
 
         if fmt == "vlm_jsonl":
-            # VLM JSONL: read into SampleSet, match by filename
+            # VLM JSONL: read into SampleSet, match by filename, mutate
+            # the live SampleSet IN-MEMORY *and* write sidecars to disk
+            # so the import survives an app restart.
             from core.format_in import load_vlm_jsonl
+            from core.annotation_writer import (
+                write_caption, write_conversations, write_grounding,
+            )
             ss = load_vlm_jsonl(_P(source), progress_cb=progress_cb)
-            # Store VLM data as metadata for now — merge into SampleSet
             current_ss = self._rt.state.sample_set
             if current_ss is not None:
                 stem_idx = {s.image_path.stem: s for s in current_ss.samples}
@@ -1066,13 +1249,121 @@ class BrowserToolController:
                     if existing is None:
                         skipped += 1
                         continue
-                    if not overwrite and (existing.caption or existing.conversations):
+                    if not overwrite and (
+                        existing.caption or existing.conversations
+                        or existing.grounding
+                    ):
                         skipped += 1
                         continue
+                    # In-memory update
                     existing.caption = new_s.caption
                     existing.conversations = new_s.conversations
                     existing.grounding = new_s.grounding
+                    # Disk write (best-effort — partial failure doesn't
+                    # abort the batch; the next save attempt resyncs).
+                    try:
+                        if existing.caption:
+                            write_caption(existing.image_path, existing.caption)
+                        if existing.conversations:
+                            write_conversations(
+                                existing.image_path, existing.conversations)
+                        if existing.grounding:
+                            write_grounding(
+                                existing.image_path, existing.grounding)
+                    except OSError:
+                        logger.exception(
+                            "VLM sidecar write failed for %s",
+                            existing.image_path)
                     imported += 1
+            # Re-broadcast SampleSet so LlmDataCard counts refresh
+            # immediately after import without needing a rescan.
+            self._rt.state.notify_sample_set_mutated()
+            return (imported, skipped)
+
+        if fmt in ("caption_sidecar", "conversations_sidecar",
+                   "image_labels_sidecar"):
+            # Folder-of-sidecars import: read each <stem>.<ext> in the
+            # source dir, match by stem to existing samples, update
+            # in-memory + persist via the sidecar writer (idempotent).
+            from core.annotation_writer import (
+                read_caption, read_conversations, read_image_labels,
+                write_caption, write_conversations, write_image_labels,
+            )
+            current_ss = self._rt.state.sample_set
+            if current_ss is None:
+                return (0, 0)
+            stem_idx = {s.image_path.stem: s for s in current_ss.samples}
+            source_dir = _P(source)
+            if fmt == "caption_sidecar":
+                ext = ".txt"
+                read_fn = read_caption
+                attr = "caption"
+                write_fn = write_caption
+            elif fmt == "conversations_sidecar":
+                ext = ".conversations.json"
+                read_fn = read_conversations
+                attr = "conversations"
+                write_fn = write_conversations
+            else:
+                ext = ".labels.json"
+                read_fn = read_image_labels
+                attr = "image_labels"
+                write_fn = write_image_labels
+            files = [p for p in source_dir.iterdir() if p.is_file()
+                     and p.name.lower().endswith(ext)]
+            total = len(files)
+            for i, src_file in enumerate(files):
+                if progress_cb:
+                    progress_cb(i, total, src_file.name)
+                # Strip the multi-suffix (e.g. .conversations.json → stem)
+                stem = src_file.name[: -len(ext)]
+                target = stem_idx.get(stem)
+                if target is None:
+                    skipped += 1
+                    continue
+                existing_value = getattr(target, attr, None)
+                if not overwrite and existing_value:
+                    skipped += 1
+                    continue
+                # Read via the sidecar reader (which already handles the
+                # source-file path layout) — but here we want to read
+                # from THIS source_dir, not next to the image.  Read raw
+                # and parse manually to keep things simple.
+                try:
+                    if fmt == "caption_sidecar":
+                        new_value = src_file.read_text(encoding="utf-8").strip()
+                    else:
+                        import json as _json
+                        raw = _json.loads(src_file.read_text(encoding="utf-8"))
+                        if fmt == "conversations_sidecar" and isinstance(raw, list):
+                            new_value = [
+                                d for d in raw
+                                if isinstance(d, dict) and "from" in d and "value" in d
+                            ]
+                        elif fmt == "image_labels_sidecar" and isinstance(raw, dict):
+                            lst = raw.get("labels", [])
+                            new_value = [str(s) for s in lst
+                                         if isinstance(s, (str, int))]
+                        else:
+                            skipped += 1
+                            continue
+                except (OSError, json.JSONDecodeError):
+                    skipped += 1
+                    continue
+                if not new_value:
+                    skipped += 1
+                    continue
+                # In-memory + disk
+                setattr(target, attr, new_value)
+                try:
+                    write_fn(target.image_path, new_value)
+                except OSError:
+                    logger.exception(
+                        "sidecar write failed for %s", target.image_path)
+                imported += 1
+            if progress_cb:
+                progress_cb(total, total, "")
+            self._rt.state.notify_sample_set_mutated()
             return (imported, skipped)
 
         if fmt == "coco":
@@ -1278,17 +1569,6 @@ class BrowserToolController:
 
     # -- Migrate project annotation format --
 
-    def dispatch_migrate_format(self, target_fmt: str) -> None:
-        """Public entry from settings popup — skip the dialog, go straight
-        to migration with the given *target_fmt*."""
-        ds = self._rt.state.dataset
-        project = self._rt.state.project
-        if ds is None or project is None:
-            return
-        if target_fmt == project.annotation_format:
-            return
-        self._run_migrate(ds, project, target_fmt, validate=False)
-
     def _on_migrate_format(self) -> None:
         ds = self._rt.state.dataset
         project = self._rt.state.project
@@ -1365,17 +1645,6 @@ class BrowserToolController:
         BatchRunner(self._rt.shell, "格式迁移").run(
             task=task, on_done=handle)
 
-    # -- Inbox handler --
-
-    def _on_inbox(self) -> None:
-        """Toggle the batch list panel via chrome controller."""
-        from gui.controllers.browser_chrome_controller import BrowserChromeController
-        # Access via the shell's chrome controller
-        shell = self._rt.shell
-        chrome = getattr(shell, "_chrome", None)
-        if chrome is not None:
-            chrome.toggle_batch_list()
-
     def commit_batch(self, batch_id: str) -> None:
         """Commit inbox batch items into a category chosen by the user."""
         wf = self._rt.state.workflow
@@ -1429,7 +1698,7 @@ class BrowserToolController:
             if chrome is not None:
                 chrome.refresh_batch_list()
 
-        BatchRunner(self._rt.shell, "提交收件箱").run(
+        BatchRunner(self._rt.shell, "提交新数据").run(
             task=task, on_done=handle)
 
     # -- Incremental SampleSet/Dataset update --
@@ -1538,25 +1807,3 @@ class BrowserToolController:
         except Exception:
             logger.exception("incremental move failed, falling back to rescan")
             self._session.rescan(force=True)
-
-    # -- Dispatch table (at class bottom so all methods are defined) --
-    _HANDLERS: dict[str, callable] = {
-        "refresh": lambda self: self._session.refresh(),
-        "undo": _on_undo,
-        "quality": _on_quality_check,
-        "dedup": _on_dedup,
-        "resize": _on_resize,
-        "crop": _on_crop,
-        "rotate": _on_rotate,
-        "flip": _on_flip,
-        "convert": _on_convert,
-        "augment": _on_augment,
-        "predict": _on_predict,
-        "import_annot": _on_import_annot,
-        "convert_annot": _on_convert_annot,
-        "migrate_format": _on_migrate_format,
-        "export": _on_export,
-        "inbox": _on_inbox,
-        "history": _on_history,
-        "stats": _on_stats,
-    }

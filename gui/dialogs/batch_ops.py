@@ -241,7 +241,9 @@ class AugmentDialog(_BatchOpBase):
         out_row.addWidget(BodyLabel("输出目录"))
         self._dir_label = CaptionLabel("未选择", self)
         out_row.addWidget(self._dir_label, 1)
-        pick = PushButton("选择", self); pick.setFixedWidth(70)
+        # No setFixedWidth — let the button shrink-wrap its label so
+        # zh "选择" and en "Choose" both fit (CLAUDE.md gotcha).
+        pick = PushButton("选择", self)
         pick.clicked.connect(self._pick_dir)
         out_row.addWidget(pick)
         self.viewLayout.addLayout(out_row)

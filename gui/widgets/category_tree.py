@@ -124,8 +124,12 @@ class _CategoryDelegate(QStyledItemDelegate):
         painter.setPen(QColor(T.TEXT))
         fm_name = QFontMetrics(name_font)
         elided = fm_name.elidedText(name, Qt.TextElideMode.ElideMiddle, info_w)
+        # Use the actual font height instead of a hardcoded 18 — CJK
+        # glyphs at point-size 9-10 typically render 16-20px tall and
+        # descenders ("Loose下方有勾") were getting clipped at exactly
+        # 18.  fm_name.height() is the right unit for vertical reserve.
         painter.drawText(
-            info_x, rect.y() + 6, info_w, 18,
+            info_x, rect.y() + 6, info_w, fm_name.height(),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             elided,
         )
@@ -176,7 +180,23 @@ class CategoryTree(QListWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
 
-    def load_dataset(self, dataset: Dataset) -> None:
+    def load_dataset(
+        self,
+        dataset: Dataset,
+        select_category: str | None = None,
+    ) -> None:
+        """Rebuild the tree from ``dataset``.
+
+        ``select_category``:
+          - ``None`` or empty string → select the "全部" row (default
+            on first open).
+          - non-empty name → select the matching category row when it
+            still exists; falls back to "全部" if the category is gone
+            (e.g. delete + rescan removed the last folder image).
+
+        Lets callers preserve the user's current selection across
+        rescans without snapping back to "All" on every mutation.
+        """
         self.clear()
         counts = [c.image_count for c in dataset.categories]
         max_val = max(counts) if counts else 1
@@ -188,14 +208,17 @@ class CategoryTree(QListWidget):
         all_item.setData(Qt.ItemDataRole.UserRole + 3, dataset.total_images or 1)
         self.addItem(all_item)
 
-        for cat in dataset.categories:
+        target_row = 0  # default to "全部"
+        for idx, cat in enumerate(dataset.categories, start=1):
             item = QListWidgetItem(cat.name)
             item.setData(Qt.ItemDataRole.UserRole, cat.name)
             item.setData(Qt.ItemDataRole.UserRole + 1, f"{cat.image_count:,}")
             item.setData(Qt.ItemDataRole.UserRole + 2, cat.image_count)
             item.setData(Qt.ItemDataRole.UserRole + 3, max_val)
             self.addItem(item)
-        self.setCurrentRow(0)
+            if select_category and cat.name == select_category:
+                target_row = idx
+        self.setCurrentRow(target_row)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         key = item.data(Qt.ItemDataRole.UserRole)
