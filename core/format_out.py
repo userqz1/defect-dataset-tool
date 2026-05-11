@@ -43,8 +43,8 @@ class ExportResult:
     written_labels: int = 0
     skipped: list[tuple[Path, str]] = field(default_factory=list)
     # LLM grounding bookkeeping (LLaVA / ShareGPT / Swift only).
-    # ``grounding_fallback_count`` — regions without ``r.text`` that fell
-    # back to the class-template caption "该区域为 {label} 缺陷。".
+    # ``grounding_fallback_count`` is kept for backward-compatible result
+    # shape; current writers do not synthesize text for empty regions.
     # ``grounding_dropped_no_bbox`` — regions with text but no derivable
     # bbox (no polygon / keypoints either) — silently dropped to keep
     # downstream training data clean.
@@ -70,7 +70,12 @@ def export_samples(
 
     ``fmt`` is case-insensitive: ``"YOLO"``, ``"coco"``, ``"voc"``, etc.
     """
-    key = fmt.lower().replace("-", "_")
+    try:
+        from .target_readiness import export_key_for_target_format
+        fmt = export_key_for_target_format(fmt)
+    except Exception:
+        pass
+    key = fmt.lower().replace("-", "_").replace(" ", "")
     writer = _WRITERS.get(key)
     if writer is None:
         raise ValueError(
@@ -99,6 +104,18 @@ def _copy_image(sample: Sample, dst_dir: Path,
         report.written_images += 1
     except OSError as e:
         report.skipped.append((sample.image_path, str(e)))
+    return dst.name
+
+
+def _copy_path(src: Path, dst_dir: Path, report: ExportResult) -> str:
+    """Copy an arbitrary image path to *dst_dir*, return file name."""
+    dst = dst_dir / src.name
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        report.written_images += 1
+    except OSError as e:
+        report.skipped.append((src, str(e)))
     return dst.name
 
 
@@ -155,36 +172,29 @@ def _sample_grounding(
     Returns one dict per region:
         {"label": str, "text": str, "bbox": [x1, y1, x2, y2]  (int)}
 
-    Behavior (matches the export-pipeline contract documented in
-    ``CLAUDE.md`` §"Adding a new processing operation"):
+    Behavior:
 
-    1. Bbox is required.  If the region only has a polygon /
-       keypoints, ``Region.ensure_bbox`` derives the axis-aligned
-       outer box.  If neither is available, the region is dropped
-       and ``report.grounding_dropped_no_bbox`` is incremented (only
-       when ``r.text`` was authored — silently dropping unlabeled
-       regions would distort the count).
-    2. Text fallback: when ``r.text`` is empty, fill with the class
-       template ``该区域为 {label} 缺陷。`` so the assistant message
-       still anchors the bbox to a referring expression, and bump
-       ``report.grounding_fallback_count`` so the export dialog can
-       surface "N 个区域使用了类别模板".
+    1. Only user-authored region text is exported as grounding. Empty
+       region text means "no grounding annotation" rather than an
+       automatic class-template fallback.
+    2. Bbox is required. If the region only has a polygon / keypoints,
+       ``Region.ensure_bbox`` derives the axis-aligned outer box. If
+       neither is available, the region is dropped and
+       ``report.grounding_dropped_no_bbox`` is incremented.
     3. Bbox coords are clamped to ints (xyxy pixel) — VLM grounding
        is usually trained against integer pixel coords; floats add
        noise without precision benefit.
     """
     entries: list[dict] = []
     for r in sample.regions:
+        text = r.text.strip()
+        if not text:
+            continue
         bb = r.ensure_bbox()
         if bb is None:
-            if r.text and report is not None:
+            if report is not None:
                 report.grounding_dropped_no_bbox += 1
             continue
-        text = r.text
-        if not text:
-            text = f"该区域为 {r.label} 缺陷。"
-            if report is not None:
-                report.grounding_fallback_count += 1
         entries.append({
             "label": r.label,
             "text": text,
@@ -227,6 +237,14 @@ def _to_openai_messages(convos: list[dict]) -> list[dict]:
     return [{"role": role_map.get(t.get("from", ""), t.get("from", "user")),
              "content": t.get("value", "")}
             for t in convos]
+
+
+def _assistant_response(convos: list[dict]) -> str:
+    """Return the first assistant/GPT turn for legacy JSONL consumers."""
+    for turn in convos:
+        if turn.get("from") in ("gpt", "assistant"):
+            return turn.get("value", "")
+    return ""
 
 
 def _sample_conversations_grounded(
@@ -696,6 +714,53 @@ def _write_mvtec(ss: SampleSet, opts: ExportOptions,
 
 # ── LLaVA ─────────────────────────────────────────────────────────────
 
+def _write_pairedfolder(ss: SampleSet, opts: ExportOptions,
+                        progress_cb) -> ExportResult:
+    """Write image-pair datasets as split folders plus pairs.csv."""
+    out = opts.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    report = ExportResult()
+    all_samples = [(split, sample)
+                   for split, batch in _iter_splits(ss)
+                   for sample in batch]
+    total = len(all_samples)
+    rows: list[list[str]] = [["split", "image_a", "image_b", "category"]]
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for done, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(done, total, sample.image_path.name)
+        if sample.pair_path is None:
+            report.skipped.append((sample.image_path, "missing pair_path"))
+            continue
+        pair_key = tuple(sorted((str(sample.image_path), str(sample.pair_path))))
+        if pair_key in seen_pairs:
+            continue
+        seen_pairs.add(pair_key)
+        try:
+            if opts.copy_images:
+                a_name = _copy_path(
+                    sample.image_path, out / "images" / split / "a", report)
+                b_name = _copy_path(
+                    sample.pair_path, out / "images" / split / "b", report)
+                rel_a = f"images/{split}/a/{a_name}"
+                rel_b = f"images/{split}/b/{b_name}"
+            else:
+                rel_a = str(sample.image_path)
+                rel_b = str(sample.pair_path)
+            rows.append([split, rel_a, rel_b, sample.category])
+            report.written_labels += 1
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    with (out / "pairs.csv").open("w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
 def _write_llava(ss: SampleSet, opts: ExportOptions,
                  progress_cb) -> ExportResult:
     out = opts.out_dir
@@ -851,6 +916,10 @@ def _write_swift(ss: SampleSet, opts: ExportOptions,
                 rec: dict = {
                     "messages": _to_openai_messages(convos),
                     "images": [rel],
+                    # Legacy ms-swift/JSONL consumers in this project
+                    # still read ``response`` directly. Keep it as a
+                    # compatibility alias for the assistant message.
+                    "response": _assistant_response(convos),
                 }
                 if gnd:
                     rec["objects"] = _grounding_objects(gnd)
@@ -880,6 +949,7 @@ _WRITERS.update({
     "jsonl": _write_jsonl,
     "imagefolder": _write_imagefolder,
     "mvtec": _write_mvtec,
+    "pairedfolder": _write_pairedfolder,
     "llava": _write_llava,
     "sharegpt": _write_sharegpt,
     "swift": _write_swift,

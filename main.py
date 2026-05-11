@@ -195,6 +195,7 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     if _ICON.exists():
         app.setWindowIcon(QIcon(str(_ICON)))
+
     window = MainWindow()
     window.show()
     return app.exec()

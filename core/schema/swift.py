@@ -70,7 +70,13 @@ SWIFT_SCHEMA = Schema(
     key="Swift",
     display_name="ms-swift",
     description="ModelScope ms-swift VLM 微调格式",
-    task_types=(TaskType.DETECTION, TaskType.CLASSIFICATION),
+    task_types=(
+        TaskType.DETECTION,
+        TaskType.ORIENTED_DET,
+        TaskType.SEMANTIC_SEG,
+        TaskType.INSTANCE_SEG,
+        TaskType.CLASSIFICATION,
+    ),
     slots=(
         Slot("images", "图片", "images", required=True, validator=_validate_images),
         Slot("shapes", "标注来源", "labels", required=True, validator=_validate_shapes),

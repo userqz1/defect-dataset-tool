@@ -6,7 +6,7 @@ so a future view-only spec could skip it.
 
 Three buttons gate themselves by the current status:
 
-    new / prelabeled / annotating / needs_fix → [提交审核]
+    new / prelabeled / annotating / needs_fix → [标注完成]
     review_pending                             → [通过] [需修补]
     ready / exported                           → nothing
 """

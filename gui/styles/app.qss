@@ -113,6 +113,21 @@ CaptionLabel#overviewNavLabel {
     font-weight: 600;
     letter-spacing: 1px;
 }
+QLabel#overviewImagePreview {
+    background-color: $SURFACE_DIM;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+}
+QPlainTextEdit#overviewAnnotationCode {
+    font-family: "Cascadia Mono", "Consolas", "SF Mono", monospace;
+    font-size: 13px;
+    background-color: $SIDEBAR;
+    color: $TEXT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+    padding: 10px;
+    selection-background-color: $ACCENT_SOFT;
+}
 
 TitleLabel#welcomeBrand {
     color: $TEXT;
@@ -777,6 +792,26 @@ QFrame#detailTopBar {
 QFrame#imageInspector {
     background-color: transparent;
 }
+QFrame#inspectorSummaryCard {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+}
+StrongBodyLabel#inspectorSummaryTitle {
+    color: $TEXT;
+    font-size: 13px;
+}
+CaptionLabel#inspectorSummaryLine {
+    color: $TEXT_2;
+    font-size: 12px;
+}
+CaptionLabel#inspectorSummaryStatus {
+    color: $ACCENT;
+    background-color: $ACCENT_SOFT;
+    border-radius: ${RADIUS_SM}px;
+    padding: 3px 8px;
+    font-size: 11px;
+}
 
 /* 大模型标注 (VLM) pane empty state — shown when the project hasn't
  * enabled any of caption / conversations / grounding yet. */
@@ -793,10 +828,69 @@ CaptionLabel#vlmPartialHint {
     border-radius: ${RADIUS}px;
     padding: 6px 10px;
 }
+QScrollArea#vlmScroll {
+    background-color: transparent;
+}
+QScrollArea#vlmScroll > QWidget {
+    background-color: transparent;
+}
+QFrame#vlmOverviewCard {
+    background-color: $ACCENT_SOFT;
+    border: 1px solid $ACCENT;
+    border-radius: ${RADIUS}px;
+}
+StrongBodyLabel#vlmOverviewTitle,
+CaptionLabel#vlmOverviewTitle {
+    color: $TEXT;
+    font-size: 12px;
+    font-weight: 600;
+}
+BodyLabel#vlmOverviewBody {
+    color: $TEXT_2;
+    font-size: 12px;
+}
+CaptionLabel#vlmOverviewChip {
+    color: $ACCENT;
+    background-color: $CONTENT;
+    border-radius: ${RADIUS_SM}px;
+    padding: 3px 8px;
+    font-size: 11px;
+}
+BodyLabel#annotationModeHint,
+CaptionLabel#annotationModeHint {
+    color: $TEXT_3;
+    background-color: $SURFACE_DIM;
+    border-radius: ${RADIUS}px;
+    padding: 4px 8px;
+    font-size: 11px;
+}
+QFrame#annotationModeCard {
+    background-color: $ACCENT_SOFT;
+    border: 1px solid $ACCENT;
+    border-radius: ${RADIUS}px;
+}
+BodyLabel#annotationModeTitle {
+    color: $TEXT;
+    font-size: 13px;
+    font-weight: 600;
+}
+CaptionLabel#annotationModeChip {
+    color: $ACCENT;
+    background-color: $CONTENT;
+    border-radius: ${RADIUS_SM}px;
+    padding: 3px 8px;
+    font-size: 11px;
+}
+SegmentedWidget#vlmFormatTabs {
+    background-color: transparent;
+}
+QStackedWidget#vlmFormatStack {
+    background-color: transparent;
+}
 
-/* Grounding hint — when show_region_text is on but the current image
- * has no shapes yet. Tells the user to draw a shape first instead of
- * staring at a disabled region-text editor. */
+/* Grounding hint — when supports_grounding is on but the current image
+ * has no shapes yet. Tells the user to create shapes in the Annotate
+ * tab first. Lives in VlmPane's grounding section. */
 CaptionLabel#regionTextHint {
     color: $TEXT_3;
     background-color: $SURFACE_DIM;
@@ -886,6 +980,10 @@ CaptionLabel#batchPanelSubtitle {
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 1px;
+}
+QFrame#dropZone {
+    background-color: $CONTENT;
+    border-radius: ${RADIUS_LG}px;
 }
 QFrame#batchCard {
     background-color: $HOVER;
@@ -1182,4 +1280,97 @@ QTreeWidget#inspectorDirTree {
 }
 QTreeWidget#inspectorDirTree::item {
     padding: 2px 0;
+}
+
+/* ============================================================
+ * 训练版本 (Training Version hub)
+ * ============================================================ */
+
+/* Section cards */
+QFrame#tvSection {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+StrongBodyLabel#tvSectionNumber {
+    color: $ACCENT;
+    font-size: 14px;
+}
+StrongBodyLabel#tvSectionTitle {
+    color: $TEXT;
+    font-size: 14px;
+}
+
+/* Stats banner */
+QFrame#tvStatsBanner {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS_LG}px;
+}
+StrongBodyLabel#tvProjectTitle {
+    color: $TEXT;
+    font-size: 14px;
+}
+CaptionLabel#tvStatsLabel {
+    color: $TEXT_2;
+    font-size: 12px;
+}
+
+/* Choice chips (exclusive select — scope / format) */
+QFrame#tvChoiceChip {
+    background-color: $SURFACE_DIM;
+    border: 1px solid transparent;
+    border-radius: ${RADIUS}px;
+}
+QFrame#tvChoiceChip:hover {
+    border-color: $HOVER_STRONG;
+}
+QFrame#tvChoiceChip[selected="true"] {
+    background-color: $ACCENT_SOFT;
+    border-color: $ACCENT;
+}
+BodyLabel#tvChoiceChipLabel {
+    color: $TEXT_2;
+    font-size: 13px;
+}
+QFrame#tvChoiceChip[selected="true"] > BodyLabel#tvChoiceChipLabel {
+    color: $ACCENT;
+}
+
+/* Split summary */
+BodyLabel#tvSplitSummary {
+    color: $TEXT;
+    font-size: 13px;
+}
+CaptionLabel#tvSplitLabel {
+    color: $TEXT_3;
+    font-size: 12px;
+}
+CaptionLabel#tvFormatGroupLabel {
+    color: $TEXT_3;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    margin-top: 4px;
+}
+
+/* Hint labels */
+CaptionLabel#tvHintLabel {
+    color: $TEXT_3;
+    font-size: 11px;
+}
+
+/* Generated training versions */
+QFrame#tvVersionRow {
+    background-color: $SURFACE_DIM;
+    border: 1px solid $BORDER;
+    border-radius: ${RADIUS}px;
+}
+StrongBodyLabel#tvVersionName {
+    color: $TEXT;
+    font-size: 13px;
+}
+CaptionLabel#tvVersionMeta {
+    color: $TEXT_3;
+    font-size: 11px;
 }

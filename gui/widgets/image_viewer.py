@@ -68,7 +68,7 @@ class ImageViewer(QGraphicsView):
         # 编辑模式
         self._edit_mode: bool = False
         self._draw_label: str = "object"
-        self._draw_shape_type: str = "rectangle"  # rectangle | polygon
+        self._draw_shape_type: str = "rectangle"  # rectangle | polygon | point
         self._annotation: Annotation | None = None
         self._drawing: bool = False
         self._draw_start: QPointF | None = None
@@ -134,7 +134,7 @@ class ImageViewer(QGraphicsView):
         self._draw_label = label or "object"
 
     def set_draw_shape_type(self, shape_type: str) -> None:
-        if shape_type not in ("rectangle", "polygon"):
+        if shape_type not in ("rectangle", "polygon", "point"):
             return
         # 切换形状时取消正在进行的多边形
         self._cancel_polygon()
@@ -336,6 +336,21 @@ class ImageViewer(QGraphicsView):
                 return
         if self._edit_mode and event.button() == Qt.MouseButton.LeftButton and self._pix_item is not None:
             scene_pos = self.mapToScene(event.pos())
+            if self._draw_shape_type == "point":
+                hit = self._hit_test(scene_pos)
+                if hit >= 0:
+                    self.select_shape(hit)
+                    return
+                if self._annotation is not None:
+                    shape = Shape(
+                        label=self._draw_label,
+                        shape_type="point",
+                        points=[(scene_pos.x(), scene_pos.y())],
+                    )
+                    self._annotation.shapes.append(shape)
+                    self.set_annotation(self._annotation)
+                    self.shapes_changed.emit()
+                return
             # 多边形模式：每次左键点击添加一个顶点
             if self._draw_shape_type == "polygon":
                 # 第一个点之前优先点选已有 shape

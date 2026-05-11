@@ -64,12 +64,15 @@ from qfluentwidgets import (
     MessageBox,
     PushButton,
     SegmentedWidget,
+    StrongBodyLabel,
     ToolButton,
 )
 
 from core.annotation_writer import write_annotation
 from core.models import Annotation, ImageInfo, Shape
 from core.project import Project
+from core.target_readiness import sample_is_complete_for_target
+from core.task_types import TaskType
 from core.unified import BBox, Region, Sample, SampleSet
 from gui import i18n
 from gui.theme import T
@@ -229,6 +232,7 @@ class DetailView(QWidget):
         # Project's preferred annotation format for write-back; set from
         # DatasetBrowserView via ``set_annotation_format``.
         self._annotation_format: str = "labelme"
+        self._target_format: str = ""
         # Write gate — DatasetBrowserView flips this from AppState
         # ``scan_active_changed``. While False, every save handler shows
         # a blocking InfoBar and returns early. Guards against the
@@ -268,6 +272,7 @@ class DetailView(QWidget):
         # set_project_profile() fires after project_changed. Panes are
         # created against this spec in _rebuild_panes() below.
         self._spec: TaskWorkbenchSpec = spec_for(None)
+        self._task_type: TaskType | None = None
 
         # Pane refs (re-assigned by _rebuild_panes; None when pane is
         # gated off by the current spec).
@@ -393,12 +398,18 @@ class DetailView(QWidget):
         self.shape_poly_btn.setCheckable(True)
         self.shape_poly_btn.setToolTip(
             "多边形 (P) — 左键加点, 双击/回车闭合, 右键取消")
+        self.shape_point_btn = ToolButton(FIF.PIN)
+        self.shape_point_btn.setCheckable(True)
+        self.shape_point_btn.setToolTip("关键点 (K)")
         self.shape_rect_btn.clicked.connect(
             lambda: self._set_shape_type("rectangle"))
         self.shape_poly_btn.clicked.connect(
             lambda: self._set_shape_type("polygon"))
+        self.shape_point_btn.clicked.connect(
+            lambda: self._set_shape_type("point"))
         self.shape_rect_btn.hide()
         self.shape_poly_btn.hide()
+        self.shape_point_btn.hide()
 
         self.label_combo = EditableComboBox()
         self.label_combo.setMinimumWidth(120)
@@ -433,6 +444,7 @@ class DetailView(QWidget):
         lay.addWidget(self.edit_btn)
         lay.addWidget(self.shape_rect_btn)
         lay.addWidget(self.shape_poly_btn)
+        lay.addWidget(self.shape_point_btn)
         lay.addWidget(self.label_combo)
         lay.addWidget(self.delete_shape_btn)
         lay.addWidget(self.save_btn)
@@ -458,8 +470,8 @@ class DetailView(QWidget):
         sidebar.setObjectName("imageInspector")
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(
-            T.PAD_XL, T.PAD_XL, T.PAD_XL, T.PAD_XL)
-        side_layout.setSpacing(T.GAP_LG)
+            T.PAD_LG, T.PAD_LG, T.PAD_LG, T.PAD_LG)
+        side_layout.setSpacing(T.GAP)
 
         # File info header — always visible regardless of task.
         side_layout.addWidget(self._section_label("文件信息"))
@@ -475,6 +487,8 @@ class DetailView(QWidget):
         side_layout.addLayout(self._meta_row("类别", self.info_cat))
 
         side_layout.addSpacing(T.GAP)
+        side_layout.addWidget(self._build_completion_card())
+        side_layout.addSpacing(T.GAP)
 
         # Pane zone — sub-layout so _rebuild_panes can clear it without
         # disturbing the file-info header above.
@@ -484,6 +498,40 @@ class DetailView(QWidget):
         side_layout.addLayout(self._pane_zone, 1)
 
         return sidebar
+
+    def _build_completion_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("inspectorSummaryCard")
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(T.PAD, T.PAD, T.PAD, T.PAD)
+        lay.setSpacing(T.GAP_XS)
+
+        self._summary_title = StrongBodyLabel(i18n.t("detail.summary.title"))
+        self._summary_title.setObjectName("inspectorSummaryTitle")
+        lay.addWidget(self._summary_title)
+
+        self._summary_target = CaptionLabel("—")
+        self._summary_target.setObjectName("inspectorSummaryLine")
+        self._summary_target.setWordWrap(True)
+        lay.addWidget(self._summary_target)
+
+        self._summary_traditional = CaptionLabel("—")
+        self._summary_traditional.setObjectName("inspectorSummaryLine")
+        self._summary_traditional.setWordWrap(True)
+        lay.addWidget(self._summary_traditional)
+
+        self._summary_vlm = CaptionLabel("—")
+        self._summary_vlm.setObjectName("inspectorSummaryLine")
+        self._summary_vlm.setWordWrap(True)
+        lay.addWidget(self._summary_vlm)
+
+        self._summary_status = CaptionLabel("—")
+        self._summary_status.setObjectName("inspectorSummaryStatus")
+        self._summary_status.setWordWrap(True)
+        lay.addWidget(self._summary_status)
+        return card
 
     # ════════════════════════════════════════════════════════════════
     # Spec-driven pane rebuild
@@ -533,14 +581,14 @@ class DetailView(QWidget):
                     self._on_image_labels_changed)
                 entries.append((
                     DetailSegment.ANNOTATION, "annotation",
-                    i18n.t("detail.seg.annotation"), self._image_label_pane,
+                    self._annotation_segment_text(), self._image_label_pane,
                 ))
             else:
+                mode_title, tool_labels = self._traditional_mode_copy()
                 self._annotation_pane = AnnotationPane(
-                    show_region_text=spec.show_region_text,
+                    mode_title=mode_title,
+                    tool_labels=tool_labels,
                 )
-                self._annotation_pane.save_grounding_requested.connect(
-                    self._on_save_grounding)
                 # List → canvas: clicking a row in the shape list
                 # highlights the matching shape on the viewer. The
                 # canvas → list direction is already wired below via
@@ -552,19 +600,24 @@ class DetailView(QWidget):
                     self._on_pane_delete_shape)
                 entries.append((
                     DetailSegment.ANNOTATION, "annotation",
-                    i18n.t("detail.seg.annotation"), self._annotation_pane,
+                    self._annotation_segment_text(), self._annotation_pane,
                 ))
 
         if spec.has_vlm:
             self._vlm_pane = VlmPane(
                 has_caption=spec.has_caption,
                 has_conversations=spec.has_conversations,
-                has_grounding=spec.show_region_text,
+                has_grounding=spec.supports_grounding,
             )
             self._vlm_pane.save_caption_requested.connect(
                 self._on_save_caption)
             self._vlm_pane.save_conversations_requested.connect(
                 self._on_save_conversations)
+            # Grounding lives in VlmPane — wire save + shape selection.
+            self._vlm_pane.save_grounding_requested.connect(
+                self._on_save_grounding)
+            self._vlm_pane.shape_selected.connect(
+                self._on_vlm_shape_selected)
             entries.append((
                 DetailSegment.VLM, "vlm",
                 i18n.t("detail.seg.vlm"), self._vlm_pane,
@@ -591,15 +644,23 @@ class DetailView(QWidget):
                 onClick=lambda *_, p=pane: self._pane_stack.setCurrentWidget(p),
             )
 
-        # Apply default segment. setCurrentItem emits currentItemChanged
-        # but that signal isn't wired to the stack — do the stack switch
-        # explicitly to keep the two in lockstep on first-show.
+        # Apply default segment. SegmentedWidget auto-selects the last
+        # addItem, so we must force the correct default. Both the visual
+        # indicator AND the stack page need to agree.
         default_key = spec.default_segment.value
+        default_pane = None
         for _seg, key, _text, pane in entries:
             if key == default_key:
-                self._segmented.setCurrentItem(default_key)
-                self._pane_stack.setCurrentWidget(pane)
+                default_pane = pane
                 break
+        if default_pane is not None:
+            self._pane_stack.setCurrentWidget(default_pane)
+            # Defer setCurrentItem so it runs after SegmentedWidget
+            # finishes internal layout from addItem calls.
+            QTimer.singleShot(0, lambda: (
+                self._segmented.setCurrentItem(default_key)
+                if self._segmented is not None else None
+            ))
 
         # Hide the ribbon when there's only one segment — the tab strip
         # would just be visual noise.
@@ -628,7 +689,49 @@ class DetailView(QWidget):
             # Force edit mode off so orphaned shape-edit widgets don't
             # linger after a task switch.
             self.edit_btn.setChecked(False)
-        self.next_incomplete_btn.setVisible(self._spec.has_vlm)
+        if self.edit_btn.isChecked():
+            tools = self._spec.shape_tools
+            self.shape_rect_btn.setVisible("rectangle" in tools)
+            self.shape_poly_btn.setVisible("polygon" in tools)
+            self.shape_point_btn.setVisible("point" in tools)
+        else:
+            self.shape_rect_btn.hide()
+            self.shape_poly_btn.hide()
+            self.shape_point_btn.hide()
+        self.next_incomplete_btn.setVisible(bool(self._target_format))
+
+    def _traditional_mode_copy(self) -> tuple[str, list[str]]:
+        """Return the right-panel mode label for shape-based tasks."""
+        tools = set(self._spec.shape_tools)
+        if self._task_type is TaskType.ORIENTED_DET:
+            return (
+                i18n.t("annotation.mode.oriented"),
+                [i18n.t("annotation.tool.polygon"),
+                 i18n.t("annotation.tool.object_list")],
+            )
+        if self._task_type in (TaskType.SEMANTIC_SEG, TaskType.INSTANCE_SEG):
+            return (
+                i18n.t("annotation.mode.segmentation"),
+                [i18n.t("annotation.tool.polygon"),
+                 i18n.t("annotation.tool.object_list")],
+            )
+        if "point" in tools:
+            return (
+                i18n.t("annotation.mode.keypoint"),
+                [i18n.t("annotation.tool.point"),
+                 i18n.t("annotation.tool.bbox")],
+            )
+        if "rectangle" in tools and "polygon" not in tools:
+            return (
+                i18n.t("annotation.mode.detection"),
+                [i18n.t("annotation.tool.bbox"),
+                 i18n.t("annotation.tool.object_list")],
+            )
+        return (
+            i18n.t("annotation.mode.geometry"),
+            [i18n.t("annotation.tool.bbox"),
+             i18n.t("annotation.tool.polygon")],
+        )
 
     # ════════════════════════════════════════════════════════════════
     # Public API
@@ -669,7 +772,7 @@ class DetailView(QWidget):
 
         - ``has_caption``       → ``sample.caption`` empty
         - ``has_conversations`` → ``sample.conversations`` empty
-        - ``show_region_text``  → any region with empty ``text``,
+        - ``supports_grounding`` → any region with empty ``text``,
                                   OR no regions at all when the user
                                   is supposed to write region text
                                   (zero regions = nothing to anchor)
@@ -701,11 +804,14 @@ class DetailView(QWidget):
 
     def _is_sample_incomplete(self, sample: Sample) -> bool:
         """Capability-aware "未完成" predicate.  See ``next_incomplete_image``."""
+        if self._target_format:
+            return not sample_is_complete_for_target(
+                sample, self._target_format, self._task_type)
         if self._spec.has_caption and not (sample.caption or "").strip():
             return True
         if self._spec.has_conversations and not sample.conversations:
             return True
-        if self._spec.show_region_text:
+        if self._spec.supports_grounding:
             # No regions at all → can't write region text, but the user
             # opted into grounding so this image is still "todo" (they
             # need to draw + describe).
@@ -738,21 +844,132 @@ class DetailView(QWidget):
     def set_project_profile(self, project: Project | None) -> None:
         """Rebuild panes for ``project``'s task type.
 
-        VLM fields are always available; project capability flags are
-        kept only for legacy project compatibility and do not gate the
-        annotation surface.
+        The current target format drives the active work surface. This keeps
+        the single-image editor focused: YOLO/VOC/COCO show shape annotation,
+        Caption JSONL shows caption only, LLaVA/ShareGPT show conversation
+        data, and Swift/Qwen-VL adds structured grounding where the task can
+        support it.
 
         Passing ``None`` falls back to the DEFAULT_SPEC shape.
         """
+        new_task_type = project.task_type if project is not None else None
+        self._target_format = (
+            getattr(project, "target_format", "") if project is not None else ""
+        )
         if project is None:
             new_spec = spec_for(None)
         else:
-            new_spec = spec_for(project.task_type)
-        if new_spec == self._spec:
+            caps = self._workbench_caps_for_project(project)
+            new_spec = spec_for(
+                new_task_type,
+                enable_caption=caps["caption"],
+                enable_conversations=caps["conversations"],
+                enable_grounding=caps["grounding"],
+                show_annotation=caps["annotation"],
+                show_status=not bool(self._target_format),
+                shape_tools_without_annotation=caps["shape_tools"],
+            )
+        if new_spec == self._spec and new_task_type == self._task_type:
+            self.next_incomplete_btn.setVisible(bool(self._target_format))
+            if 0 <= self._index < len(self._images):
+                self._update_completion_card(self._images[self._index])
             return
+        self._task_type = new_task_type
         self._spec = new_spec
         self._rebuild_panes()
         self._update_topbar_for_spec()
+
+    def _annotation_segment_text(self) -> str:
+        """Use plain "标注" when there is no VLM sibling tab."""
+        return i18n.t(
+            "detail.seg.annotation"
+            if self._spec.has_vlm else "detail.seg.annotation_only"
+        )
+
+    @staticmethod
+    def _project_shows_structured_annotation(project: Project) -> bool:
+        """Whether the traditional annotation surface should be visible.
+
+        Most VLM presets still need boxes/polygons for grounding.  The
+        caption-only preset is image-text labeling, so showing a detection
+        workbench would be misleading.
+        """
+        return project.preset_id != "vlm_caption"
+
+    @staticmethod
+    def _workbench_caps_for_project(project: Project) -> dict[str, bool]:
+        """Derive DetailView surfaces from the selected target format."""
+        target = (project.target_format or "").strip().lower()
+        target = (
+            target.replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace("/", "")
+        )
+        if target:
+            if target in {"llava", "llavajsonl"}:
+                supports_grounding = DetailView._project_task_supports_grounding(
+                    project)
+                return {
+                    "annotation": False,
+                    "caption": False,
+                    "conversations": not supports_grounding,
+                    "grounding": supports_grounding,
+                    "shape_tools": supports_grounding,
+                }
+            if target in {"sharegpt", "sharegptjson", "sharegptjsonl"}:
+                supports_grounding = DetailView._project_task_supports_grounding(
+                    project)
+                return {
+                    "annotation": False,
+                    "caption": False,
+                    "conversations": not supports_grounding,
+                    "grounding": supports_grounding,
+                    "shape_tools": supports_grounding,
+                }
+            if target in {"swift", "msswift", "swiftjsonl", "qwenvl"}:
+                supports_grounding = DetailView._project_task_supports_grounding(
+                    project)
+                return {
+                    "annotation": False,
+                    "caption": False,
+                    "conversations": not supports_grounding,
+                    "grounding": supports_grounding,
+                    "shape_tools": supports_grounding,
+                }
+            if target in {"caption", "captionjsonl", "imagecaptionjsonl"}:
+                return {
+                    "annotation": False,
+                    "caption": True,
+                    "conversations": False,
+                    "grounding": False,
+                    "shape_tools": False,
+                }
+            return {
+                "annotation": True,
+                "caption": False,
+                "conversations": False,
+                "grounding": False,
+                "shape_tools": False,
+            }
+
+        return {
+            "annotation": DetailView._project_shows_structured_annotation(
+                project),
+            "caption": project.enable_caption,
+            "conversations": project.enable_conversations,
+            "grounding": project.enable_grounding,
+            "shape_tools": False,
+        }
+
+    @staticmethod
+    def _project_task_supports_grounding(project: Project) -> bool:
+        return project.task_type in {
+            TaskType.DETECTION,
+            TaskType.ORIENTED_DET,
+            TaskType.SEMANTIC_SEG,
+            TaskType.INSTANCE_SEG,
+        }
 
     # ════════════════════════════════════════════════════════════════
     # Image loading + cache + prefetch
@@ -940,6 +1157,7 @@ class DetailView(QWidget):
 
         # Load region texts from sidecar if shapes lack inline text.
         self._load_region_texts_from_sidecar(img)
+        self._update_completion_card(img)
 
     def _repaint_panes(self, img: ImageInfo) -> None:
         """Push current image state into whichever panes are alive.
@@ -950,7 +1168,9 @@ class DetailView(QWidget):
         """
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
-            self._annotation_pane.clear_region_binding()
+        if self._vlm_pane is not None and self._vlm_pane.has_grounding:
+            self._vlm_pane.refresh_shape_list(self._annotation)
+            self._vlm_pane.clear_region_binding()
         if self._image_label_pane is not None:
             cats = sorted({i.category for i in self._images if i.category})
             self._image_label_pane.set_classes(cats)
@@ -976,6 +1196,77 @@ class DetailView(QWidget):
         # changed across images.
         if self.edit_btn.isChecked():
             self._refresh_label_combo()
+        self._update_completion_card(img)
+
+    def _update_completion_card(self, img: ImageInfo | None = None) -> None:
+        """Refresh the inspector's current-image completion summary."""
+        if img is None:
+            if not (0 <= self._index < len(self._images)):
+                return
+            img = self._images[self._index]
+
+        sample = self._find_sample(img)
+        shapes = self._annotation.shapes if self._annotation else []
+
+        self._summary_target.setVisible(bool(self._target_format))
+        if self._target_format:
+            self._summary_target.setText(f"目标格式：{self._target_format}")
+
+        self._summary_traditional.setVisible(self._spec.has_annotation)
+        self._summary_vlm.setVisible(self._spec.has_vlm)
+
+        if self._spec.has_annotation:
+            if self._spec.image_label_kind is not ImageLabelKind.NONE:
+                labels = list(sample.image_labels) if sample else []
+                if not labels:
+                    labels = [img.category] if img.category else []
+                traditional = i18n.t(
+                    "detail.summary.traditional_labels", n=len(labels))
+            else:
+                traditional = i18n.t(
+                    "detail.summary.traditional_shapes", n=len(shapes))
+            self._summary_traditional.setText(
+                i18n.t("detail.summary.traditional", value=traditional))
+
+        if self._spec.has_vlm:
+            parts: list[str] = []
+            if self._spec.has_caption:
+                caption = sample.caption if sample else ""
+                if not caption:
+                    try:
+                        from core.annotation_writer import read_caption
+                        caption = read_caption(img.path)
+                    except OSError:
+                        caption = ""
+                cap_state = i18n.t("detail.summary.done" if caption.strip()
+                                   else "detail.summary.missing")
+                parts.append(i18n.t("detail.summary.caption", state=cap_state))
+
+            if self._spec.has_conversations:
+                convos = sample.conversations if sample else []
+                if not convos:
+                    try:
+                        from core.annotation_writer import read_conversations
+                        convos = read_conversations(img.path)
+                    except OSError:
+                        convos = []
+                parts.append(i18n.t(
+                    "detail.summary.conversations", n=len(convos)))
+
+            if self._spec.supports_grounding:
+                total = len(shapes)
+                filled = sum(1 for s in shapes if (s.text or "").strip())
+                parts.append(i18n.t("detail.summary.grounding",
+                                    done=filled, total=total))
+            self._summary_vlm.setText(
+                i18n.t("detail.summary.vlm", value=" · ".join(parts)))
+
+        status = sample.work_status if sample else ""
+        status_label = WF_STATUS_LABELS.get(
+            status, i18n.t("detail.summary.status_none"))
+
+        self._summary_status.setText(
+            i18n.t("detail.summary.status", value=status_label))
 
     # ════════════════════════════════════════════════════════════════
     # Navigation + confirm
@@ -1068,6 +1359,7 @@ class DetailView(QWidget):
         self.save_btn.setVisible(on)
         self.shape_rect_btn.setVisible(on and "rectangle" in tools)
         self.shape_poly_btn.setVisible(on and "polygon" in tools)
+        self.shape_point_btn.setVisible(on and "point" in tools)
         if on:
             # No annotation yet → seed an empty one so drawn shapes have
             # somewhere to land.
@@ -1087,6 +1379,7 @@ class DetailView(QWidget):
     def _set_shape_type(self, st: str) -> None:
         self.shape_rect_btn.setChecked(st == "rectangle")
         self.shape_poly_btn.setChecked(st == "polygon")
+        self.shape_point_btn.setChecked(st == "point")
         self.viewer.set_draw_shape_type(st)
 
     def _refresh_label_combo(self) -> None:
@@ -1136,37 +1429,60 @@ class DetailView(QWidget):
 
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
-            # Shape indices may have shifted — drop any region-text binding.
-            self._annotation_pane.clear_region_binding()
+        if self._vlm_pane is not None and self._vlm_pane.has_grounding:
+            self._vlm_pane.refresh_shape_list(self._annotation)
+            # Shape indices may have shifted. For the common "draw a new
+            # region" path, bind the new row immediately so Swift/Qwen-VL
+            # users can type the region text without hunting for it.
+            if len(new_shapes) > len(old_texts):
+                new_idx = len(new_shapes) - 1
+                self.viewer.select_shape(new_idx)
+                self._vlm_pane.select_shape(new_idx)
+                self._vlm_pane.bind_region_text(new_idx, new_shapes[new_idx].text)
+            else:
+                self._vlm_pane.clear_region_binding()
         self._refresh_label_combo()
+        self._update_completion_card()
         self.save_btn.setToolTip("保存标注 (Ctrl+S) — 有未保存修改")
 
     def _on_selection_changed(self, idx: int) -> None:
-        if self._annotation_pane is None:
-            return
-        # Commit pending region text before switching selection so the
-        # about-to-be-clobbered text lands on the right shape.
+        # Mirror canvas selection into both panes.
+        # Commit pending region text before switching so the about-to-be-
+        # clobbered text lands on the right shape.
         self._commit_pane_region_text()
-        self._annotation_pane.select_shape(idx)
-        shapes = self._annotation.shapes if self._annotation else []
-        if 0 <= idx < len(shapes):
-            self._annotation_pane.bind_region_text(idx, shapes[idx].text)
-        else:
-            self._annotation_pane.bind_region_text(-1, "")
+        if self._annotation_pane is not None:
+            self._annotation_pane.select_shape(idx)
+        if self._vlm_pane is not None and self._vlm_pane.has_grounding:
+            self._vlm_pane.select_shape(idx)
+            shapes = self._annotation.shapes if self._annotation else []
+            if 0 <= idx < len(shapes):
+                self._vlm_pane.bind_region_text(idx, shapes[idx].text)
+            else:
+                self._vlm_pane.bind_region_text(-1, "")
 
     def _on_pane_shape_selected(self, idx: int) -> None:
-        """List → canvas mirror.
+        """AnnotationPane list → canvas mirror.
 
-        AnnotationPane fires this when the user clicks a row in the
-        shape list. We forward to ``viewer.select_shape`` so the
-        canvas highlights the matching shape. ``viewer.select_shape``
-        emits ``selection_changed`` back, but the pane's
-        :meth:`AnnotationPane.select_shape` blocks signals around its
-        ``setCurrentRow``, so the round-trip can't loop.
+        Clicking a row in the shape list highlights the matching shape
+        on the viewer. ``viewer.select_shape`` emits ``selection_changed``
+        back, but the pane's ``select_shape`` blocks signals around its
+        ``setCurrentRow`` so the round-trip can't loop.
         """
         if not (0 <= idx < len(self._annotation.shapes if self._annotation else [])):
             return
         self.viewer.select_shape(idx)
+
+    def _on_vlm_shape_selected(self, idx: int) -> None:
+        """VlmPane grounding list → canvas + AnnotationPane mirror.
+
+        Same as _on_pane_shape_selected but also syncs AnnotationPane's
+        list so both panes always agree on the selected shape.
+        """
+        if not (0 <= idx < len(self._annotation.shapes if self._annotation else [])):
+            return
+        self.viewer.select_shape(idx)
+        if self._annotation_pane is not None:
+            self._annotation_pane.select_shape(idx)
 
     def _on_pane_delete_shape(self, idx: int) -> None:
         """Right-click "删除此标注" on a list row → drop that shape.
@@ -1251,7 +1567,9 @@ class DetailView(QWidget):
         self._dirty = True
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
-            self._annotation_pane.clear_region_binding()
+        if self._vlm_pane is not None and self._vlm_pane.has_grounding:
+            self._vlm_pane.refresh_shape_list(self._annotation)
+            self._vlm_pane.clear_region_binding()
         self._refresh_label_combo()
         self.undo_state_changed.emit()
         return label
@@ -1259,15 +1577,14 @@ class DetailView(QWidget):
     def _commit_pane_region_text(self) -> None:
         """Push the region-text editor's current content back to the shape.
 
-        No-op when the annotation pane has no grounding editor (task
-        spec didn't include ``show_region_text``) or the binding is
-        stale.
+        Grounding now lives in VlmPane.  No-op when the pane has no
+        grounding editor or the binding is stale.
         """
-        if self._annotation_pane is None or self._annotation is None:
+        if self._vlm_pane is None or self._annotation is None:
             return
-        if not self._annotation_pane.has_region_text:
+        if not self._vlm_pane.has_grounding:
             return
-        idx, text = self._annotation_pane.current_region_text()
+        idx, text = self._vlm_pane.current_region_text()
         shapes = self._annotation.shapes
         if 0 <= idx < len(shapes):
             shapes[idx].text = text
@@ -1281,6 +1598,7 @@ class DetailView(QWidget):
             return
         if not (0 <= self._index < len(self._images)):
             return
+        self._commit_pane_region_text()
         img = self._images[self._index]
         if self._annotation is None:
             self._annotation = Annotation(image_path=img.path, shapes=[])
@@ -1376,6 +1694,7 @@ class DetailView(QWidget):
             isClosable=True, position=InfoBarPosition.TOP,
             duration=2000, parent=self.window(),
         )
+        self._update_completion_card(img)
 
     # ════════════════════════════════════════════════════════════════
     # Save: image-level label (classification / multi-label / anomaly)
@@ -1428,6 +1747,7 @@ class DetailView(QWidget):
             import logging
             logging.getLogger(__name__).exception(
                 "image_labels write failed for %s", img.path)
+        self._update_completion_card(img)
 
     # ════════════════════════════════════════════════════════════════
     # Save: VLM caption + conversations (pane → disk via signals)
@@ -1462,6 +1782,7 @@ class DetailView(QWidget):
         if sample is not None:
             sample.caption = text
         self.caption_saved.emit(img, text)
+        self._update_completion_card(img)
         InfoBar.success(
             "", "Caption saved",
             parent=self.window(), duration=1500,
@@ -1479,6 +1800,7 @@ class DetailView(QWidget):
         if sample is not None:
             sample.conversations = convos
         self.conversations_saved.emit(img, convos)
+        self._update_completion_card(img)
         InfoBar.success(
             "", "Conversations saved",
             parent=self.window(), duration=1500,
@@ -1492,7 +1814,7 @@ class DetailView(QWidget):
     def _on_save_grounding(self) -> None:
         """Commit region text, update Sample, emit signal.
 
-        Triggered by AnnotationPane's save_grounding_requested signal.
+        Triggered by VlmPane's save_grounding_requested signal.
         """
         if self._block_write_if_scanning():
             return
@@ -1513,10 +1835,13 @@ class DetailView(QWidget):
         # Sync text back to unified Sample.regions.
         sample = self._find_sample(img)
         if sample is not None:
-            for i, region in enumerate(sample.regions):
-                if i < len(shapes):
-                    region.text = shapes[i].text
+            sample.regions = (
+                _annotation_to_regions(self._annotation)
+                if self._annotation is not None else []
+            )
+            sample.has_label = bool(sample.regions)
         self.grounding_saved.emit(img, grounding)
+        self._update_completion_card(img)
         InfoBar.success(
             "", "Grounding saved",
             parent=self.window(), duration=1500,
@@ -1587,6 +1912,7 @@ class DetailView(QWidget):
         self.work_status_changed.emit(img, new_status)
         if self._status_pane is not None:
             self._status_pane.set_status(new_status)
+        self._update_completion_card(img)
         InfoBar.success(
             "", WF_STATUS_LABELS.get(new_status, new_status),
             parent=self.window(), duration=1500,
@@ -1625,6 +1951,10 @@ class DetailView(QWidget):
               and self.edit_btn.isChecked()
               and "polygon" in self._spec.shape_tools):
             self._set_shape_type("polygon")
+        elif (e.key() == Qt.Key.Key_K
+              and self.edit_btn.isChecked()
+              and "point" in self._spec.shape_tools):
+            self._set_shape_type("point")
         elif (e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
               and self.edit_btn.isChecked()):
             self.viewer.finish_polygon()

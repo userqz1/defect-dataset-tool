@@ -29,7 +29,7 @@ class DatasetSessionController(QObject):
     # -- Public API --
 
     def open_directory(self, root: Path) -> None:
-        self.scan(root)
+        self.scan(root, show_progress=False)
 
     def choose_and_open_directory(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
@@ -39,24 +39,20 @@ class DatasetSessionController(QObject):
         if not d:
             return
         root = Path(d)
-        from core.project import load_project
+        from core.project import infer_preset_for_root, load_project
 
         project = load_project(root)
         if project:
             task_type = project.task_type
+            preset_id = project.preset_id
         else:
-            from gui.dialogs.task_type_dialog import TaskTypeDialog
+            task_type, preset_id = infer_preset_for_root(root)
+        self._rt.state.open_dataset(root, task_type, preset_id=preset_id)
+        self.scan(root, show_progress=False)
 
-            dlg = TaskTypeDialog(self._window())
-            if not dlg.exec():
-                return
-            task_type = dlg.selected_task_type()
-            if task_type is None:
-                return
-        self._rt.state.open_dataset(root, task_type)
-        self.scan(root)
-
-    def scan(self, root: Path, force: bool = False) -> None:
+    def scan(
+        self, root: Path, force: bool = False, show_progress: bool = False
+    ) -> None:
         if self._scan_worker is not None and self._scan_worker.isRunning():
             return
         self._rt.dataset_bar.set_open_enabled(False)
@@ -73,11 +69,13 @@ class DatasetSessionController(QObject):
         # gate closed as soon as the worker starts, not after Phase 1.
         self._rt.state.set_scan_active(True)
 
-        from gui.dialogs.op_dialogs import ProgressDialog
+        progress = None
+        if show_progress:
+            from gui.dialogs.op_dialogs import ProgressDialog
 
-        progress = ProgressDialog(
-            "扫描数据集", parent=self._window(), cancelable=True)
-        progress.show()
+            progress = ProgressDialog(
+                "扫描数据集", parent=self._window(), cancelable=True)
+            progress.show()
 
         from gui.workers.scan_worker import ScanWorker
 
@@ -100,7 +98,8 @@ class DatasetSessionController(QObject):
             root, parent=self._rt.shell,
             force_rescan=force, skip_analyze=True)
         self._scan_worker = worker
-        progress.canceled.connect(worker.cancel)
+        if progress is not None:
+            progress.canceled.connect(worker.cancel)
 
         _PHASE_TITLES = {
             "scan": "扫描文件系统",
@@ -112,10 +111,13 @@ class DatasetSessionController(QObject):
         }
 
         def on_phase(p: str) -> None:
-            progress.titleLabel.setText(_PHASE_TITLES.get(p, "扫描数据集"))
+            if progress is not None:
+                progress.titleLabel.setText(
+                    _PHASE_TITLES.get(p, "扫描数据集"))
 
         def on_progress(done, total, name):
-            progress.set_progress(done, total, name)
+            if progress is not None:
+                progress.set_progress(done, total, name)
 
         def on_scan_finished(ds):
             # Phase 1 complete — render the grid/catalogue NOW.  Phase 2+3
@@ -154,7 +156,7 @@ class DatasetSessionController(QObject):
                     # production strip, ReviewHub summary, etc.)
                     # repaints from the cleaned counts immediately.
                     self._rt.state.load_workflow()
-            if progress.isVisible():
+            if progress is not None and progress.isVisible():
                 progress.accept()
             if ds.total_images == 0:
                 InfoBar.warning(
@@ -169,7 +171,7 @@ class DatasetSessionController(QObject):
             self._scan_worker = None
             # Progress dialog already closed in on_scan_finished; defensive
             # re-close in case scan_finished was skipped (shouldn't happen).
-            if progress.isVisible():
+            if progress is not None and progress.isVisible():
                 progress.accept()
             self._rt.dataset_bar.set_open_enabled(True)
 
@@ -183,7 +185,6 @@ class DatasetSessionController(QObject):
             # the SampleSet + ext_stats.  None means "build failed,
             # status → UNAVAILABLE" which is better than leaving a
             # stale SampleSet from the previous scan.
-            self._rt.state.set_sample_set(ss)
             # Align the project's write-back format with what we just
             # imported.  Scenario: first-open of a YOLO/VOC dataset
             # creates a Project with ``annotation_format="labelme"``
@@ -191,7 +192,9 @@ class DatasetSessionController(QObject):
             # would happily save LabelMe JSON next to the original
             # .txt/.xml files and corrupt the dataset's format.
             if ss is not None:
+                ss = self._prepare_sample_set_for_project(ss)
                 self._sync_project_format_from_samples(ss)
+            self._rt.state.set_sample_set(ss)
             if ext is not None:
                 self._rt.state.set_ext_stats(ext)
             self._rt.state.set_scan_active(False)
@@ -199,7 +202,7 @@ class DatasetSessionController(QObject):
 
         def on_fail(msg):
             self._scan_worker = None
-            if progress.isVisible():
+            if progress is not None and progress.isVisible():
                 progress.accept()
             self._rt.dataset_bar.set_open_enabled(True)
             self._rt.state.set_scan_active(False)
@@ -211,7 +214,7 @@ class DatasetSessionController(QObject):
 
         def on_canceled():
             self._scan_worker = None
-            if progress.isVisible():
+            if progress is not None and progress.isVisible():
                 progress.accept()
             self._rt.dataset_bar.set_open_enabled(True)
             self._rt.state.set_scan_active(False)
@@ -239,7 +242,7 @@ class DatasetSessionController(QObject):
         ds = self._rt.state.dataset
         if ds is None:
             return
-        self.scan(ds.root_path, force=True)
+        self.scan(ds.root_path, force=True, show_progress=True)
 
     def rescan(self, force: bool = False) -> None:
         if self._scan_worker is not None and self._scan_worker.isRunning():
@@ -285,9 +288,10 @@ class DatasetSessionController(QObject):
                 ext, ss = None, None
             # Dataset already set by _scan_done — just publish the
             # SampleSet / ext_stats.
-            self._rt.state.set_sample_set(ss)
             if ss is not None:
+                ss = self._prepare_sample_set_for_project(ss)
                 self._sync_project_format_from_samples(ss)
+            self._rt.state.set_sample_set(ss)
             if ext is not None:
                 self._rt.state.set_ext_stats(ext)
             self._rt.state.set_scan_active(False)
@@ -345,8 +349,15 @@ class DatasetSessionController(QObject):
 
     def cleanup_workers(self) -> None:
         if self._scan_worker is not None:
-            self._scan_worker.quit()
-            self._scan_worker.wait(3000)
+            # ScanWorker overrides run() — quit() only stops an event
+            # loop and does nothing here.  cancel() sets the flag that
+            # the progress callback checks, causing _ScanCancelled.
+            self._scan_worker.cancel()
+            if not self._scan_worker.wait(5000):
+                logger.warning("ScanWorker did not stop within 5 s — "
+                               "terminating thread")
+                self._scan_worker.terminate()
+                self._scan_worker.wait(2000)
         self._rt.thumb_worker.stop()
 
     # -- Private --
@@ -354,12 +365,26 @@ class DatasetSessionController(QObject):
     def _window(self):
         return self._rt.shell.window()
 
+    def _prepare_sample_set_for_project(self, ss):
+        """Apply task-specific SampleSet normalization before publishing."""
+        project = self._rt.state.project
+        if project is None:
+            return ss
+        try:
+            from core.task_types import TaskType
+            if project.task_type is TaskType.IMAGE_PAIR:
+                from core.pairing import infer_pairs
+                return infer_pairs(ss)
+        except Exception:
+            logger.exception("image-pair inference failed")
+        return ss
+
     def _set_tools_enabled(self, enabled: bool) -> None:
         """Gate every dataset-wide action surface.
 
         After the IA v3 split, "tools" is spread across four widgets:
           - DatasetBar refresh button (global refresh)
-          - DataProcessHub action buttons (import labels / batch operations)
+          - TrainingVersionHub generate button (versioned training snapshot)
           - DeliveryHub action buttons (copy conversion / export / VLM export)
           - ReviewHub action buttons (quality / dedup / stats)
 
@@ -367,7 +392,7 @@ class DatasetSessionController(QObject):
         enable/disable alone doesn't say whether an op is undoable.
         """
         self._rt.dataset_bar.set_refresh_enabled(enabled)
-        self._rt.process_hub.set_actions_enabled(enabled)
+        self._rt.training_hub.set_actions_enabled(enabled)
         self._rt.delivery_hub.set_actions_enabled(enabled)
         self._rt.review_hub.set_actions_enabled(enabled)
         self.refresh_undo_state()

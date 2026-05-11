@@ -144,6 +144,7 @@ class LlmDataCard(QFrame):
     def set_project(self, project) -> None:
         """Cache the active project for future extension hooks."""
         self._project = project
+        self._select_format_for_project(project)
 
     def set_sample_set(self, ss) -> None:
         """Refresh the data-status counts from the live SampleSet."""
@@ -363,6 +364,36 @@ class LlmDataCard(QFrame):
     def _on_format_toggled(self, key: str, on: bool) -> None:
         if on:
             self._selected_format = key
+
+    def _select_format_for_project(self, project) -> None:
+        if project is None:
+            return
+        target = (getattr(project, "target_format", "") or "").lower()
+        compact = (
+            target.replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace("/", "")
+        )
+        target_key = {
+            "llava": "llava",
+            "llavajsonl": "llava",
+            "sharegpt": "sharegpt",
+            "sharegptjson": "sharegpt",
+            "sharegptjsonl": "sharegpt",
+            "swift": "swift",
+            "msswift": "swift",
+            "swiftjsonl": "swift",
+            "qwenvl": "swift",
+            "captionjsonl": "caption_jsonl",
+            "imagecaptionjsonl": "caption_jsonl",
+        }.get(compact)
+        if not target_key:
+            return
+        radio = self._fmt_radios.get(target_key)
+        if radio is not None:
+            radio.setChecked(True)
+            self._selected_format = target_key
 
     def _on_export_clicked(self) -> None:
         self.export_requested.emit(self._selected_format)

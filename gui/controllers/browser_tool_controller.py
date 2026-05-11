@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from qfluentwidgets import InfoBar, InfoBarPosition
+from qfluentwidgets import InfoBar, InfoBarPosition, MessageBox
 
 if TYPE_CHECKING:
     from gui.controllers.browser_runtime import BrowserRuntime
@@ -51,8 +53,20 @@ class BrowserToolController:
 
     def cleanup_workers(self) -> None:
         if self._export_worker is not None:
-            self._export_worker.quit()
-            self._export_worker.wait(3000)
+            # BatchWorker overrides run() — quit() only stops an event
+            # loop and does nothing here.  No cancel API exists, so we
+            # just wait for the task to finish naturally or terminate
+            # as a last resort to avoid the "QThread destroyed while
+            # still running" crash.
+            try:
+                if self._export_worker.isRunning():
+                    if not self._export_worker.wait(5000):
+                        logger.warning("export worker did not stop "
+                                       "within 5 s — terminating")
+                        self._export_worker.terminate()
+                        self._export_worker.wait(2000)
+            except RuntimeError:
+                pass  # C++ object already deleted by deleteLater
 
     # -- Run handlers (called by DatasetBar / stage hubs) --
 
@@ -106,6 +120,108 @@ class BrowserToolController:
         """
         self._on_export(initial_fmt)
 
+    def run_training_version(self, config: dict) -> None:
+        self._on_training_version(config)
+
+    def open_training_version(self, path: str) -> None:
+        target = Path(path)
+        if target.exists():
+            os.startfile(str(target))
+        else:
+            InfoBar.warning(
+                "目录不存在", str(target),
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+
+    def _on_deliver_training_version(self, path: str) -> None:
+        project = self._rt.state.project
+        if project is None:
+            return
+        source = Path(path).resolve()
+        versions_root = (project.root_path / "versions").resolve()
+        try:
+            source.relative_to(versions_root)
+        except ValueError:
+            InfoBar.warning(
+                "交付失败", "目标不是当前项目的数据集版本目录",
+                parent=self._window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        if source == versions_root:
+            InfoBar.warning(
+                "交付失败", "请选择一个具体的数据集版本",
+                parent=self._window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        if not source.is_dir():
+            InfoBar.warning(
+                "交付失败", "版本目录不存在",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        from PyQt6.QtWidgets import QFileDialog
+        picked = QFileDialog.getExistingDirectory(
+            self._window(), "选择交付目录", str(Path.home()))
+        if not picked:
+            return
+        parent = Path(picked).resolve()
+        dest = parent / source.name
+        if dest.exists():
+            for i in range(2, 1000):
+                candidate = parent / f"{source.name}_{i}"
+                if not candidate.exists():
+                    dest = candidate
+                    break
+        try:
+            dest.resolve().relative_to(source)
+            InfoBar.warning(
+                "交付失败", "交付目录不能位于版本目录内部",
+                parent=self._window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        except ValueError:
+            pass
+
+        def task(progress_cb):
+            import shutil
+            if progress_cb:
+                progress_cb(0, 1, source.name)
+            shutil.copytree(source, dest)
+            if progress_cb:
+                progress_cb(1, 1, dest.name)
+            return dest
+
+        def done(out_dir: Path) -> None:
+            InfoBar.success(
+                "版本已交付", str(out_dir),
+                parent=self._window(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+            os.startfile(str(out_dir))
+
+        def fail(msg: str) -> None:
+            InfoBar.error(
+                "交付失败", msg,
+                parent=self._window(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+
+        from gui.workers.batch_runner import BatchRunner
+        BatchRunner(self._rt.shell, "交付数据集版本").run(
+            task=task, on_done=done, on_fail=fail)
+
+    def delete_training_version(self, path: str) -> None:
+        self._on_delete_training_version(path)
+
+    def deliver_training_version(self, path: str) -> None:
+        self._on_deliver_training_version(path)
+
     def run_history(self) -> None:
         self._on_history()
 
@@ -143,6 +259,8 @@ class BrowserToolController:
         task_type = self._rt.state.task_type
 
         project = self._rt.state.project
+        if not initial_fmt and project is not None:
+            initial_fmt = getattr(project, "target_format", "") or ""
         if project is not None:
             ss = project.split_state
             manual_counts = (len(ss.manual_train), len(ss.manual_val),
@@ -190,6 +308,153 @@ class BrowserToolController:
             )
             return
         self._run_export(ds, opts)
+
+    def _on_training_version(self, config: dict) -> None:
+        project = self._rt.state.project
+        sample_set = self._rt.state.sample_set
+        if project is None:
+            InfoBar.warning(
+                "没有项目", "请先打开或创建项目",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        if sample_set is None or not self._rt.state.sample_set_ready:
+            InfoBar.warning(
+                "统一模型未就绪", "请等待扫描完成后再生成数据集版本",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        fmt = config.get("format") or ""
+        if not fmt:
+            InfoBar.warning(
+                "未选择格式", "请选择输出格式",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        try:
+            from core.target_readiness import (
+                export_key_for_target_format,
+                target_format_is_exportable,
+            )
+            exportable = target_format_is_exportable(fmt)
+        except Exception:
+            exportable = False
+        if not exportable:
+            InfoBar.warning(
+                "目标格式暂不支持生成版本",
+                "请先在标注页选择一个可导出的目标格式。",
+                parent=self._window(), duration=3000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        fmt = export_key_for_target_format(fmt)
+
+        categories: tuple[str, ...] = ()
+        if config.get("scope") == "filtered":
+            try:
+                active = self._rt.browser.active_category()
+            except AttributeError:
+                active = ""
+            if active:
+                categories = (active,)
+
+        from core.version_builder import TrainingVersionConfig, build_training_version
+        version_config = TrainingVersionConfig(
+            fmt=fmt,
+            scope=config.get("scope", "all"),
+            categories=categories,
+            train_ratio=int(config.get("train_ratio", 80)),
+            val_ratio=int(config.get("val_ratio", 10)),
+            test_ratio=int(config.get("test_ratio", 10)),
+            stratified=bool(config.get("stratified", True)),
+            version_name=str(config.get("version_name") or ""),
+        )
+
+        def task(progress_cb):
+            return build_training_version(
+                sample_set, project.root_path, version_config,
+                progress_cb=progress_cb,
+            )
+
+        def done(result):
+            self._refresh_training_versions()
+            InfoBar.success(
+                "数据集版本已生成",
+                (f"{result.sample_count:,} 张图片 · "
+                 f"{result.train_count}/{result.val_count}/{result.test_count} "
+                 f"→ {result.out_dir}"),
+                parent=self._window(), duration=7000,
+                position=InfoBarPosition.TOP,
+            )
+
+        def fail(msg: str):
+            InfoBar.error(
+                "生成数据集版本失败", msg,
+                parent=self._window(), duration=6000,
+                position=InfoBarPosition.TOP,
+            )
+
+        from gui.workers.batch_runner import BatchRunner
+        BatchRunner(self._rt.shell, "生成数据集版本").run(
+            task=task, on_done=done, on_fail=fail)
+
+    def _refresh_training_versions(self) -> None:
+        project = self._rt.state.project
+        if project is None:
+            self._rt.training_hub.set_versions([])
+            self._rt.delivery_hub.set_versions([])
+            return
+        try:
+            from core.version_builder import list_training_versions
+            versions = list_training_versions(project.root_path)
+        except Exception:
+            versions = []
+        self._rt.training_hub.set_versions(versions)
+        self._rt.delivery_hub.set_versions(versions)
+
+    def _on_delete_training_version(self, path: str) -> None:
+        project = self._rt.state.project
+        if project is None:
+            return
+        target = Path(path)
+        box = MessageBox(
+            "删除数据集版本",
+            f"将删除该版本目录，原始项目数据不受影响。\n\n{target}",
+            self._window(),
+        )
+        box.yesButton.setText("删除")
+        box.cancelButton.setText("取消")
+        if not box.exec():
+            return
+
+        try:
+            from core.version_builder import delete_training_version
+            ok = delete_training_version(target, project.root_path)
+        except Exception as exc:
+            InfoBar.error(
+                "删除失败", str(exc),
+                parent=self._window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        if not ok:
+            InfoBar.warning(
+                "删除失败", "目标不是当前项目的数据集版本目录",
+                parent=self._window(), duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        self._refresh_training_versions()
+        InfoBar.success(
+            "已删除数据集版本", target.name,
+            parent=self._window(), duration=3000,
+            position=InfoBarPosition.TOP,
+        )
 
     def _run_export(self, dataset, opts: dict) -> None:
         # Guard: a previous worker may have completed and had its
@@ -281,10 +546,12 @@ class BrowserToolController:
         from pathlib import Path as _P
         from core.format_out import ExportOptions, export_samples
         from core.splitter import SplitOptions, split_dataset
+        from core.target_readiness import export_key_for_target_format
         from core.unified import SampleSet as _SS
 
         out_dir = self._wrap_export_out_dir(opts["out_dir"], opts["format"])
         fmt = opts["format"]
+        fmt_key = export_key_for_target_format(fmt)
         extra = {}
         q = opts.get("question") or ""
         if q:
@@ -299,7 +566,31 @@ class BrowserToolController:
 
         # --- Assign split labels to SampleSet samples ---
         split_mode = opts.get("split_mode", "ratio")
-        if split_mode == "manual":
+        if fmt_key == "pairedfolder":
+            from core.pairing import infer_pairs, unique_pair_samples
+            sample_set = infer_pairs(sample_set)
+            pair_samples = unique_pair_samples(sample_set.samples)
+            if split_mode == "manual":
+                project = self._rt.state.project
+                ps = project.split_state if project else None
+                path_to_split: dict[str, str] = {}
+                if ps:
+                    for p in ps.manual_train:
+                        path_to_split[p] = "train"
+                    for p in ps.manual_val:
+                        path_to_split[p] = "val"
+                    for p in ps.manual_test:
+                        path_to_split[p] = "test"
+                for sample in pair_samples:
+                    sample.split = (
+                        path_to_split.get(str(sample.image_path))
+                        or path_to_split.get(str(sample.pair_path))
+                        or "train"
+                    )
+            else:
+                self._assign_sample_splits(pair_samples, opts)
+            sample_set = _SS(samples=pair_samples)
+        elif split_mode == "manual":
             project = self._rt.state.project
             ps = project.split_state if project else None
             path_to_split: dict[str, str] = {}
@@ -378,6 +669,45 @@ class BrowserToolController:
         worker.failed.connect(on_fail)
         worker.start()
         self._export_worker = worker
+
+    @staticmethod
+    def _assign_sample_splits(samples, opts: dict) -> None:
+        """Assign train/val/test directly to Sample objects.
+
+        Used for pair-level targets where splitting the backing Dataset by
+        individual image would separate A/B sides before export.
+        """
+        import random
+
+        train = float(opts.get("train_ratio", 0.8))
+        val = float(opts.get("val_ratio", 0.1))
+        test = float(opts.get("test_ratio", 0.1))
+        total = max(1.0, train + val + test)
+        seed = opts.get("seed", 42)
+        rng = random.Random(seed)
+
+        if opts.get("stratified", True):
+            groups: dict[str, list] = {}
+            for sample in samples:
+                groups.setdefault(sample.category or "", []).append(sample)
+            batches = list(groups.values())
+        else:
+            batches = [list(samples)]
+
+        for batch in batches:
+            rng.shuffle(batch)
+            n = len(batch)
+            n_train = int(round(n * train / total))
+            n_val = int(round(n * val / total))
+            if n_train + n_val > n:
+                n_val = max(0, n_val - (n_train + n_val - n))
+            labels = (
+                ["train"] * n_train
+                + ["val"] * n_val
+                + ["test"] * max(0, n - n_train - n_val)
+            )
+            for sample, split in zip(batch, labels[:n]):
+                sample.split = split
 
     def _run_export_pipeline(self, dataset, opts: dict) -> None:
         """Legacy export via Pipeline (fallback when SampleSet is unavailable)."""

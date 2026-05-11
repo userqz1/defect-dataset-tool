@@ -38,6 +38,7 @@ def _checkbox_rect_for(card_rect: QRect, pad: int) -> QRect:
     return QRect(sx, sy, _CHECKBOX_SIZE, _CHECKBOX_SIZE)
 
 from core.models import ImageInfo
+from gui import i18n
 from gui.theme import T
 from gui.widgets.category_tree import _color_for  # reuse earthen palette
 
@@ -47,6 +48,7 @@ ROLE_PIX = Qt.ItemDataRole.UserRole + 1      # QPixmap (thumbnail)
 ROLE_DIM = Qt.ItemDataRole.UserRole + 2      # (w, h) tuple
 ROLE_QUALITY = Qt.ItemDataRole.UserRole + 3  # list[str] of quality issue kinds
 ROLE_DUP = Qt.ItemDataRole.UserRole + 4      # bool — part of a dup group
+ROLE_TARGET_DONE = Qt.ItemDataRole.UserRole + 5  # bool — complete for target
 
 
 class _ThumbDelegate(QStyledItemDelegate):
@@ -179,9 +181,28 @@ class _ThumbDelegate(QStyledItemDelegate):
         # Duplicate badge (ghost style — subtle dark with light text)
         if index.data(ROLE_DUP):
             draw_badge("DUP", QColor(T.BADGE_GHOST_BG), QColor(T.BADGE_FG_LIGHT))
-        # Labeled badge ("N bbox" / "已标" minimal)
-        if img.has_label:
-            draw_badge("已标", QColor(T.BADGE_GHOST_BG), QColor(T.BADGE_FG_LIGHT))
+        # Target-completion badge.  When BrowserView provides a target-aware
+        # completion map, this badge reflects the selected annotation target
+        # rather than raw label-file existence.
+        target_done = index.data(ROLE_TARGET_DONE)
+        if target_done is True:
+            draw_badge(
+                i18n.t("thumb.target.done"),
+                QColor(T.BADGE_GHOST_BG),
+                QColor(T.BADGE_FG_LIGHT),
+            )
+        elif target_done is False:
+            draw_badge(
+                i18n.t("thumb.target.todo"),
+                QColor(T.WARNING),
+                QColor(T.BADGE_FG_DARK),
+            )
+        elif img.has_label:
+            draw_badge(
+                i18n.t("thumb.source.labeled"),
+                QColor(T.BADGE_GHOST_BG),
+                QColor(T.BADGE_FG_LIGHT),
+            )
 
         # ---- Corner-select box top-right (always visible) ----
         # Always rendered so the user can build a multi-selection
@@ -302,6 +323,7 @@ class ThumbnailGrid(QListWidget):
         self,
         images: list[ImageInfo],
         quality_map: dict[str, list[str]] | None = None,
+        target_complete_paths: set[str] | None = None,
     ) -> None:
         """Render given images (replaces any existing items).
 
@@ -314,12 +336,16 @@ class ThumbnailGrid(QListWidget):
         """
         self.clear()
         self._path_to_row.clear()
-        self._append_chunk(images, quality_map or {}, base_index=0)
+        self._append_chunk(
+            images, quality_map or {}, base_index=0,
+            target_complete_paths=target_complete_paths,
+        )
 
     def append_images(
         self,
         images: list[ImageInfo],
         quality_map: dict[str, list[str]] | None = None,
+        target_complete_paths: set[str] | None = None,
     ) -> None:
         """Append images without clearing — used by infinite-scroll loader.
 
@@ -329,14 +355,17 @@ class ThumbnailGrid(QListWidget):
         """
         if not images:
             return
-        self._append_chunk(images, quality_map or {},
-                           base_index=self.count())
+        self._append_chunk(
+            images, quality_map or {}, base_index=self.count(),
+            target_complete_paths=target_complete_paths,
+        )
 
     def _append_chunk(
         self,
         images: list[ImageInfo],
         quality_map: dict[str, list[str]],
         base_index: int,
+        target_complete_paths: set[str] | None = None,
     ) -> None:
         """Add ``images`` starting at ``base_index`` in the row map."""
         for offset, img in enumerate(images):
@@ -346,6 +375,11 @@ class ThumbnailGrid(QListWidget):
             kinds = quality_map.get(str(img.path))
             if kinds:
                 item.setData(ROLE_QUALITY, kinds)
+            if target_complete_paths is not None:
+                item.setData(
+                    ROLE_TARGET_DONE,
+                    str(img.path) in target_complete_paths,
+                )
             self.addItem(item)
             self._path_to_row[str(img.path)] = base_index + offset
             self.request_thumb.emit(img.path)

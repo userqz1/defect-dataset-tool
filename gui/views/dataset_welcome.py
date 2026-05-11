@@ -68,11 +68,22 @@ _FMT_DISPLAY = {
     "yolo": "YOLO",
     "voc": "VOC",
     "coco": "COCO",
+    "coco-seg": "COCO-seg",
+    "imagefolder": "ImageFolder",
+    "mvtec": "MVTec",
+    "llava": "LLaVA",
+    "sharegpt": "ShareGPT",
+    "swift": "Swift",
+    "caption jsonl": "Caption JSONL",
+    "coco-keypoints": "COCO-keypoints",
+    "dota": "DOTA",
+    "pairedfolder": "PairedFolder",
 }
 
 
 def _format_label(fmt: str) -> str:
-    return _FMT_DISPLAY.get((fmt or "").lower(), (fmt or "—").upper())
+    key = (fmt or "").strip().lower()
+    return _FMT_DISPLAY.get(key, fmt or "—")
 
 
 def _next_action(s: ProjectSummary) -> tuple[str, str]:
@@ -87,18 +98,23 @@ def _next_action(s: ProjectSummary) -> tuple[str, str]:
       1. Empty project (no images yet) → 导入新数据 → INBOX
       2. Pending annotation work → 继续标注 → ANNOTATE
       3. Review queue non-empty → 去审核 → REVIEW
-      4. Items ready to ship → 去导出 → DELIVERY
-      5. Default → 继续标注 → ANNOTATE
+      4. Items ready but no frozen version → 生成版本 → VERSIONS
+      5. Frozen version exists → 去导出 → DELIVERY
+      6. Default → 继续标注 → ANNOTATE
     """
     if not s.exists:
         return ("重新定位", "")
     if s.wf_total == 0:
-        return ("导入新数据", "inbox")
+        return ("导入数据", "inbox")
     if s.wf_new > 0 or s.wf_in_progress > 0:
         return ("继续标注", "annotate")
     if s.wf_review > 0:
         return ("去审核", "review")
     if s.wf_ready > 0:
+        if s.version_count <= 0:
+            return ("生成版本", "process")
+        return ("去导出", "delivery")
+    if s.version_count > 0:
         return ("去导出", "delivery")
     return ("继续标注", "annotate")
 
@@ -207,8 +223,13 @@ class _ProjectCard(QFrame):
             meta_parts.append(f"{summary.wf_total:,} 张")
         if summary.class_count:
             meta_parts.append(f"{summary.class_count} 类")
-        if summary.annotation_format:
-            meta_parts.append(_format_label(summary.annotation_format))
+        if summary.target_format:
+            meta_parts.append(f"目标 {_format_label(summary.target_format)}")
+        elif summary.annotation_format:
+            meta_parts.append(
+                f"主格式 {_format_label(summary.annotation_format)}")
+        if summary.version_count:
+            meta_parts.append(f"{summary.version_count} 个版本")
         if meta_parts:
             meta = CaptionLabel(" · ".join(meta_parts))
             meta.setObjectName("projectCardMeta")
@@ -371,24 +392,24 @@ class DatasetWelcome(QWidget):
         root.addWidget(tagline)
         root.addSpacing(T.GAP_LG)
 
-        # Three entry cards — ordered by most common starting point
+        # Three entry cards
         entries = QHBoxLayout()
         entries.setSpacing(T.GAP_LG)
         self._entry_resume = _EntryCard(
-            FIF.HISTORY, "继续已有项目",
-            "恢复 DataForge 项目、进度、工作状态",
+            FIF.HISTORY, "继续最近项目",
+            "恢复上次的 DataForge 项目与工作进度",
             primary=True)
-        self._entry_resume.clicked.connect(self._on_open_dir)
-        self._entry_adopt = _EntryCard(
-            FIF.PHOTO, "接管现有数据集",
-            "已有图片/标注目录，自动识别并创建 DataForge 项目")
-        self._entry_adopt.clicked.connect(self._on_open_dir)
+        self._entry_resume.clicked.connect(self._on_resume_recent)
+        self._entry_open = _EntryCard(
+            FIF.FOLDER, "打开文件夹",
+            "自动识别项目、数据集或图片目录")
+        self._entry_open.clicked.connect(self._on_smart_open)
         self._entry_new = _EntryCard(
             FIF.ADD, "新建空项目",
             "先建项目壳，再导入图片")
         self._entry_new.clicked.connect(self._on_create_project)
         entries.addWidget(self._entry_resume, 1)
-        entries.addWidget(self._entry_adopt, 1)
+        entries.addWidget(self._entry_open, 1)
         entries.addWidget(self._entry_new, 1)
         root.addLayout(entries)
 
@@ -399,7 +420,7 @@ class DatasetWelcome(QWidget):
 
         self._empty_hint = CaptionLabel(
             "尚无最近项目 — 点击上方"
-            " 新建项目 / 打开项目 开始"
+            " 新建空项目 / 打开文件夹 开始"
         )
         self._empty_hint.setObjectName("welcomeEmptyHint")
         self._empty_hint.setWordWrap(True)
@@ -565,14 +586,60 @@ class DatasetWelcome(QWidget):
             str(root), dlg.project_name(),
             dlg.selected_preset_id(), dlg.selected_task_type())
 
-    def _on_open_dir(self) -> None:
+    def _on_resume_recent(self) -> None:
+        """继续最近项目 — open the most recent project directly.
+
+        If there are recent projects, open the first one.
+        Otherwise fall back to folder picker.
+        """
+        from core.recent import load_recent
+        recent = load_recent()
+        if recent:
+            first = recent[0]
+            if Path(first).is_dir():
+                self.open_dataset.emit(first, "overview")
+                return
+        # No valid recent — fall back to smart open
+        self._on_smart_open()
+
+    def _on_smart_open(self) -> None:
+        """打开文件夹 — system auto-detects what the directory is.
+
+        Detection logic:
+        1. Has .dataforge/project.json → open as DataForge project
+        2. Has <category>/images/ structure → dataset, create project
+        3. Contains images directly → open with inbox intent for import
+        """
         from PyQt6.QtWidgets import QFileDialog
         d = QFileDialog.getExistingDirectory(
-            self, "选择数据集目录", str(Path.home()))
-        if d:
-            # No intent — file-picker entry doesn't know the project's
-            # workflow state; MainWindow defaults to 标注工作台.
-            self.open_dataset.emit(d, "")
+            self, "选择文件夹", str(Path.home()))
+        if not d:
+            return
+        root = Path(d)
+
+        # Case 1: existing DataForge project
+        if (root / ".dataforge" / "project.json").is_file():
+            self.open_dataset.emit(d, "overview")
+            return
+
+        # Case 2: looks like a structured dataset (has <sub>/images/)
+        has_structure = any(
+            (sub / "images").is_dir()
+            for sub in root.iterdir()
+            if sub.is_dir() and not sub.name.startswith(".")
+        )
+        if has_structure:
+            from qfluentwidgets import InfoBar, InfoBarPosition
+            InfoBar.info(
+                "检测到数据集结构",
+                "已识别为标准数据集目录，将创建项目并开始管理",
+                parent=self.window(), duration=3000,
+                position=InfoBarPosition.TOP)
+            self.open_dataset.emit(d, "overview")
+            return
+
+        # Case 3: plain directory — open normally, land on inbox
+        self.open_dataset.emit(d, "inbox")
 
     def _on_remove(self, path_str: str) -> None:
         import json

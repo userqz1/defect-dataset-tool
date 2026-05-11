@@ -22,6 +22,170 @@ PROJECT_FILE = "project.json"
 # values listed here.
 WRITEBACK_FORMATS: tuple[str, ...] = ("labelme", "yolo", "voc")
 
+_DEFAULT_TARGET_FORMATS: dict[TaskType, str] = {
+    TaskType.CLASSIFICATION: "ImageFolder",
+    TaskType.MULTI_LABEL: "CSV",
+    TaskType.ANOMALY: "MVTec",
+    TaskType.DETECTION: "YOLO",
+    TaskType.ORIENTED_DET: "JSONL",
+    TaskType.SEMANTIC_SEG: "JSONL",
+    TaskType.INSTANCE_SEG: "JSONL",
+    TaskType.KEYPOINT: "LabelMe JSON",
+    TaskType.IMAGE_PAIR: "PairedFolder",
+}
+
+
+def default_target_format_for_task(task_type: TaskType) -> str:
+    """Return the non-blocking annotation target for a task type."""
+    return _DEFAULT_TARGET_FORMATS.get(task_type, "YOLO")
+
+
+def exportable_target_format_for_task(
+    task_type: TaskType,
+    target_format: str,
+) -> str:
+    """Return an exportable target format for *task_type*.
+
+    Legacy projects may persist targets whose UI existed before the writer
+    did (for example DOTA or COCO-seg). Clamp those to the task's current
+    supported default so annotation, filtering, and version generation stay
+    on one closed path.
+    """
+    target = (target_format or "").strip()
+    if target:
+        try:
+            from .target_readiness import (
+                export_key_for_target_format,
+                target_format_is_exportable,
+            )
+            if (target_format_is_exportable(target)
+                    and export_key_for_target_format(target)
+                    in _allowed_export_keys_for_task(task_type)):
+                return target
+        except Exception:
+            pass
+    return default_target_format_for_task(task_type)
+
+
+def _allowed_export_keys_for_task(task_type: TaskType) -> set[str]:
+    try:
+        from .schema import schemas_for_task
+        options = [schema.key for schema in schemas_for_task(task_type)]
+    except Exception:
+        options = []
+    if not options:
+        from .task_types import TASK_REGISTRY
+        info = TASK_REGISTRY.get(task_type)
+        options = list(info.export_formats if info else ())
+    try:
+        from .target_readiness import export_key_for_target_format
+        return {export_key_for_target_format(option) for option in options}
+    except Exception:
+        return set()
+
+
+_IMAGE_EXTS: frozenset[str] = frozenset({
+    ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp",
+})
+
+
+def infer_preset_for_root(root: Path) -> tuple[TaskType, str]:
+    """Best-effort preset inference for first-time folder opens.
+
+    The launcher should not interrupt "open folder" with a second task-type
+    dialog.  We infer a reasonable default from common dataset structures and
+    let users correct it later from 项目设置 → 数据集预设.
+    """
+    from .annotation_preset import CUSTOM_ID
+
+    label_exts: set[str] = set()
+    json_candidates: list[Path] = []
+    has_images = False
+    has_category_image_dirs = False
+
+    scanned = 0
+    try:
+        iterator = root.rglob("*")
+        for p in iterator:
+            scanned += 1
+            if scanned > 5000:
+                break
+            try:
+                if p.is_dir():
+                    if p.name.lower() == "images" and p.parent != root:
+                        has_category_image_dirs = True
+                    continue
+                if not p.is_file():
+                    continue
+            except OSError:
+                continue
+
+            suffix = p.suffix.lower()
+            if suffix in _IMAGE_EXTS:
+                has_images = True
+                continue
+            if suffix in {".txt", ".xml", ".json"}:
+                label_exts.add(suffix)
+                if suffix == ".json" and len(json_candidates) < 8:
+                    json_candidates.append(p)
+    except OSError:
+        pass
+
+    if ".txt" in label_exts:
+        return TaskType.DETECTION, "detection_yolo"
+    if ".xml" in label_exts:
+        # Pascal VOC has no dedicated preset card; keep task correct and mark
+        # the preset as custom. The scan pass will still sync writeback format
+        # to "voc".
+        return TaskType.DETECTION, CUSTOM_ID
+    if ".json" in label_exts:
+        return _infer_json_preset(json_candidates)
+    if has_category_image_dirs:
+        return TaskType.CLASSIFICATION, "classification"
+    if has_images:
+        return TaskType.DETECTION, "detection_yolo"
+    return TaskType.DETECTION, "detection_yolo"
+
+
+def _infer_json_preset(paths: list[Path]) -> tuple[TaskType, str]:
+    """Infer COCO / LabelMe-ish JSON presets from a few samples."""
+    import json
+
+    saw_polygon = False
+    saw_shape = False
+    saw_image_label = False
+    for path in paths:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        if all(k in raw for k in ("images", "annotations", "categories")):
+            return TaskType.DETECTION, "detection_coco"
+        shapes = raw.get("shapes")
+        if isinstance(shapes, list):
+            for shape in shapes[:16]:
+                if not isinstance(shape, dict):
+                    continue
+                saw_shape = True
+                st = str(shape.get("shape_type", "")).lower()
+                pts = shape.get("points")
+                if st == "polygon" or (
+                    isinstance(pts, list) and len(pts) > 2
+                ):
+                    saw_polygon = True
+        if raw.get("image_labels") or raw.get("category"):
+            saw_image_label = True
+
+    if saw_polygon:
+        return TaskType.INSTANCE_SEG, "instance_seg"
+    if saw_shape:
+        return TaskType.DETECTION, "detection_yolo"
+    if saw_image_label:
+        return TaskType.CLASSIFICATION, "classification"
+    return TaskType.DETECTION, "detection_yolo"
+
 
 # ---------- State sub-models ----------
 
@@ -149,12 +313,22 @@ def load_project(root: Path) -> Project | None:
         preset_id = detect_preset_id(
             task_type, enable_caption, enable_conversations, enable_grounding,
         )
+    target_format = raw.get("target_format", "")
+    if not target_format:
+        from .annotation_preset import preset_by_id
+        preset = preset_by_id(preset_id)
+        if preset is not None:
+            target_format = preset.target_export
+    if not target_format:
+        target_format = default_target_format_for_task(task_type)
+    target_format = exportable_target_format_for_task(
+        task_type, target_format)
 
     return Project(
         root_path=root,
         name=raw.get("name", root.name),
         task_type=task_type,
-        target_format=raw.get("target_format", ""),
+        target_format=target_format,
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         notes=raw.get("notes", ""),
@@ -241,17 +415,20 @@ def create_project(root: Path, name: str | None = None,
     from .annotation_preset import preset_by_id
 
     caption = conversations = grounding = False
+    target_format = default_target_format_for_task(task_type)
     preset = preset_by_id(preset_id)
     if preset is not None:
         task_type = preset.task_type
         caption = preset.caption
         conversations = preset.conversations
         grounding = preset.grounding
+        target_format = preset.target_export
 
     project = Project(
         root_path=root,
         name=name or root.name,
         task_type=task_type,
+        target_format=target_format,
         preset_id=preset_id,
         enable_caption=caption,
         enable_conversations=conversations,
@@ -277,12 +454,24 @@ def apply_preset(project: Project, preset_id: str) -> bool:
     project.preset_id = preset_id
     preset = preset_by_id(preset_id)
     if preset is None or preset_id == CUSTOM_ID:
-        return False
+        changed = False
+        fixed_target = exportable_target_format_for_task(
+            project.task_type, project.target_format)
+        if project.target_format != fixed_target:
+            project.target_format = fixed_target
+            changed = True
+        if not project.target_format:
+            project.target_format = default_target_format_for_task(
+                project.task_type)
+            changed = True
+        return changed
     changed = (project.task_type != preset.task_type
                or project.enable_caption != preset.caption
                or project.enable_conversations != preset.conversations
-               or project.enable_grounding != preset.grounding)
+               or project.enable_grounding != preset.grounding
+               or project.target_format != preset.target_export)
     project.task_type = preset.task_type
+    project.target_format = preset.target_export
     project.enable_caption = preset.caption
     project.enable_conversations = preset.conversations
     project.enable_grounding = preset.grounding
@@ -303,8 +492,11 @@ class ProjectSummary:
     has_project: bool = False          # .dataforge/project.json present
     # Project metadata (populated when has_project is True)
     task_type: TaskType | None = None
+    target_format: str = ""
     annotation_format: str = ""
     class_count: int = 0
+    version_count: int = 0
+    latest_version_format: str = ""
     # Workflow stats (populated when workflow.json exists; otherwise 0)
     wf_total: int = 0
     wf_ready: int = 0
@@ -328,6 +520,11 @@ def list_known_projects() -> list[ProjectSummary]:
         proj = load_project(root)
         # Quick workflow summary (reads JSON, no scan)
         ws = workflow_store.summarize(root)
+        try:
+            from .version_builder import list_training_versions
+            versions = list_training_versions(root)
+        except Exception:
+            versions = []
         wf_in_progress = max(0, ws.total - (
             (ws.ready + ws.exported)
             + (ws.review_pending + ws.needs_fix)
@@ -341,8 +538,11 @@ def list_known_projects() -> list[ProjectSummary]:
                 exists=True,
                 has_project=True,
                 task_type=proj.task_type,
+                target_format=proj.target_format,
                 annotation_format=proj.annotation_format,
                 class_count=len(proj.class_names),
+                version_count=len(versions),
+                latest_version_format=versions[0].fmt if versions else "",
                 wf_total=ws.total,
                 wf_ready=ws.ready + ws.exported,
                 wf_review=ws.review_pending + ws.needs_fix,
@@ -353,6 +553,8 @@ def list_known_projects() -> list[ProjectSummary]:
             summaries.append(ProjectSummary(
                 root_path=root, name=root.name, updated_at="", exists=True,
                 has_project=False,
+                version_count=len(versions),
+                latest_version_format=versions[0].fmt if versions else "",
                 wf_total=ws.total,
                 wf_ready=ws.ready + ws.exported,
                 wf_review=ws.review_pending + ws.needs_fix,

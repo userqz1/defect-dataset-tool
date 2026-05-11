@@ -26,8 +26,10 @@ from .coco import COCO_SCHEMA
 from .csv import CSV_SCHEMA
 from .imagefolder import IMAGEFOLDER_SCHEMA
 from .jsonl import JSONL_SCHEMA
+from .labelme import LABELME_SCHEMA
 from .llava import LLAVA_SCHEMA
 from .mvtec import MVTEC_SCHEMA
+from .pairedfolder import PAIREDFOLDER_SCHEMA
 from .sharegpt import SHAREGPT_SCHEMA
 from .swift import SWIFT_SCHEMA
 from .voc import VOC_SCHEMA
@@ -64,8 +66,10 @@ def schemas_for_task(task_type: TaskType) -> list[Schema]:
 register(YOLO_SCHEMA)
 register(COCO_SCHEMA)
 register(VOC_SCHEMA)
+register(LABELME_SCHEMA)
 register(IMAGEFOLDER_SCHEMA)
 register(MVTEC_SCHEMA)
+register(PAIREDFOLDER_SCHEMA)
 register(CSV_SCHEMA)
 register(JSONL_SCHEMA)
 register(SHAREGPT_SCHEMA)

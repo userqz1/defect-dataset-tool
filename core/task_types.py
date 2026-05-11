@@ -100,7 +100,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("polygon",),
-        export_formats=("DOTA", "COCO"),
+        export_formats=("JSONL", "LLaVA", "ShareGPT", "Swift"),
         augment_updates_shapes=True,
     ),
     TaskType.SEMANTIC_SEG: TaskTypeInfo(
@@ -110,7 +110,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("polygon",),
-        export_formats=("COCO-seg", "Mask-PNG", "YOLO-seg"),
+        export_formats=("JSONL", "LabelMe JSON", "LLaVA", "ShareGPT", "Swift"),
         augment_updates_shapes=True,
     ),
     TaskType.INSTANCE_SEG: TaskTypeInfo(
@@ -120,7 +120,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("polygon",),
-        export_formats=("COCO-seg", "Mask-PNG", "YOLO-seg"),
+        export_formats=("JSONL", "LabelMe JSON", "LLaVA", "ShareGPT", "Swift"),
         augment_updates_shapes=True,
     ),
     TaskType.KEYPOINT: TaskTypeInfo(
@@ -130,7 +130,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("point", "rectangle"),
-        export_formats=("COCO-keypoints", "CSV"),
+        export_formats=("LabelMe JSON",),
         augment_updates_shapes=True,
     ),
     TaskType.IMAGE_PAIR: TaskTypeInfo(

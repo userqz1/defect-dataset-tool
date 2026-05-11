@@ -1,20 +1,21 @@
 """Task-workbench specs — DetailView's sidebar layout per task.
 
-DetailView is a **shell** (topbar + viewer + sidebar with 3 segments).
+DetailView is a **shell** (topbar + viewer + sidebar workbench).
 The segment layout inside the sidebar (which panes exist, which is the
 default, what sub-features each pane has) is driven entirely by the
 :class:`TaskWorkbenchSpec` returned by :func:`spec_for`.
 
-The spec is derived from ``task_type``.  VLM fields are no longer gated
-by project-level capability switches: large-model annotation is just a
-different annotation mode, not a capability the project must opt into.
+The spec is derived from ``task_type`` plus the project's target-format
+capabilities.  Commercial annotation tools make the dataset target the
+source of truth for the labeling interface: a pure YOLO project should
+not show LLM fields, and a caption-only project should not look like a
+detection workbench.
 
-Three fixed segments, order preserved:
+Segments are optional, with order preserved when present:
 
     [ 标注 ] [ VLM ] [ 状态 ]
 
-Default segment is always 标注; users explicitly switch to 大模型标注
-when they want caption / conversation / grounding data.
+Default segment follows the active project template.
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ class TaskWorkbenchSpec:
     is never created, so no widget tree, no signals, no retranslate
     subscribers. The SegmentedWidget skips the corresponding tab.
 
-    Pane sub-feature flags (``shape_tools``, ``show_region_text``,
+    Pane sub-feature flags (``shape_tools``, ``supports_grounding``,
     ``has_caption``, ``has_conversations``) are only read when the
     owning pane's ``has_*`` is True.
     """
@@ -70,8 +71,9 @@ class TaskWorkbenchSpec:
     # Values from ImageViewer.set_draw_shape_type: "rectangle",
     # "polygon", "point".
     shape_tools: tuple[str, ...] = ()
-    # Per-shape grounding-text editor below the shape list.
-    show_region_text: bool = False
+    # Whether the task supports grounding (per-shape region text).
+    # When True the VLM pane includes a grounding editor.
+    supports_grounding: bool = False
     # Image-level label workbench kind. ImageLabelKind.NONE means the
     # 标注 segment uses the shape-list pane; the other values switch it
     # to ImageLabelPane in the matching mode.
@@ -160,31 +162,45 @@ _TASK_BASES: dict[TaskType, _TaskBase] = {
 _DEFAULT_BASE = _DETECTION_BASE
 
 
-def spec_for(task_type: TaskType | None) -> TaskWorkbenchSpec:
+def spec_for(
+    task_type: TaskType | None,
+    *,
+    enable_caption: bool = False,
+    enable_conversations: bool = False,
+    enable_grounding: bool = False,
+    show_annotation: bool = True,
+    show_status: bool = True,
+    shape_tools_without_annotation: bool = False,
+) -> TaskWorkbenchSpec:
     """Build the workbench spec for ``task_type``."""
     base = _DEFAULT_BASE if task_type is None else _TASK_BASES.get(
         task_type, _DEFAULT_BASE)
 
-    has_vlm = base.has_annotation
-    show_region_text = base.supports_grounding
+    has_annotation = base.has_annotation and show_annotation
+    supports_grounding = bool(enable_grounding and base.supports_grounding)
+    has_caption = bool(enable_caption)
+    has_conversations = bool(enable_conversations)
+    has_vlm = has_caption or has_conversations or supports_grounding
 
-    # Default segment: always the structured 标注 surface — it covers
-    # shape edit (detection / seg / keypoint) AND image-level chips
-    # (classification / multi-label / anomaly).  The VLM segment is
-    # opt-in via the segment switcher; landing on it by default would
-    # surprise users who were expecting the conventional annotation
-    # workspace first.
-    default_segment = DetailSegment.ANNOTATION
+    has_shape_tools = has_annotation or shape_tools_without_annotation
+
+    # Default segment follows the active work surface.  Pure VLM projects
+    # land on the VLM editor; mixed projects can still expose drawing tools
+    # from the topbar without showing a separate "traditional annotation"
+    # pane.
+    default_segment = (
+        DetailSegment.ANNOTATION if has_annotation else DetailSegment.VLM
+    )
 
     return TaskWorkbenchSpec(
-        has_annotation=base.has_annotation,
+        has_annotation=has_annotation,
         has_vlm=has_vlm,
-        has_status=True,
+        has_status=show_status,
         default_segment=default_segment,
-        shape_tools=base.shape_tools,
-        show_region_text=show_region_text,
-        has_caption=True,
-        has_conversations=True,
+        shape_tools=base.shape_tools if has_shape_tools else (),
+        supports_grounding=supports_grounding,
+        has_caption=has_caption,
+        has_conversations=has_conversations,
         image_label_kind=base.image_label_kind,
     )
 

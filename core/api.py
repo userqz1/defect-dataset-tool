@@ -112,6 +112,16 @@ from .format_convert import (
 from .format_rt import RoundTripResult, RTDiff, validate_roundtrip
 from .annotation_writer import label_path_for_format, write_annotation_as
 
+# ---- Training versions ----
+from .version_builder import (
+    TrainingVersionConfig,
+    TrainingVersionResult,
+    TrainingVersionSummary,
+    build_training_version,
+    delete_training_version,
+    list_training_versions,
+)
+
 # ---- History / undo MVP ----
 from .history import (
     HistoryEntry,
@@ -175,6 +185,9 @@ __all__ = [
     # Scan / models
     "Annotation", "Category", "Dataset", "ImageInfo", "Shape",
     "scan_dataset",
+    "TrainingVersionConfig", "TrainingVersionResult",
+    "TrainingVersionSummary", "build_training_version",
+    "list_training_versions", "delete_training_version",
     # Task types
     "TASK_REGISTRY", "TaskType", "TaskTypeInfo", "get_task_info",
     "ReadinessCheck", "TaskReadinessReport", "check_task_readiness",

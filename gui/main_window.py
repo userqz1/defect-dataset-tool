@@ -91,6 +91,11 @@ class MainWindow(FluentWindow):
     def __init__(self) -> None:
         _install_nav_expand_patch()
         super().__init__()
+        # Suppress all child-widget visibility during construction so
+        # partially-parented widgets don't flash as separate windows
+        # before the main window is ready.  main() calls show() once
+        # everything is wired.
+        self.setVisible(False)
 
         # Install brand title bar BEFORE theme/qss so stylesheet applies
         # to it on first paint. Design §1: brand D chip + serif name +
@@ -120,9 +125,13 @@ class MainWindow(FluentWindow):
 
         # Shared state
         self._state = AppState(parent=self)
+        self._opening_dataset_root: Path | None = None
         # Title-bar breadcrumbs follow the active dataset.
         self._state.dataset_changed.connect(
             lambda ds: self._brand_bar.set_path(ds.root_path if ds else None)
+        )
+        self._state.scan_active_changed.connect(
+            lambda active: self._clear_opening_guard() if not active else None
         )
         # Click brand → return to launchpad. Discoverable single-click
         # exit from any project, no matter how deep the user is.
@@ -224,6 +233,8 @@ class MainWindow(FluentWindow):
         self.organize = OrganizeView()
         self.organize.set_state(self._state, self._wf_ctrl)
         self.organize.import_done.connect(self._open_dataset)
+        self.organize.back_requested.connect(
+            lambda: self.switchTo(self.browser))
         self.stackedWidget.addWidget(self.organize)
 
         # Browser — top-level dataset browser
@@ -235,21 +246,15 @@ class MainWindow(FluentWindow):
         # which re-enters the browser on completion.
         self.browser.request_organize_view.connect(
             lambda: self.switchTo(self.organize))
+        # Drag-drop on the inbox drop zone — pre-set source path in
+        # OrganizeView then switch to it.
+        self.browser.folder_dropped.connect(self._on_folder_dropped)
 
-        # Settings lives as a floating popup (design handoff §Tweaks) —
-        # NOT a routable subInterface. It's parented to MainWindow so popup
-        # geometry + Qt.Popup click-outside handling work. Settings only
-        # holds global preferences (theme / language / catalog / cache);
-        # project-scoped actions (format migration, capabilities, etc.)
-        # live in the Browser's 项目中心 stage.
-        self.settings_view = SettingsView(self)
-        self.settings_view.theme_changed.connect(self._on_theme_changed)
-        # The catalog toggle from the popup drives the DatasetBrowserView's
-        # own catalog-visibility signal — DatasetBrowserView already handles
-        # the in-window visibility state.
-        self.settings_view.catalog_toggled.connect(
-            lambda on: self.browser._set_catalog_open(on)
-        )
+        # Settings is a lazy floating popup.  Do not construct it during
+        # startup: Qt.Popup widgets are registered as top-level windows even
+        # while hidden, which can flicker as tiny windows before MainWindow
+        # paints on some Windows setups.
+        self.settings_view: SettingsView | None = None
 
         # Nav — TOP (labels via gui.i18n.t — live-updated on language switch).
         # IA v2: only Home and Browser. Organize is reached from inside the
@@ -286,39 +291,47 @@ class MainWindow(FluentWindow):
         (the conventional starting surface).
         """
         root = Path(path_str)
+        if self._opening_dataset_root is not None:
+            return
         if not root.is_dir():
             InfoBar.warning("", "目录不存在", parent=self,
                             duration=2000, position=InfoBarPosition.TOP)
             return
+        self._opening_dataset_root = root
 
-        from core.project import load_project
+        from core.project import infer_preset_for_root, load_project
 
-        project = load_project(root)
-        if project:
-            task_type = project.task_type
-        else:
-            from gui.dialogs.task_type_dialog import TaskTypeDialog
-            dlg = TaskTypeDialog(self)
-            if not dlg.exec():
-                return
-            task_type = dlg.selected_task_type()
-            if task_type is None:
-                return
+        try:
+            project = load_project(root)
+            if project:
+                task_type = project.task_type
+                preset_id = project.preset_id
+            else:
+                task_type, preset_id = infer_preset_for_root(root)
 
-        self._state.open_dataset(root, task_type)
-        self.browser.open_directory(root)
-        self.switchTo(self.browser)
-        self._apply_intent(intent)
+            self._state.open_dataset(root, task_type, preset_id=preset_id)
+            self.browser.open_directory(root)
+            self.switchTo(self.browser)
+            self._apply_intent(intent)
+        except Exception:
+            self._clear_opening_guard()
+            raise
+
+    def _clear_opening_guard(self) -> None:
+        self._opening_dataset_root = None
 
     def _create_project(self, path_str: str, name: str,
                         preset_id: str, task_type: object) -> None:
         """Create an empty project and switch to browser.
 
-        New projects always land on 新数据 — there's no data yet, so
+        New projects always land on 导入数据 — there's no data yet, so
         the conventional default (标注工作台) would show an empty grid
         and confuse the user.  Inbox is where they need to be.
         """
         root = Path(path_str)
+        if self._opening_dataset_root is not None:
+            return
+        self._opening_dataset_root = root
         self._state.open_project(  # type: ignore[arg-type]
             root, name, task_type, preset_id=preset_id)
         self.browser.open_directory(root)
@@ -346,6 +359,17 @@ class MainWindow(FluentWindow):
         stage = intent_to_stage.get(intent)
         if stage is not None:
             self.browser.set_active_stage(stage)
+
+    # ---------- Drag-drop import ----------
+
+    def _on_folder_dropped(self, path: str) -> None:
+        """Handle a folder dropped onto the inbox drop zone.
+
+        Pre-fills OrganizeView's source path so the user doesn't have to
+        click "选择源目录" again — the discovery runs immediately.
+        """
+        self.organize.set_source_path(path)
+        self.switchTo(self.organize)
 
     # ---------- i18n ----------
 
@@ -382,6 +406,12 @@ class MainWindow(FluentWindow):
         own geometry so it doesn't matter whether the nav panel is using
         its icon-only or (long-deprecated) expanded width.
         """
+        if self.settings_view is None:
+            self.settings_view = SettingsView(self)
+            self.settings_view.theme_changed.connect(self._on_theme_changed)
+            self.settings_view.catalog_toggled.connect(
+                lambda on: self.browser._set_catalog_open(on)
+            )
         self.settings_view.adjustSize()
         mw_tl_global = self.mapToGlobal(self.rect().topLeft())
         x = mw_tl_global.x() + 68
@@ -440,4 +470,9 @@ class MainWindow(FluentWindow):
     def closeEvent(self, e):
         self._state.close_dataset()
         self.browser.cleanup()
+        # Process any pending deleteLater calls from workers that just
+        # finished — prevents Qt from destroying QThread objects while
+        # their underlying threads are still being torn down.
+        from PyQt6.QtWidgets import QApplication
+        QApplication.processEvents()
         super().closeEvent(e)

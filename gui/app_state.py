@@ -164,13 +164,20 @@ class AppState(QObject):
 
     # -- Actions --
 
-    def open_dataset(self, root: Path, task_type: TaskType) -> Project:
+    def open_dataset(
+        self, root: Path, task_type: TaskType, preset_id: str = ""
+    ) -> Project:
         """Load or create a Project for *root*, update recents, emit signals."""
         self.close_dataset()
 
         project = load_project(root)
         if project is None:
-            project = create_project(root, task_type=task_type)
+            if not preset_id:
+                from core.annotation_preset import detect_preset_id
+                preset_id = detect_preset_id(
+                    task_type, False, False, False)
+            project = create_project(
+                root, task_type=task_type, preset_id=preset_id)
         else:
             project.task_type = task_type
             save_project(project)

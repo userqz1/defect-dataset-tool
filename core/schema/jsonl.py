@@ -54,7 +54,14 @@ JSONL_SCHEMA = Schema(
     key="JSONL",
     display_name="JSON Lines",
     description="流式 JSON Lines, 每行一个图像条目",
-    task_types=(TaskType.DETECTION, TaskType.CLASSIFICATION, TaskType.MULTI_LABEL),
+    task_types=(
+        TaskType.DETECTION,
+        TaskType.ORIENTED_DET,
+        TaskType.SEMANTIC_SEG,
+        TaskType.INSTANCE_SEG,
+        TaskType.CLASSIFICATION,
+        TaskType.MULTI_LABEL,
+    ),
     slots=(
         Slot("images", "图片", "images", required=True, validator=_validate_images),
         Slot("labels", "标注", "labels", required=False, validator=_validate_labels),

@@ -46,7 +46,11 @@ class ThumbnailWorker(QThread):
         """Graceful shutdown: signal the run loop, wake the queue, wait."""
         self._running = False
         self._queue.put(None)  # 唤醒 — matches the `if path is None: break`
-        self.wait(2000)
+        if not self.wait(5000):
+            logger.warning("ThumbnailWorker did not stop within 5 s — "
+                           "terminating thread")
+            self.terminate()
+            self.wait(2000)
         try:
             self._cache.close()
         except Exception:

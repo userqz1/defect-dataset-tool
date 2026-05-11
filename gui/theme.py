@@ -86,8 +86,10 @@ class Tokens:
     NODE_SHADOW: str = ""
 
     # ---- Geometry ----
+    # RADIUS_SM: tiny badges / status pills (4px)
     # RADIUS: small pills / chips (= design --r-xs 6)
     # RADIUS_LG: cards / panels (= design --r-lg 14); softer Claude-web look.
+    RADIUS_SM: int = 4
     RADIUS: int = 6
     RADIUS_LG: int = 14
     GAP_XS: int = 4

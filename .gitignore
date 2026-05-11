@@ -41,6 +41,8 @@ config/local_*.yaml
 
 # Claude Code local settings
 .claude/
+.codex/
+.run_logs/
 
 # Augmentation / transform / convert test artifacts dropped in CWD
 /images/

@@ -169,6 +169,10 @@ class DatasetBar(QFrame):
         self._fmt_label = CaptionLabel("")
         self._fmt_label.setObjectName("datasetFmt")
         self._fmt_label.setVisible(False)
+        self._annotation_format = ""
+        self._target_format = ""
+        self._target_task_type = None
+        self._last_sample_set = None
         # Scan-in-progress banner — sits next to the path. Hidden unless
         # AppState.scan_active is True.  A visible text cue lets the user
         # know stat numbers are still settling, complementing the pulsing
@@ -264,6 +268,8 @@ class DatasetBar(QFrame):
             cell.retranslate()
         self._open_btn.setToolTip(i18n.t("ds.open_dir"))
         self._loading_label.setText(i18n.t("ds.loading"))
+        if self._annotation_format:
+            self.set_annotation_format(self._annotation_format)
         self._refresh_btn.setToolTip(i18n.t("tools.refresh"))
         # Undo tooltip mixes a translated prefix with a mutable summary
         # (``撤销: <op>`` / ``没有可撤销的操作``) owned by
@@ -328,7 +334,8 @@ class DatasetBar(QFrame):
         self._stat_images.set_value(f"{ds.total_images:,}")
         self._stat_classes.set_value(str(len(ds.categories)))
 
-        # Labeled %: has_label flags are set during filesystem scan (Phase 1).
+        # Initial source-label estimate. Once SampleSet lands, this cell is
+        # recomputed against the active target format.
         labeled = 0
         for cat in ds.categories:
             labeled += sum(1 for img in cat.images if img.has_label)
@@ -348,18 +355,40 @@ class DatasetBar(QFrame):
             warn=flagged_count > 0,
         )
 
+    def set_target_context(self, project) -> None:
+        """Store the active target format for target-completion stats."""
+        self._target_format = (
+            getattr(project, "target_format", "") if project else "")
+        self._target_task_type = (
+            getattr(project, "task_type", None) if project else None)
+        if self._last_sample_set is not None:
+            self.update_from_sample_set(self._last_sample_set)
+
     def update_from_sample_set(self, ss) -> None:
-        """Refine labeled% from SampleSet (region-aware, more accurate).
+        """Update target completion from the unified SampleSet.
 
         Called when sample_set_changed fires.  SampleSet distinguishes
         "has regions" from "has a label file" — empty label files are
         correctly counted as unlabeled here.
         """
+        self._last_sample_set = ss
         if ss is None:
             return
-        n_annotated = sum(1 for s in ss.samples if s.regions)
         total = len(ss.samples)
-        pct = (n_annotated / total * 100) if total else 0
+        if self._target_format:
+            try:
+                from core.target_readiness import completed_paths_for_target
+                n_done = len(completed_paths_for_target(
+                    ss.samples, self._target_format, self._target_task_type))
+            except Exception:
+                n_done = sum(1 for s in ss.samples if s.has_label)
+        else:
+            n_done = sum(
+                1 for s in ss.samples
+                if s.regions or s.image_labels or s.caption
+                or s.conversations or s.grounding or s.pair_path
+            )
+        pct = (n_done / total * 100) if total else 0
         self._stat_labeled.set_value(f"{pct:.0f}%")
 
     def set_sample_set_status(self, status_value: str) -> None:
@@ -411,15 +440,24 @@ class DatasetBar(QFrame):
         self._catalog_btn.setVisible(bool(visible))
 
     def set_annotation_format(self, fmt: str) -> None:
-        """Show the project's active annotation format as a badge."""
+        """Show the project's storage/write-back format as a badge."""
+        self._annotation_format = fmt or ""
         if fmt:
             from core.format_convert import FORMATS
             info = FORMATS.get(fmt)
             display = info.display_name if info else fmt.upper()
-            self._fmt_label.setText(display)
+            self._fmt_label.setText(i18n.t(
+                "ds.writeback_format",
+                fmt=display,
+            ))
+            self._fmt_label.setToolTip(i18n.t(
+                "ds.writeback_format.tip",
+                fmt=display,
+            ))
             self._fmt_label.setVisible(True)
         else:
             self._fmt_label.setVisible(False)
+            self._fmt_label.setToolTip("")
 
     def set_workflow_summary(self, summary: WorkflowSummary | None) -> None:
         """Show/hide workflow stat cells based on active workflow."""

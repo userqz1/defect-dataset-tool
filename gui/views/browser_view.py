@@ -20,7 +20,6 @@ from qfluentwidgets import (
     Action,
     BodyLabel,
     CaptionLabel,
-    DropDownPushButton,
     FluentIcon as FIF,
     IndeterminateProgressBar,
     InfoBar,
@@ -35,6 +34,11 @@ from qfluentwidgets import (
 from core import fileops, index_cache
 from core.exporter.subset import export_subset
 from core.models import Dataset, ImageInfo
+from core.target_readiness import (
+    completed_paths_for_target,
+    target_format_is_exportable,
+    target_format_for_schema_key,
+)
 from gui import i18n
 from gui.dialogs.op_dialogs import (
     FailureDetailDialog,
@@ -86,6 +90,7 @@ class BrowserView(QWidget):
     navigate_to = pyqtSignal(str)               # route key for readiness bar links
     dataset_changed = pyqtSignal()              # emitted after category rename/merge/split
     batch_status_requested = pyqtSignal(list, str)  # (images, new_status_str)
+    target_format_changed = pyqtSignal(str)     # concrete target format selected
 
     def __init__(self, app_state) -> None:
         """BrowserView requires an AppState — construction with None used to
@@ -128,6 +133,9 @@ class BrowserView(QWidget):
         # SampleSet-aware filter: "已标注"/"未标注" use actual region data.
         self._state.sample_set_changed.connect(self._on_sample_set_changed)
         self._annotated_cache: set[str] | None = None
+        self._target_format: str = ""
+        self._target_task_type = None
+        self._target_format_options: list[tuple[str, str]] = []
         # Work-status cache: image_path str → WorkStatus.value
         self._work_status_cache: dict[str, str] | None = None
 
@@ -162,6 +170,13 @@ class BrowserView(QWidget):
         self._search_timer.timeout.connect(lambda: self._on_search_changed(self.search.text()))
         self.search.textChanged.connect(lambda _: self._search_timer.start())
         filter_bar.addWidget(self.search)
+
+        self._target_format_btn = PushButton()
+        self._target_format_btn.setIcon(FIF.TAG)
+        self._target_format_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._target_format_btn.clicked.connect(self._show_target_format_menu)
+        filter_bar.addWidget(self._target_format_btn)
+        self._refresh_target_format_button()
 
         # Segmented chip group (Claude-web redesign): chips live inside a
         # single bg-subtle container rather than each carrying its own border.
@@ -324,6 +339,7 @@ class BrowserView(QWidget):
     def _retranslate(self, _lang: str) -> None:
         """Refresh i18n-driven widget text after language switch."""
         self.search.setPlaceholderText(i18n.t("filter.search_placeholder"))
+        self._refresh_target_format_button()
         for mode, chip in self._chips.items():
             chip.setText(i18n.t(self._chip_i18n[mode]))
         # Recompute selection-bar labels via the usual handler — it sets
@@ -337,13 +353,6 @@ class BrowserView(QWidget):
         self._sel_workflow_btn.setText(i18n.t("sel.workflow"))
         self._sel_export_btn.setText(i18n.t("sel.export"))
         self._sel_export_scope.setText(i18n.t("scope.readonly"))
-        for action, key in zip(self._sel_split_actions, (
-                "sel.split.train", "sel.split.val", "sel.split.test")):
-            action.setText(i18n.t(key))
-        for action, key in zip(self._sel_wf_actions, (
-                "wf.submit_review", "wf.approve",
-                "wf.reject", "wf.mark_ready")):
-            action.setText(i18n.t(key))
         self._scroll_top_btn.setText(i18n.t("pager.top"))
         self._scroll_top_btn.setToolTip(i18n.t("pager.top"))
         # Repaint the grid so the footer + empty-state copy
@@ -375,6 +384,16 @@ class BrowserView(QWidget):
         """
         return self._current_category or ""
 
+    def set_target_format(self, project) -> None:
+        """Refresh the target-format selector for the annotation stage."""
+        self._target_format = getattr(project, "target_format", "") if project else ""
+        self._target_task_type = getattr(project, "task_type", None) if project else None
+        self._target_format_options = self._schema_options_for_project(project)
+        self._refresh_target_format_button()
+        self._rebuild_annotated_cache()
+        if self._filter_mode in (FilterMode.LABELED, FilterMode.UNLABELED):
+            self._apply_filter_and_show()
+
     def rename_category(self, name: str) -> None:
         self._do_rename_category(name)
 
@@ -392,6 +411,80 @@ class BrowserView(QWidget):
             return self._catalog_tree.get_category_names()
         ds = self._state.dataset
         return [c.name for c in ds.categories] if ds else []
+
+    def _schema_options_for_project(self, project) -> list[tuple[str, str]]:
+        if project is None:
+            return []
+        try:
+            from core.schema import schemas_for_task
+            schemas = schemas_for_task(project.task_type)
+        except Exception:
+            schemas = []
+        if schemas:
+            return [
+                (schema.key, schema.display_name)
+                for schema in schemas
+                if target_format_is_exportable(schema.key)
+            ]
+        try:
+            from core.task_types import TASK_REGISTRY
+            info = TASK_REGISTRY.get(project.task_type)
+            return [
+                (fmt, fmt)
+                for fmt in (info.export_formats if info else ())
+                if target_format_is_exportable(fmt)
+            ]
+        except Exception:
+            return []
+
+    def _target_format_display(self) -> str:
+        target = self._target_format or ""
+        if not target:
+            return i18n.t("annotation.target_format.none")
+        for key, name in self._target_format_options:
+            if target_format_for_schema_key(key) == target or key == target:
+                return name
+        return target
+
+    def _refresh_target_format_button(self) -> None:
+        if not hasattr(self, "_target_format_btn"):
+            return
+        self._target_format_btn.setText(i18n.t(
+            "annotation.target_format.button",
+            fmt=self._target_format_display(),
+        ))
+        self._target_format_btn.setEnabled(bool(self._target_format_options))
+        self._target_format_btn.setToolTip(
+            i18n.t("annotation.target_format.tooltip"))
+
+    def _show_target_format_menu(self) -> None:
+        if not self._target_format_options:
+            return
+        menu = RoundMenu(parent=self._target_format_btn)
+        current = self._target_format
+        for key, name in self._target_format_options:
+            target = target_format_for_schema_key(key)
+            label = name
+            if target == current or key == current:
+                label = f"{name}  ✓"
+            menu.addAction(Action(
+                FIF.TAG,
+                label,
+                triggered=lambda _=False, t=target: self._select_target_format(t),
+            ))
+        pos = self._target_format_btn.mapToGlobal(
+            self._target_format_btn.rect().bottomLeft())
+        menu.exec(pos)
+
+    def _select_target_format(self, target_format: str) -> None:
+        if not target_format or target_format == self._target_format:
+            return
+        self._target_format = target_format
+        self._refresh_target_format_button()
+        self._rebuild_annotated_cache()
+        if self._filter_mode in (FilterMode.LABELED, FilterMode.UNLABELED):
+            self._apply_filter_and_show()
+        self.target_format_changed.emit(target_format)
 
     # ---------- 状态持久化 ----------
 
@@ -607,6 +700,7 @@ class BrowserView(QWidget):
         self.grid.set_images(
             first_chunk,
             quality_map=self._state.quality_issue_paths,
+            target_complete_paths=self._annotated_cache,
         )
         # Reset scroll position so a freshly-applied filter shows from
         # the top, not wherever the previous selection was scrolled to.
@@ -668,6 +762,7 @@ class BrowserView(QWidget):
         self.grid.append_images(
             chunk,
             quality_map=self._state.quality_issue_paths,
+            target_complete_paths=self._annotated_cache,
         )
         self._visible_count = end
         self._refresh_footer()
@@ -770,9 +865,7 @@ class BrowserView(QWidget):
     def _on_sample_set_changed(self, ss) -> None:
         """Rebuild annotated-path + work-status caches when SampleSet changes."""
         if ss is not None and self._state.sample_set_ready:
-            self._annotated_cache = {
-                str(s.image_path) for s in ss.samples if s.regions
-            }
+            self._rebuild_annotated_cache(ss)
             self._work_status_cache = {
                 str(s.image_path): s.work_status
                 for s in ss.samples if s.work_status
@@ -789,6 +882,23 @@ class BrowserView(QWidget):
         """Return cached set of paths with actual annotations, or None
         if SampleSet is not READY (caller should fall back to has_label)."""
         return self._annotated_cache
+
+    def _rebuild_annotated_cache(self, ss=None) -> None:
+        if ss is None:
+            ss = self._state.sample_set
+        if ss is None or not self._state.sample_set_ready:
+            self._annotated_cache = None
+            return
+        if self._target_format:
+            self._annotated_cache = completed_paths_for_target(
+                ss.samples,
+                self._target_format,
+                self._target_task_type,
+            )
+        else:
+            self._annotated_cache = {
+                str(s.image_path) for s in ss.samples if s.regions
+            }
 
     def _on_workflow_summary_changed(self, summary) -> None:
         """Show/hide workflow filter chips based on active workflow."""
@@ -879,45 +989,20 @@ class BrowserView(QWidget):
         self._sel_move_btn.clicked.connect(self._on_move_clicked)
         lay.addWidget(self._sel_move_btn)
 
-        # Split picker — Train/Val/Test as a RoundMenu so the bar doesn't
-        # spawn three buttons (tight at 1100px window). We keep Action
-        # refs in a tuple so ``_retranslate`` can swap text on language
-        # change (RoundMenu.addAction returns None, not the action).
-        self._sel_split_btn = DropDownPushButton(FIF.SHARE, i18n.t("sel.split"))
+        # Split picker — create the popup lazily. Pre-creating RoundMenu at
+        # startup registers hidden top-level windows on Windows, which can
+        # flicker as tiny orphan popups before the main window appears.
+        self._sel_split_btn = PushButton(i18n.t("sel.split"))
+        self._sel_split_btn.setIcon(FIF.SHARE)
         self._sel_split_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        split_menu = RoundMenu(parent=self._sel_split_btn)
-        self._sel_split_menu = split_menu
-        self._sel_split_actions = (
-            Action(i18n.t("sel.split.train"),
-                   triggered=lambda: self._emit_add_to_split("train")),
-            Action(i18n.t("sel.split.val"),
-                   triggered=lambda: self._emit_add_to_split("val")),
-            Action(i18n.t("sel.split.test"),
-                   triggered=lambda: self._emit_add_to_split("test")),
-        )
-        for act in self._sel_split_actions:
-            split_menu.addAction(act)
-        self._sel_split_btn.setMenu(split_menu)
+        self._sel_split_btn.clicked.connect(self._show_split_menu)
         lay.addWidget(self._sel_split_btn)
 
         # Workflow transition picker — 4 states from the old right-click menu.
-        self._sel_workflow_btn = DropDownPushButton(FIF.FLAG, i18n.t("sel.workflow"))
+        self._sel_workflow_btn = PushButton(i18n.t("sel.workflow"))
+        self._sel_workflow_btn.setIcon(FIF.FLAG)
         self._sel_workflow_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        wf_menu = RoundMenu(parent=self._sel_workflow_btn)
-        self._sel_workflow_menu = wf_menu
-        self._sel_wf_actions = (
-            Action(i18n.t("wf.submit_review"),
-                   triggered=lambda: self._emit_workflow("review_pending")),
-            Action(i18n.t("wf.approve"),
-                   triggered=lambda: self._emit_workflow("ready")),
-            Action(i18n.t("wf.reject"),
-                   triggered=lambda: self._emit_workflow("needs_fix")),
-            Action(i18n.t("wf.mark_ready"),
-                   triggered=lambda: self._emit_workflow("ready")),
-        )
-        for act in self._sel_wf_actions:
-            wf_menu.addAction(act)
-        self._sel_workflow_btn.setMenu(wf_menu)
+        self._sel_workflow_btn.clicked.connect(self._show_workflow_menu)
         lay.addWidget(self._sel_workflow_btn)
 
         self._sel_export_btn = PushButton(i18n.t("sel.export"))
@@ -932,6 +1017,37 @@ class BrowserView(QWidget):
         lay.addWidget(self._sel_export_scope)
 
         return bar
+
+    def _show_split_menu(self) -> None:
+        menu = RoundMenu(parent=self._sel_split_btn)
+        menu.addAction(Action(
+            i18n.t("sel.split.train"),
+            triggered=lambda: self._emit_add_to_split("train")))
+        menu.addAction(Action(
+            i18n.t("sel.split.val"),
+            triggered=lambda: self._emit_add_to_split("val")))
+        menu.addAction(Action(
+            i18n.t("sel.split.test"),
+            triggered=lambda: self._emit_add_to_split("test")))
+        menu.exec(self._sel_split_btn.mapToGlobal(
+            self._sel_split_btn.rect().bottomLeft()))
+
+    def _show_workflow_menu(self) -> None:
+        menu = RoundMenu(parent=self._sel_workflow_btn)
+        menu.addAction(Action(
+            i18n.t("wf.submit_review"),
+            triggered=lambda: self._emit_workflow("review_pending")))
+        menu.addAction(Action(
+            i18n.t("wf.approve"),
+            triggered=lambda: self._emit_workflow("ready")))
+        menu.addAction(Action(
+            i18n.t("wf.reject"),
+            triggered=lambda: self._emit_workflow("needs_fix")))
+        menu.addAction(Action(
+            i18n.t("wf.mark_ready"),
+            triggered=lambda: self._emit_workflow("ready")))
+        menu.exec(self._sel_workflow_btn.mapToGlobal(
+            self._sel_workflow_btn.rect().bottomLeft()))
 
     def _guard_write(self) -> bool:
         """Gate any selection-bar write against the Phase 2 scan.

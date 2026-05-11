@@ -45,7 +45,7 @@ from gui.theme import T
 _STAGES: list[tuple[str, FIF]] = [
     ("stage.overview", FIF.HOME),
     ("stage.inbox",    FIF.MAIL),
-    ("stage.process",  FIF.ROBOT),
+    ("stage.process",  FIF.DEVELOPER_TOOLS),
     ("stage.annotate", FIF.EDIT),
     ("stage.review",   FIF.CERTIFICATE),
     ("stage.delivery", FIF.SHARE),

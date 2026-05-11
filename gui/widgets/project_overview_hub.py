@@ -72,11 +72,22 @@ _FMT_DISPLAY = {
     "yolo": "YOLO",
     "voc": "Pascal VOC",
     "coco": "COCO",
+    "coco-seg": "COCO-seg",
+    "imagefolder": "ImageFolder",
+    "mvtec": "MVTec",
+    "llava": "LLaVA",
+    "sharegpt": "ShareGPT",
+    "swift": "Swift",
+    "caption jsonl": "Caption JSONL",
+    "coco-keypoints": "COCO-keypoints",
+    "dota": "DOTA",
+    "pairedfolder": "PairedFolder",
 }
 
 
 def _format_label(fmt: str) -> str:
-    return _FMT_DISPLAY.get((fmt or "").lower(), (fmt or "—").upper())
+    key = (fmt or "").strip().lower()
+    return _FMT_DISPLAY.get(key, fmt or "—")
 
 
 # ── Stat pill ──────────────────────────────────────────────────────
@@ -160,15 +171,15 @@ class _StatusCard(QFrame):
         self._cta_stage: int = 3  # default: ANNOTATE
 
     def set_project_info(self, name: str, task_type: object,
-                         fmt: str) -> None:
+                         target_format: str) -> None:
         self._name.setText(name or "—")
         parts: list[str] = []
         if task_type is not None:
             info = TASK_REGISTRY.get(task_type)
             if info:
                 parts.append(info.display_name)
-        if fmt:
-            parts.append(_format_label(fmt))
+        if target_format:
+            parts.append(f"目标 {_format_label(target_format)}")
         self._subtitle.setText(" · ".join(parts) if parts else "")
 
     def set_stats(self, images: int, classes: int,
@@ -325,8 +336,9 @@ class ProjectOverviewHub(QWidget):
         name = (getattr(proj, "name", None)
                 or getattr(ds, "name", None) or "—")
         task_type = getattr(proj, "task_type", None) if proj else None
-        fmt = (getattr(proj, "annotation_format", "") or "") if proj else ""
-        self._status.set_project_info(name, task_type, fmt)
+        target_format = (
+            getattr(proj, "target_format", "") or "") if proj else ""
+        self._status.set_project_info(name, task_type, target_format)
 
         # Stats
         images = getattr(ds, "total_images", 0) if ds else 0
@@ -340,6 +352,7 @@ class ProjectOverviewHub(QWidget):
         # CTA — single recommended action
         total = getattr(wf, "total", 0) if wf else 0
         annotating = getattr(wf, "annotating", 0) if wf else 0
+        version_count = self._version_count(proj)
         if total == 0:
             self._status.set_cta(
                 i18n.t("overview.cta.import"), StageIndex.INBOX)
@@ -350,11 +363,28 @@ class ProjectOverviewHub(QWidget):
             self._status.set_cta(
                 i18n.t("overview.cta.review"), StageIndex.REVIEW)
         elif ready > 0:
+            if version_count <= 0:
+                self._status.set_cta(
+                    i18n.t("overview.cta.version"), StageIndex.PROCESS)
+            else:
+                self._status.set_cta(
+                    i18n.t("overview.cta.export"), StageIndex.DELIVERY)
+        elif version_count > 0:
             self._status.set_cta(
                 i18n.t("overview.cta.export"), StageIndex.DELIVERY)
         else:
             self._status.set_cta(
                 i18n.t("overview.cta.annotate"), StageIndex.ANNOTATE)
+
+    @staticmethod
+    def _version_count(project: Project | None) -> int:
+        if project is None:
+            return 0
+        try:
+            from core.version_builder import list_training_versions
+            return len(list_training_versions(project.root_path))
+        except Exception:
+            return 0
 
     def _refresh_classes(self) -> None:
         tree = self._cls_tree
@@ -506,21 +536,21 @@ class ProjectOverviewHub(QWidget):
                 super().__init__(parent)
                 # Formats
                 self._f_key = QTextCharFormat()
-                self._f_key.setForeground(QColor("#8b3e6f"))  # purple-ish
+                self._f_key.setForeground(QColor(T.ACCENT))
                 self._f_key.setFontWeight(QFont.Weight.DemiBold)
 
                 self._f_str = QTextCharFormat()
-                self._f_str.setForeground(QColor("#2e7d32"))  # green
+                self._f_str.setForeground(QColor(T.SUCCESS))
 
                 self._f_num = QTextCharFormat()
-                self._f_num.setForeground(QColor("#1565c0"))  # blue
+                self._f_num.setForeground(QColor(T.NODE_CAT_INPUT))
 
                 self._f_const = QTextCharFormat()
-                self._f_const.setForeground(QColor("#c56200"))  # orange
+                self._f_const.setForeground(QColor(T.WARNING))
                 self._f_const.setFontWeight(QFont.Weight.DemiBold)
 
                 self._f_brace = QTextCharFormat()
-                self._f_brace.setForeground(QColor("#666"))
+                self._f_brace.setForeground(QColor(T.TEXT_3))
 
                 # Patterns (order matters)
                 self._rules = [
@@ -555,12 +585,13 @@ class ProjectOverviewHub(QWidget):
         )
         from PyQt6.QtCore import QPointF
         from PyQt6.QtWidgets import (
-            QDialog, QHBoxLayout as _HBox, QLabel,
+            QHBoxLayout as _HBox, QLabel,
             QPlainTextEdit, QSizePolicy, QVBoxLayout as _VBox,
+            QWidget as _Widget,
         )
         from qfluentwidgets import (
-            BodyLabel, CaptionLabel as _Cap, CheckBox, PushButton,
-            StrongBodyLabel as _Strong,
+            BodyLabel, CaptionLabel as _Cap, CheckBox, MessageBoxBase,
+            StrongBodyLabel as _Strong, SubtitleLabel as _Subtitle,
         )
         from gui.widgets.image_viewer import PALETTE
 
@@ -640,13 +671,15 @@ class ProjectOverviewHub(QWidget):
             return pix
 
         # ── Dialog ──
-        dlg = QDialog(self.window())
-        dlg.setWindowTitle(f"文件详情 — {img_path.name}")
-        dlg.resize(920, 580)
-        dlg.setMinimumSize(700, 440)
+        dlg = MessageBoxBase(parent=self.window())
+        dlg.widget.setMinimumSize(920, 580)
+        dlg.widget.setMaximumWidth(1100)
+        dlg.titleLabel = _Subtitle(f"文件详情 — {img_path.name}", dlg)
+        dlg.viewLayout.addWidget(dlg.titleLabel)
 
-        root = _HBox(dlg)
-        root.setContentsMargins(20, 20, 20, 20)
+        content = _Widget()
+        root = _HBox(content)
+        root.setContentsMargins(0, T.GAP, 0, 0)
         root.setSpacing(20)
 
         # ── Left: image preview ──
@@ -658,8 +691,7 @@ class ProjectOverviewHub(QWidget):
         img_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         img_label.setMinimumSize(360, 320)
-        img_label.setStyleSheet(
-            "QLabel { background: #1a1a1a; border-radius: 6px; }")
+        img_label.setObjectName("overviewImagePreview")
 
         preview_size = (440, 400)
 
@@ -746,17 +778,7 @@ class ProjectOverviewHub(QWidget):
             text_edit.setReadOnly(True)
             text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
             text_edit.setTabStopDistance(20.0)
-            text_edit.setStyleSheet(
-                "QPlainTextEdit {"
-                "  font-family: 'Cascadia Mono', 'Consolas',"
-                "               'SF Mono', monospace;"
-                "  font-size: 13px;"
-                "  background: #f8f8f8; color: #383a42;"
-                "  border: 1px solid #e1e4e8;"
-                "  border-radius: 6px;"
-                "  padding: 10px;"
-                "  selection-background-color: #b3d7ff;"
-                "}")
+            text_edit.setObjectName("overviewAnnotationCode")
             text_edit.setPlainText(lbl_raw)
 
             # Attach syntax highlighter for JSON
@@ -773,11 +795,9 @@ class ProjectOverviewHub(QWidget):
 
         root.addLayout(right, stretch=1)
 
-        # ── Bottom close ──
-        btn_close = PushButton("关闭")
-        btn_close.setFixedWidth(80)
-        btn_close.clicked.connect(dlg.accept)
-        right.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignRight)
+        dlg.viewLayout.addWidget(content)
+        dlg.yesButton.setText("关闭")
+        dlg.cancelButton.hide()
 
         dlg.exec()
 

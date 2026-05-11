@@ -9,7 +9,7 @@ IA v3.1: 3-column chrome:
 The middle column hosts the five stage pages:
 
 - **新数据**       — BatchListPanel (incoming-batch staging).
-- **数据处理**      — DataProcessHub (annotation import / batch mutation).
+- **训练版本**      — TrainingVersionHub (versioned training snapshots).
 - **标注工作台**    — Browser↔Detail flow.
 - **审核修复**     — ReviewHub (quality / dedup / stats).
 - **导出**         — DeliveryHub (training export / VLM export / copy conversion).
@@ -55,10 +55,11 @@ from gui.workers.thumbnail_worker import ThumbnailWorker
 class DatasetBrowserView(QWidget):
     """Top-level browser: directory picker + scan + browse + detail."""
 
-    # Emitted when the user asks to import a new batch from inside the
-    # 收件箱 stage. MainWindow owns the OrganizeView route, so we bubble
-    # up rather than reaching into the parent FluentWindow here.
+    # Import request from the 导入数据 stage bubbles up to MainWindow
+    # which owns OrganizeView routing.
     request_organize_view = pyqtSignal()
+    # Drag-and-drop import — carries the dropped folder path.
+    folder_dropped = pyqtSignal(str)
 
     def __init__(self, app_state: AppState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -92,13 +93,13 @@ class DatasetBrowserView(QWidget):
         from gui.widgets.project_overview_hub import ProjectOverviewHub
         self._overview_hub = ProjectOverviewHub()
 
-        # 新数据 stage body — the batch list is the whole page.
+        # 导入数据 stage body — the batch list is the whole page.
         from gui.widgets.batch_list import BatchListPanel
         self._batch_list = BatchListPanel()
 
-        # 数据处理 stage body — operations that mutate images/labels.
-        from gui.widgets.data_process_hub import DataProcessHub
-        self._process_hub = DataProcessHub()
+        # 训练版本 stage body — generate versioned training snapshots.
+        from gui.widgets.training_version_hub import TrainingVersionHub
+        self._training_hub = TrainingVersionHub()
 
         # 导出 stage body — output-producing actions only.
         from gui.widgets.delivery_hub import DeliveryHub
@@ -114,7 +115,7 @@ class DatasetBrowserView(QWidget):
         self._stage_stack = QStackedWidget()
         self._stage_stack.insertWidget(StageIndex.OVERVIEW, self._overview_hub)
         self._stage_stack.insertWidget(StageIndex.INBOX,    self._batch_list)
-        self._stage_stack.insertWidget(StageIndex.PROCESS,  self._process_hub)
+        self._stage_stack.insertWidget(StageIndex.PROCESS,  self._training_hub)
         self._stage_stack.insertWidget(StageIndex.ANNOTATE, self._browser_stack)
         self._stage_stack.insertWidget(StageIndex.REVIEW,   self._review_hub)
         self._stage_stack.insertWidget(StageIndex.DELIVERY, self._delivery_hub)
@@ -171,7 +172,7 @@ class DatasetBrowserView(QWidget):
             dataset_bar=self._dataset_bar,
             workspace_sidebar=self._workspace_sidebar,
             context_panel=self._context_panel,
-            process_hub=self._process_hub,
+            training_hub=self._training_hub,
             delivery_hub=self._delivery_hub,
             review_hub=self._review_hub,
             thumb_worker=self._thumb,
@@ -195,6 +196,12 @@ class DatasetBrowserView(QWidget):
         self._delivery_hub.convert_annot_requested.connect(
             self._tools.run_convert_annot)
         self._delivery_hub.export_requested.connect(self._tools.run_export)
+        self._delivery_hub.open_version_requested.connect(
+            self._tools.open_training_version)
+        self._delivery_hub.deliver_version_requested.connect(
+            self._tools.deliver_training_version)
+        self._delivery_hub.generate_version_requested.connect(
+            lambda: self.set_active_stage(StageIndex.PROCESS))
         # 大模型标注向导 — pick caps + category, then prep workbench:
         # apply caps → switch to ANNOTATE → filter category → drill
         # into first incomplete image.
@@ -212,25 +219,16 @@ class DatasetBrowserView(QWidget):
             self._overview_hub.set_workflow_summary)
         self._overview_hub.navigate_stage.connect(self.set_active_stage)
 
-        # DataProcessHub — operations that modify images/labels.
-        self._process_hub.import_annot_requested.connect(
-            self._tools.run_import_annot)
-        self._process_hub.resize_requested.connect(self._tools.run_resize)
-        self._process_hub.crop_requested.connect(self._tools.run_crop)
-        self._process_hub.rotate_requested.connect(self._tools.run_rotate)
-        self._process_hub.flip_requested.connect(self._tools.run_flip)
-        self._process_hub.convert_requested.connect(self._tools.run_convert)
-        self._process_hub.augment_requested.connect(self._tools.run_augment)
-        self._process_hub.predict_requested.connect(self._tools.run_predict)
-        self._process_hub.migrate_format_requested.connect(
-            self._tools.run_migrate_format)
-        self._process_hub.rename_category_requested.connect(
-            self._browser.rename_category)
-        self._process_hub.merge_category_requested.connect(
-            self._browser.merge_category)
-        self._process_hub.split_category_requested.connect(
-            self._browser.split_category)
-        self._state.dataset_changed.connect(self._process_hub.set_dataset)
+        # TrainingVersionHub — generate versioned training snapshots.
+        self._training_hub.generate_requested.connect(
+            self._tools.run_training_version)
+        self._training_hub.open_version_requested.connect(
+            self._tools.open_training_version)
+        self._training_hub.delete_version_requested.connect(
+            self._tools.delete_training_version)
+        self._state.dataset_changed.connect(self._training_hub.set_dataset)
+        self._browser.target_format_changed.connect(
+            self._on_target_format_changed)
 
         # Class-management actions — re-use the existing BrowserView
         # rename / merge / split methods so the dialogs that already
@@ -275,12 +273,12 @@ class DatasetBrowserView(QWidget):
         self._dataset_bar.catalog_toggled.connect(self._chrome.set_catalog_open)
 
         self._batch_list.commit_requested.connect(self._tools.commit_batch)
-        # "导入新批次" in the Inbox stage bubbles up to MainWindow, which
-        # routes to OrganizeView. OrganizeView auto-enters inbox mode
-        # whenever AppState.project is set, so the destination is the
-        # current project's _inbox/ rather than a new dataset.
+        # Import = copy new images into inbox via OrganizeView
         self._batch_list.import_requested.connect(
             self.request_organize_view.emit)
+        # Drag-drop = same flow but with a pre-known source path
+        self._batch_list.folder_dropped.connect(self.folder_dropped.emit)
+        self._batch_list.navigate_stage.connect(self.set_active_stage)
         self._state.workflow_changed.connect(self._on_workflow_for_batches)
 
         self._detail.change_category_requested.connect(
@@ -307,6 +305,9 @@ class DatasetBrowserView(QWidget):
         )
         self._state.sample_set_changed.connect(
             self._dataset_bar.update_from_sample_set
+        )
+        self._state.sample_set_changed.connect(
+            self._training_hub.set_sample_set
         )
         # LLM-data zone in DeliveryHub reads caption / conversations /
         # grounding counts off the live SampleSet — wire it here so
@@ -762,6 +763,25 @@ class DatasetBrowserView(QWidget):
         """Refresh batch list panel when workflow state changes."""
         self._chrome.refresh_batch_list()
 
+    def _on_target_format_changed(self, format_key: str) -> None:
+        """Persist target format and refresh workbench UI."""
+        project = self._state.project
+        if project is None or not format_key:
+            return
+        if project.target_format == format_key:
+            return
+
+        project.target_format = format_key
+        try:
+            from core.project import save_project
+            save_project(project)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "save_project failed after target format change")
+
+        self._state.notify_project_mutated()
+
     def _sync_annotation_format(self, project) -> None:
         """Push project-derived settings to DetailView + DatasetBar + Hubs.
 
@@ -773,10 +793,51 @@ class DatasetBrowserView(QWidget):
         - full ``project``      → DeliveryHub project-aware status copy.
         """
         fmt = getattr(project, "annotation_format", "labelme") if project else "labelme"
+        if project is not None:
+            try:
+                from core.project import (
+                    default_target_format_for_task,
+                    exportable_target_format_for_task,
+                    save_project,
+                )
+                target = getattr(project, "target_format", "")
+                fixed_target = (
+                    default_target_format_for_task(project.task_type)
+                    if not target else exportable_target_format_for_task(
+                        project.task_type, target)
+                )
+                if project.target_format != fixed_target:
+                    project.target_format = fixed_target
+                    save_project(project)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception(
+                    "failed to initialize project target format")
         self._detail.set_annotation_format(fmt)
         self._dataset_bar.set_annotation_format(fmt if project else "")
+        self._dataset_bar.set_target_context(project)
         self._detail.set_project_profile(project)
+        self._browser.set_target_format(project)
         self._delivery_hub.set_project(project)
+        self._training_hub.set_project(project)
+        self._refresh_training_versions(project)
+        # Filter training version format chips by project task type
+        task_type = getattr(project, "task_type", None)
+        if task_type:
+            self._training_hub.set_task_type(task_type)
+
+    def _refresh_training_versions(self, project) -> None:
+        if project is None:
+            self._training_hub.set_versions([])
+            self._delivery_hub.set_versions([])
+            return
+        try:
+            from core.version_builder import list_training_versions
+            versions = list_training_versions(project.root_path)
+        except Exception:
+            versions = []
+        self._training_hub.set_versions(versions)
+        self._delivery_hub.set_versions(versions)
 
     def cleanup(self) -> None:
         """Stop workers. Called from MainWindow.closeEvent."""

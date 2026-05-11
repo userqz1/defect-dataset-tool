@@ -57,6 +57,12 @@ class BrowserChromeController:
         bl = self._rt.batch_list
         if bl is None:
             return
+        # Feed project context for rules summary
+        proj = self._rt.state.project
+        if proj is not None:
+            bl.set_project_info(
+                proj.name,
+                getattr(proj, "root_path", None))
         wf = self._rt.state.workflow
         if wf is None:
             bl.set_batches([])

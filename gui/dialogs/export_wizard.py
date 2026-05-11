@@ -460,8 +460,24 @@ class ExportWizardDialog(MessageBoxBase):
         # caption_jsonl is a use-case alias for the JSONL schema —
         # resolve it before the generic case fold.
         h = hint.strip().lower()
-        if h == "caption_jsonl":
+        compact = (
+            h.replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace("/", "")
+        )
+        if compact in {"captionjsonl", "imagecaptionjsonl"}:
             h = "jsonl"
+        elif compact in {"llavajsonl"}:
+            h = "llava"
+        elif compact in {"sharegptjson", "sharegptjsonl"}:
+            h = "sharegpt"
+        elif compact in {"msswift", "swiftjsonl", "qwenvl"}:
+            h = "swift"
+        elif compact in {"labelme", "labelmejson"}:
+            h = "labelme json"
+        elif compact in {"pairedfolder", "pairfolder", "imagepair", "pair"}:
+            h = "pairedfolder"
         for key, card in self._format_cards.items():
             if key.lower() == h and card.isVisible():
                 return key

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from gui.widgets.batch_list import BatchListPanel
     from gui.widgets.catalog_panel import CatalogPanel
     from gui.widgets.context_panel import ContextPanel
-    from gui.widgets.data_process_hub import DataProcessHub
+    from gui.widgets.training_version_hub import TrainingVersionHub
     from gui.widgets.dataset_bar import DatasetBar
     from gui.widgets.delivery_hub import DeliveryHub
     from gui.widgets.review_hub import ReviewHub
@@ -32,7 +32,8 @@ class BrowserRuntime:
     - ``workspace_sidebar`` — left, slim stage nav (5 rows, 168px).
     - ``context_panel``     — right, stack of context pages (catalog
       on 标注工作台 grid; future per-image Inspector on detail).
-    - ``process_hub`` / ``delivery_hub`` — split by mutation vs delivery scope.
+    - ``training_hub`` — training version generation (replaces old process_hub).
+    - ``delivery_hub`` — export/LLM data delivery.
     """
 
     state: AppState
@@ -43,7 +44,7 @@ class BrowserRuntime:
     dataset_bar: DatasetBar
     workspace_sidebar: WorkspaceSidebar
     context_panel: ContextPanel
-    process_hub: DataProcessHub
+    training_hub: TrainingVersionHub
     delivery_hub: DeliveryHub
     review_hub: ReviewHub
     thumb_worker: ThumbnailWorker

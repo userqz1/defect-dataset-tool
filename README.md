@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Style](https://img.shields.io/badge/UI-Fluent%20Design-0078D4.svg)]()
 
-[English](README_EN.md) · 简体中文
+[English](README_EN.md) · 简体中文 · [长期路线图](docs/ROADMAP.md)
 
 </div>
 
