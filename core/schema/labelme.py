@@ -16,6 +16,7 @@ LABELME_SCHEMA = Schema(
     display_name="LabelMe JSON",
     description="LabelMe per-image JSON, preserves polygons and keypoints",
     task_types=(
+        TaskType.DETECTION,
         TaskType.SEMANTIC_SEG,
         TaskType.INSTANCE_SEG,
         TaskType.KEYPOINT,

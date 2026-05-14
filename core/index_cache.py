@@ -20,6 +20,7 @@ from pathlib import Path
 from .models import Category, Dataset, ImageInfo
 
 DEFAULT_DB = Path.home() / ".dataforge" / "index.sqlite"
+CACHE_VERSION = "layout-root-pair-v2"
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -60,6 +61,7 @@ def compute_fingerprint(root: Path) -> str:
     ``<root>/<cat>/images/`` or ``<root>/<cat>/labels/``.
     """
     h = hashlib.sha1()
+    h.update(CACHE_VERSION.encode())
     try:
         for p in sorted(root.iterdir()):
             if not p.is_dir():

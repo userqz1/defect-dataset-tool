@@ -215,6 +215,10 @@ class DetailView(QWidget):
     conversations_saved = pyqtSignal(object, object)
     # Grounding (region text) saved — (ImageInfo, grounding_list)
     grounding_saved = pyqtSignal(object, object)
+    # Shape annotation saved - ImageInfo. DetailView mutates the live
+    # SampleSet in-place; DatasetBrowserView rebroadcasts AppState so
+    # aggregate progress and grid badges refresh immediately.
+    annotation_saved = pyqtSignal(object)
     # Local shape-edit undo stack changed (push/pop/clear). The shell
     # listens so the global undo button on DatasetBar can light up
     # while the user is in DetailView and there's something to undo.
@@ -868,6 +872,7 @@ class DetailView(QWidget):
                 show_annotation=caps["annotation"],
                 show_status=not bool(self._target_format),
                 shape_tools_without_annotation=caps["shape_tools"],
+                shape_tools_override=caps["shape_tool_override"],
             )
         if new_spec == self._spec and new_task_type == self._task_type:
             self.next_incomplete_btn.setVisible(bool(self._target_format))
@@ -897,7 +902,7 @@ class DetailView(QWidget):
         return project.preset_id != "vlm_caption"
 
     @staticmethod
-    def _workbench_caps_for_project(project: Project) -> dict[str, bool]:
+    def _workbench_caps_for_project(project: Project) -> dict[str, object]:
         """Derive DetailView surfaces from the selected target format."""
         target = (project.target_format or "").strip().lower()
         target = (
@@ -916,6 +921,8 @@ class DetailView(QWidget):
                     "conversations": not supports_grounding,
                     "grounding": supports_grounding,
                     "shape_tools": supports_grounding,
+                    "shape_tool_override": DetailView._shape_tools_for_target(
+                        project),
                 }
             if target in {"sharegpt", "sharegptjson", "sharegptjsonl"}:
                 supports_grounding = DetailView._project_task_supports_grounding(
@@ -926,6 +933,8 @@ class DetailView(QWidget):
                     "conversations": not supports_grounding,
                     "grounding": supports_grounding,
                     "shape_tools": supports_grounding,
+                    "shape_tool_override": DetailView._shape_tools_for_target(
+                        project),
                 }
             if target in {"swift", "msswift", "swiftjsonl", "qwenvl"}:
                 supports_grounding = DetailView._project_task_supports_grounding(
@@ -936,6 +945,8 @@ class DetailView(QWidget):
                     "conversations": not supports_grounding,
                     "grounding": supports_grounding,
                     "shape_tools": supports_grounding,
+                    "shape_tool_override": DetailView._shape_tools_for_target(
+                        project),
                 }
             if target in {"caption", "captionjsonl", "imagecaptionjsonl"}:
                 return {
@@ -944,6 +955,7 @@ class DetailView(QWidget):
                     "conversations": False,
                     "grounding": False,
                     "shape_tools": False,
+                    "shape_tool_override": (),
                 }
             return {
                 "annotation": True,
@@ -951,6 +963,8 @@ class DetailView(QWidget):
                 "conversations": False,
                 "grounding": False,
                 "shape_tools": False,
+                "shape_tool_override": DetailView._shape_tools_for_target(
+                    project),
             }
 
         return {
@@ -960,6 +974,7 @@ class DetailView(QWidget):
             "conversations": project.enable_conversations,
             "grounding": project.enable_grounding,
             "shape_tools": False,
+            "shape_tool_override": DetailView._shape_tools_for_target(project),
         }
 
     @staticmethod
@@ -970,6 +985,31 @@ class DetailView(QWidget):
             TaskType.SEMANTIC_SEG,
             TaskType.INSTANCE_SEG,
         }
+
+    @staticmethod
+    def _shape_tools_for_target(project: Project) -> tuple[str, ...]:
+        """Return drawing tools appropriate for the project target."""
+        if project.task_type in {
+            TaskType.SEMANTIC_SEG,
+            TaskType.INSTANCE_SEG,
+            TaskType.ORIENTED_DET,
+        }:
+            return ("polygon",)
+        if project.task_type is TaskType.KEYPOINT:
+            return ("point", "rectangle")
+        if project.task_type is not TaskType.DETECTION:
+            return ()
+
+        target = (project.target_format or "").strip().lower()
+        target = (
+            target.replace(" ", "")
+            .replace("-", "")
+            .replace("_", "")
+            .replace("/", "")
+        )
+        if target in {"labelme", "labelmejson", "jsonl", "jsonlines"}:
+            return ("rectangle", "polygon")
+        return ("rectangle",)
 
     # ════════════════════════════════════════════════════════════════
     # Image loading + cache + prefetch
@@ -1694,6 +1734,7 @@ class DetailView(QWidget):
             isClosable=True, position=InfoBarPosition.TOP,
             duration=2000, parent=self.window(),
         )
+        self.annotation_saved.emit(img)
         self._update_completion_card(img)
 
     # ════════════════════════════════════════════════════════════════

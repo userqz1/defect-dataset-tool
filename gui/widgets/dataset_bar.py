@@ -173,6 +173,7 @@ class DatasetBar(QFrame):
         self._target_format = ""
         self._target_task_type = None
         self._last_sample_set = None
+        self._annotation_progress: tuple[int, int] | None = None
         # Scan-in-progress banner — sits next to the path. Hidden unless
         # AppState.scan_active is True.  A visible text cue lets the user
         # know stat numbers are still settling, complementing the pulsing
@@ -270,6 +271,9 @@ class DatasetBar(QFrame):
         self._loading_label.setText(i18n.t("ds.loading"))
         if self._annotation_format:
             self.set_annotation_format(self._annotation_format)
+        if self._annotation_progress is not None:
+            done, total = self._annotation_progress
+            self._set_annotation_progress(done, total)
         self._refresh_btn.setToolTip(i18n.t("tools.refresh"))
         # Undo tooltip mixes a translated prefix with a mutable summary
         # (``撤销: <op>`` / ``没有可撤销的操作``) owned by
@@ -313,6 +317,8 @@ class DatasetBar(QFrame):
         for cell in (self._stat_images, self._stat_classes, self._stat_labeled,
                       self._stat_ratio, self._stat_flagged):
             cell.set_value("—")
+            cell.setToolTip("")
+        self._annotation_progress = None
         self.set_workflow_summary(None)
 
     def set_dataset(self, ds: Dataset, flagged_count: int = 0) -> None:
@@ -339,8 +345,7 @@ class DatasetBar(QFrame):
         labeled = 0
         for cat in ds.categories:
             labeled += sum(1 for img in cat.images if img.has_label)
-        pct = (labeled / ds.total_images * 100) if ds.total_images else 0
-        self._stat_labeled.set_value(f"{pct:.0f}%")
+        self._set_annotation_progress(labeled, ds.total_images)
 
         # Imbalance (max:min) — warn when >= 20:1.
         counts = [c.image_count for c in ds.categories if c.image_count > 0]
@@ -388,8 +393,27 @@ class DatasetBar(QFrame):
                 if s.regions or s.image_labels or s.caption
                 or s.conversations or s.grounding or s.pair_path
             )
-        pct = (n_done / total * 100) if total else 0
-        self._stat_labeled.set_value(f"{pct:.0f}%")
+        self._set_annotation_progress(n_done, total)
+
+    def _set_annotation_progress(self, done: int, total: int) -> None:
+        """Render visible progress plus remaining count in the tooltip."""
+        done = max(0, int(done or 0))
+        total = max(0, int(total or 0))
+        self._annotation_progress = (done, total)
+        todo = max(total - done, 0)
+        pct = int(round(done / total * 100)) if total else 0
+        if total:
+            self._stat_labeled.set_value(f"{done:,}/{total:,}")
+            self._stat_labeled.setToolTip(i18n.t(
+                "ds.stat.labeled.tip",
+                done=done,
+                total=total,
+                todo=todo,
+                pct=pct,
+            ))
+        else:
+            self._stat_labeled.set_value("—")
+            self._stat_labeled.setToolTip("")
 
     def set_sample_set_status(self, status_value: str) -> None:
         """Update the sync dot color based on SampleSetStatus.

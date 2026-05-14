@@ -2,6 +2,7 @@
 
 Layout detection (决定一次、走一条路径)：
     standard  — <root>/<cat>/images/*  (+ labels/*.json)
+    root_pair — <root>/images/*         (+ <root>/labels/*.json/.txt/.xml)
     flat      — <root>/<cat>/*.jpg     (+ 同级 *.json)
     single    — <root>/*.jpg           (没有类别层，合成 "(未分类)" 类别)
     coco      — <root>/annotations.json (COCO) + 同目录或 images/ 子目录的图片
@@ -43,6 +44,7 @@ MAX_DEPTH = 4
 PROGRESS_CHUNK = 200  # 每扫描这么多张图就回调一次进度
 IGNORE_DIRS = {
     ".git", ".svn", ".hg",
+    ".dataforge",
     "_inbox",
     "node_modules", "__pycache__", ".idea", ".vscode",
     "dist", "build", "venv", ".venv", "env",
@@ -111,6 +113,15 @@ def _detect_layout(root: Path, exts: set[str]) -> str:
         if (Path(e.path) / IMAGE_SUBDIR).is_dir():
             return "standard"
 
+    # Single-category paired layout produced by many export/cleaning
+    # pipelines: root/images and root/labels are siblings. Without this
+    # branch the generic "flat" detector treats the images directory as
+    # a category and looks for labels inside root/images, so every existing
+    # root/labels/*.json appears missing.
+    root_images = root / IMAGE_SUBDIR
+    if root_images.is_dir() and _has_image_file(root_images, exts):
+        return "root_pair"
+
     if _has_image_file(root, exts):
         return "single"
 
@@ -163,6 +174,8 @@ def scan_dataset(
 
     if layout == "single":
         categories, t_img = _scan_single(root, exts, progress_cb, counter)
+    elif layout == "root_pair":
+        categories, t_img = _scan_root_pair(root, exts, progress_cb, counter)
     elif layout == "recursive":
         categories, t_img = _scan_recursive(root, exts, progress_cb, counter)
     elif layout == "coco":
@@ -326,6 +339,36 @@ def _scan_single(
         progress_cb(0, 0, UNCATEGORIZED)
     images, label_count = _build_image_list(
         root, root, UNCATEGORIZED, exts, progress_cb, counter
+    )
+    if not images:
+        return [], 0
+    return (
+        [Category(
+            name=UNCATEGORIZED,
+            image_count=len(images),
+            label_count=label_count,
+            images=images,
+        )],
+        len(images),
+    )
+
+
+def _scan_root_pair(
+    root: Path, exts: set[str], progress_cb: ProgressCb | None, counter: list[int]
+) -> tuple[list[Category], int]:
+    """Scan ``root/images`` with optional sibling ``root/labels``.
+
+    This is a single-category dataset layout, not a category named
+    ``images``. Keep the UI category neutral so filters/card chips do not
+    imply the folder name is a semantic class.
+    """
+    if progress_cb:
+        progress_cb(0, 0, UNCATEGORIZED)
+    img_root = root / IMAGE_SUBDIR
+    lbl_dir = root / LABEL_SUBDIR
+    lbl_root = lbl_dir if lbl_dir.is_dir() else None
+    images, label_count = _build_image_list(
+        img_root, lbl_root, UNCATEGORIZED, exts, progress_cb, counter
     )
     if not images:
         return [], 0

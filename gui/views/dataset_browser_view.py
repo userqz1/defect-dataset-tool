@@ -321,6 +321,7 @@ class DatasetBrowserView(QWidget):
         self._detail.work_status_changed.connect(
             self._on_work_status_changed
         )
+        self._detail.annotation_saved.connect(self._on_annotation_saved)
         self._detail.caption_saved.connect(self._on_caption_saved)
         self._detail.conversations_saved.connect(self._on_conversations_saved)
         self._detail.grounding_saved.connect(self._on_grounding_saved)
@@ -407,6 +408,10 @@ class DatasetBrowserView(QWidget):
                 position=InfoBarPosition.TOP,
             )
 
+    def _on_annotation_saved(self, _image) -> None:
+        """Refresh aggregate UI after DetailView saves shape annotations."""
+        self._state.notify_sample_set_mutated()
+
     def _on_work_status_changed(self, image, new_status: str) -> None:
         """Persist workflow status change from DetailView."""
         from core.workflow import WorkStatus
@@ -435,6 +440,7 @@ class DatasetBrowserView(QWidget):
         from core import workflow_store as ws
         ws.save(project.root_path, wf)
         self._state.refresh_workflow_summary()
+        self._state.notify_sample_set_mutated()
 
     def _on_caption_saved(self, image, caption: str) -> None:
         """Persist VLM caption to disk as a sidecar .txt file.
@@ -449,6 +455,7 @@ class DatasetBrowserView(QWidget):
             import logging
             logging.getLogger(__name__).exception(
                 "caption write failed for %s", image.path)
+        self._state.notify_sample_set_mutated()
 
     def _on_conversations_saved(self, image, conversations: list) -> None:
         """Persist VLM conversations to disk as a sidecar .json file.
@@ -463,6 +470,7 @@ class DatasetBrowserView(QWidget):
             import logging
             logging.getLogger(__name__).exception(
                 "conversations write failed for %s", image.path)
+        self._state.notify_sample_set_mutated()
 
     def _on_change_preset(self) -> None:
         """Open the preset picker for the active project and apply the choice.
@@ -754,6 +762,7 @@ class DatasetBrowserView(QWidget):
             import logging
             logging.getLogger(__name__).exception(
                 "grounding write failed for %s", image.path)
+        self._state.notify_sample_set_mutated()
 
     def _set_catalog_open(self, on: bool) -> None:
         """Public entry for Settings popup catalog toggle."""

@@ -501,6 +501,7 @@ class TrainingVersionHub(QFrame):
     def _refresh_stats_summary(self) -> None:
         total = self._total_images
         cats = self._class_count
+        done = 0
         pct = 0
         ss = self._sample_set
         if ss is not None:
@@ -514,10 +515,14 @@ class TrainingVersionHub(QFrame):
                 except Exception:
                     done = sum(1 for s in ss.samples if s.has_label)
                 pct = int(done / total * 100)
+        todo = max(total - done, 0)
         self._stats_label.setText(i18n.t(
             "tv.stats.summary",
             images=f"{total:,}",
             cats=cats,
+            done=f"{done:,}",
+            total=f"{total:,}",
+            todo=f"{todo:,}",
             pct=pct,
         ))
 

@@ -171,6 +171,7 @@ def spec_for(
     show_annotation: bool = True,
     show_status: bool = True,
     shape_tools_without_annotation: bool = False,
+    shape_tools_override: tuple[str, ...] | None = None,
 ) -> TaskWorkbenchSpec:
     """Build the workbench spec for ``task_type``."""
     base = _DEFAULT_BASE if task_type is None else _TASK_BASES.get(
@@ -183,6 +184,10 @@ def spec_for(
     has_vlm = has_caption or has_conversations or supports_grounding
 
     has_shape_tools = has_annotation or shape_tools_without_annotation
+    shape_tools = (
+        shape_tools_override
+        if shape_tools_override is not None else base.shape_tools
+    )
 
     # Default segment follows the active work surface.  Pure VLM projects
     # land on the VLM editor; mixed projects can still expose drawing tools
@@ -197,7 +202,7 @@ def spec_for(
         has_vlm=has_vlm,
         has_status=show_status,
         default_segment=default_segment,
-        shape_tools=base.shape_tools if has_shape_tools else (),
+        shape_tools=shape_tools if has_shape_tools else (),
         supports_grounding=supports_grounding,
         has_caption=has_caption,
         has_conversations=has_conversations,
