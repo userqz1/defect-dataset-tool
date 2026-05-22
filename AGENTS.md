@@ -25,6 +25,21 @@ C:/ProgramData/miniconda3/envs/defect-tool/python.exe -m pip install -r requirem
 
 No test suite exists yet. When added, use pytest.
 
+### Git / GitHub uploads
+
+When the user asks to upload, push, or submit code to GitHub, use the local
+Windows PowerShell CLI explicitly instead of relying on the sandboxed Git
+network path. The user's local PowerShell has working GitHub connectivity while
+the sandbox may not.
+
+```powershell
+C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "git status --short --branch"
+C:\windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "git push origin main"
+```
+
+Use the same local PowerShell pattern for related Git commands such as
+`git add`, `git commit`, and `git push`.
+
 ## Architecture (must follow)
 
 ### Core invariant

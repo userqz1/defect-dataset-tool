@@ -27,6 +27,12 @@ dev = ["pytest>=8.0", "ruff>=0.9"]
 [project.scripts]
 dataforge = "main:main"
 
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "gui*"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

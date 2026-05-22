@@ -1,4 +1,4 @@
-"""Schema validator tests — cover each of the 10 registered schemas.
+"""Schema validator tests — cover each registered schema.
 
 Each Schema exposes ``slots`` + ``validator`` per slot; calling
 ``schema.validate(dataset)`` returns a ComplianceReport. These tests
@@ -16,10 +16,11 @@ from core.api import all_schemas, get_schema, TaskType
 # ---------- Registry-level ----------
 
 class TestRegistry:
-    def test_ten_schemas_registered(self):
+    def test_schemas_registered(self):
         keys = {s.key for s in all_schemas()}
         assert keys == {
-            "YOLO", "COCO", "VOC", "ImageFolder", "MVTec",
+            "YOLO", "COCO", "VOC", "LabelMe JSON",
+            "ImageFolder", "MVTec", "PairedFolder",
             "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift",
         }
 

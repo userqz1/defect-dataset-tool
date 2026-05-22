@@ -6,7 +6,7 @@ Each test:
   3. Runs the exporter
   4. Validates the output structure + parses key files
 
-Covers all 10 Schemas registered in ``core.schema`` after the v1.2
+Covers all Schemas registered in ``core.schema`` after the v1.2
 registry unification (review #4+#14).
 """
 from __future__ import annotations
@@ -36,9 +36,12 @@ def split(synthetic_dataset):
 # ---- Tests -----------------------------------------------------------------
 
 class TestRegistryComplete:
-    def test_all_10_schemas_registered(self):
-        expected = {"YOLO", "COCO", "VOC", "ImageFolder", "MVTec",
-                    "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift"}
+    def test_all_schemas_registered(self):
+        expected = {
+            "YOLO", "COCO", "VOC", "LabelMe JSON",
+            "ImageFolder", "MVTec", "PairedFolder",
+            "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift",
+        }
         assert {s.key for s in all_schemas()} == expected
 
 
