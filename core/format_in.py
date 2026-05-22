@@ -364,7 +364,7 @@ def _detect_json_with_data(
     behavior.
     """
     try:
-        raw = json.loads(json_path.read_text(encoding="utf-8"))
+        raw = json.loads(json_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return ("labelme", None)
     if isinstance(raw, dict) and all(
@@ -382,7 +382,7 @@ def _read_labelme(sample: Sample, json_path: Path,
                   data: Any | None = None) -> None:
     if data is None:
         try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
+            data = json.loads(json_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             return
     if not isinstance(data, dict):
@@ -573,7 +573,7 @@ def _build_coco_index(
     """
     if data is None:
         try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
+            data = json.loads(json_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             return None
     if not isinstance(data, dict):

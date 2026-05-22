@@ -29,7 +29,7 @@ class ParseResult:
 def parse_labelme(json_path: Path, image_path: Path | None = None) -> ParseResult:
     """Parse a LabelMe JSON file. Never raises — returns ParseResult with error str on failure."""
     try:
-        text = json_path.read_text(encoding="utf-8")
+        text = json_path.read_text(encoding="utf-8-sig")
     except OSError as e:
         return ParseResult(None, f"read failed: {e}")
 

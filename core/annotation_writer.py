@@ -83,7 +83,7 @@ def write_labelme(annotation: Annotation, label_path: Path, image_path: Path) ->
     base: dict = {}
     if label_path.is_file():
         try:
-            base = json.loads(label_path.read_text(encoding="utf-8"))
+            base = json.loads(label_path.read_text(encoding="utf-8-sig"))
             if not isinstance(base, dict):
                 base = {}
         except (OSError, json.JSONDecodeError):

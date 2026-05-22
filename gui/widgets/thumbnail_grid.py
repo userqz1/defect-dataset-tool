@@ -39,6 +39,7 @@ def _checkbox_rect_for(card_rect: QRect, pad: int) -> QRect:
 
 from core.models import ImageInfo
 from gui import i18n
+from gui.category_display import display_category_name, has_semantic_category
 from gui.theme import T
 from gui.widgets.category_tree import _color_for  # reuse earthen palette
 
@@ -261,14 +262,15 @@ class _ThumbDelegate(QStyledItemDelegate):
                              f"{dim[0]} × {dim[1]} px")
 
         # Class mini-tag (bottom of meta)
-        if img.category:
+        if has_semantic_category(img.category):
             tag_color = QColor(_color_for(img.category))
             tag_font = QFont(painter.font())
             tag_font.setPointSize(8)
             tag_font.setWeight(QFont.Weight.Medium)
             painter.setFont(tag_font)
             fm_tag = QFontMetrics(tag_font)
-            tag_w = fm_tag.horizontalAdvance(img.category) + 10
+            tag_text = display_category_name(img.category)
+            tag_w = fm_tag.horizontalAdvance(tag_text) + 10
             tag_h = 16
             tx = text_x
             ty = meta_top + 46
@@ -279,7 +281,7 @@ class _ThumbDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(tx, ty, tag_w, tag_h, 3, 3)
             painter.setPen(tag_color)
             painter.drawText(tx, ty, tag_w, tag_h,
-                             Qt.AlignmentFlag.AlignCenter, img.category)
+                             Qt.AlignmentFlag.AlignCenter, tag_text)
 
         painter.restore()
 

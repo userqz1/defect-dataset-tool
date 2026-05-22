@@ -410,7 +410,35 @@ class DatasetBrowserView(QWidget):
 
     def _on_annotation_saved(self, _image) -> None:
         """Refresh aggregate UI after DetailView saves shape annotations."""
+        self._sync_project_classes_from_samples()
         self._state.notify_sample_set_mutated()
+
+    def _sync_project_classes_from_samples(self) -> None:
+        project = self._state.project
+        ss = self._state.sample_set
+        if project is None or ss is None:
+            return
+        existing = list(getattr(project, "class_names", []) or [])
+        seen = set(existing)
+        added: list[str] = []
+        for sample in ss.samples:
+            for region in sample.regions:
+                label = (region.label or "").strip()
+                if not label or label in seen:
+                    continue
+                seen.add(label)
+                added.append(label)
+        if not added:
+            return
+        project.class_names = existing + sorted(added)
+        try:
+            from core.project import save_project
+            save_project(project)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "save_project failed after class-name sync")
+        self._state.notify_project_mutated()
 
     def _on_work_status_changed(self, image, new_status: str) -> None:
         """Persist workflow status change from DetailView."""

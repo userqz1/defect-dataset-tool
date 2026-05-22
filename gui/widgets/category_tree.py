@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 
 from core.models import Dataset
 from gui import i18n
+from gui.category_display import display_category_name, has_semantic_category
 from gui.theme import T
 
 ALL_KEY = "__all__"
@@ -210,7 +211,7 @@ class CategoryTree(QListWidget):
 
         target_row = 0  # default to "全部"
         for idx, cat in enumerate(dataset.categories, start=1):
-            item = QListWidgetItem(cat.name)
+            item = QListWidgetItem(display_category_name(cat.name))
             item.setData(Qt.ItemDataRole.UserRole, cat.name)
             item.setData(Qt.ItemDataRole.UserRole + 1, f"{cat.image_count:,}")
             item.setData(Qt.ItemDataRole.UserRole + 2, cat.image_count)
@@ -230,6 +231,8 @@ class CategoryTree(QListWidget):
             return
         key = item.data(Qt.ItemDataRole.UserRole)
         if key == ALL_KEY:
+            return
+        if not has_semantic_category(key):
             return
 
         menu = QMenu(self)

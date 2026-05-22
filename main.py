@@ -18,6 +18,7 @@ from gui.main_window import MainWindow
 _ICON = Path(__file__).parent / "assets" / "icon.ico"
 _APP_DATA = Path.home() / ".dataforge"
 _LOG_DIR = _APP_DATA / "logs"
+_WINDOWS_APP_ID = "DataForge.DatasetWorkbench"
 
 APP_NAME = "数据工坊"  # DataForge
 
@@ -187,16 +188,48 @@ def _migrate_cache_dir() -> None:
                   e, old, new, exc_info=True)
 
 
+def _install_windows_app_id() -> None:
+    """Register a stable Windows taskbar identity before Qt starts."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            _WINDOWS_APP_ID
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "failed to set Windows AppUserModelID", exc_info=True
+        )
+
+
+def _load_app_icon() -> QIcon | None:
+    if not _ICON.exists():
+        logging.getLogger(__name__).warning("app icon not found: %s", _ICON)
+        return None
+    icon = QIcon(str(_ICON))
+    if icon.isNull():
+        logging.getLogger(__name__).warning("app icon failed to load: %s", _ICON)
+        return None
+    return icon
+
+
 def main() -> int:
     _setup_logging()
     logging.getLogger(__name__).info("DataForge starting")
     _migrate_cache_dir()
+    _install_windows_app_id()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    if _ICON.exists():
-        app.setWindowIcon(QIcon(str(_ICON)))
+    app.setApplicationDisplayName(APP_NAME)
+    app.setOrganizationName("DataForge")
+    icon = _load_app_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
 
     window = MainWindow()
+    if icon is not None:
+        window.setWindowIcon(icon)
     window.show()
     return app.exec()
 

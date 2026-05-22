@@ -314,7 +314,7 @@ def parse_coco(json_path: Path) -> CocoIndex | None:
     Returns None if the file is not a recognizable COCO file.
     """
     try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+        data = json.loads(json_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):

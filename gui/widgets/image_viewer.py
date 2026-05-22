@@ -53,7 +53,7 @@ class ImageViewer(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QBrush(QColor(T.SURFACE_DIM)))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -74,6 +74,13 @@ class ImageViewer(QGraphicsView):
         self._draw_start: QPointF | None = None
         self._temp_rect_item: QGraphicsRectItem | None = None
         self._selected_index: int = -1
+        self._handle_items: list[QGraphicsRectItem] = []
+        self._resizing: bool = False
+        self._resize_handle: str = ""
+        self._resize_index: int = -1
+        self._resize_origin: QRectF | None = None
+        self._resize_changed: bool = False
+        self._resize_min_size: float = 3.0
         # 多边形绘制状态
         self._poly_points: list[QPointF] = []
         self._temp_poly_item: QGraphicsPolygonItem | None = None
@@ -89,6 +96,8 @@ class ImageViewer(QGraphicsView):
         """Set a pre-loaded pixmap, replacing scene contents."""
         self._scene.clear()
         self._shape_items.clear()
+        self._handle_items.clear()
+        self._clear_resize_state()
         self._pix_item = None
 
         if pix.isNull():
@@ -99,6 +108,8 @@ class ImageViewer(QGraphicsView):
 
     def set_annotation(self, annotation: Annotation | None) -> None:
         """Draw shapes overlaid on the current image."""
+        self._clear_handle_items()
+        self._clear_resize_state()
         for it in self._shape_items:
             self._scene.removeItem(it)
         self._shape_items.clear()
@@ -127,6 +138,8 @@ class ImageViewer(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.unsetCursor()
             self._clear_selection_highlight()
+            self._clear_handle_items()
+            self._clear_resize_state()
             self._selected_index = -1
             self.selection_changed.emit(-1)
 
@@ -202,6 +215,7 @@ class ImageViewer(QGraphicsView):
             pen = it.pen()
             pen.setWidthF(3.5)
             it.setPen(pen)
+        self._update_selection_handles()
         self.selection_changed.emit(self._selected_index)
 
     def _clear_selection_highlight(self) -> None:
@@ -212,10 +226,13 @@ class ImageViewer(QGraphicsView):
                 it.setPen(pen)
             except Exception:  # noqa: BLE001
                 pass
+        self._clear_handle_items()
 
     def set_annotation_visible(self, visible: bool) -> None:
         self._annotation_visible = visible
         for it in self._shape_items:
+            it.setVisible(visible)
+        for it in self._handle_items:
             it.setVisible(visible)
 
     def is_annotation_visible(self) -> bool:
@@ -238,6 +255,7 @@ class ImageViewer(QGraphicsView):
             item.setPen(pen)
             item.setBrush(brush)
             item.setToolTip(shape.label)
+            item.setZValue(10)
             return item
         if st == "rectangle" and len(pts) >= 2:
             (x1, y1), (x2, y2) = pts[0], pts[1]
@@ -246,6 +264,7 @@ class ImageViewer(QGraphicsView):
             item.setPen(pen)
             item.setBrush(brush)
             item.setToolTip(shape.label)
+            item.setZValue(10)
             return item
         if st in ("point", "circle") and len(pts) >= 1:
             x, y = pts[0]
@@ -254,6 +273,7 @@ class ImageViewer(QGraphicsView):
             item.setPen(pen)
             item.setBrush(QBrush(color))
             item.setToolTip(shape.label)
+            item.setZValue(10)
             return item
         if st == "line" and len(pts) >= 2:
             poly = QPolygonF([QPointF(x, y) for x, y in pts])
@@ -261,6 +281,7 @@ class ImageViewer(QGraphicsView):
             item.setPen(pen)
             item.setBrush(Qt.BrushStyle.NoBrush)
             item.setToolTip(shape.label)
+            item.setZValue(10)
             return item
         return None
 
@@ -274,6 +295,7 @@ class ImageViewer(QGraphicsView):
         self.fitInView(self._pix_item, Qt.AspectRatioMode.KeepAspectRatio)
         self._scale = self.current_scale()
         self.zoom_changed.emit(self._scale)
+        self._update_selection_handles()
 
     def zoom_to_actual(self) -> None:
         """缩放到 1:1 实际像素。"""
@@ -284,11 +306,12 @@ class ImageViewer(QGraphicsView):
         # 居中到图像中心
         self.centerOn(self._pix_item)
         self.zoom_changed.emit(self._scale)
+        self._update_selection_handles()
 
     def reset_view(self) -> None:
         self.fit_to_window()
 
-    def _apply_zoom(self, factor: float) -> None:
+    def _apply_zoom(self, factor: float, anchor_pos=None) -> None:
         new_scale = self._scale * factor
         if new_scale < self.MIN_SCALE:
             factor = self.MIN_SCALE / self._scale
@@ -298,9 +321,24 @@ class ImageViewer(QGraphicsView):
             new_scale = self.MAX_SCALE
         if abs(factor - 1.0) < 1e-6:
             return
+
+        if anchor_pos is None:
+            anchor_pos = self.viewport().rect().center()
+        anchor_scene = self.mapToScene(anchor_pos)
+
         self.scale(factor, factor)
         self._scale = new_scale
+        # Keep the original scene point under the same viewport pixel.
+        # Adjusting scrollbars is more stable than transform.translate()
+        # after the user has panned or when scrollbars appear mid-zoom.
+        anchor_after = self.mapFromScene(anchor_scene)
+        delta = anchor_after - anchor_pos
+        self.horizontalScrollBar().setValue(
+            self.horizontalScrollBar().value() + delta.x())
+        self.verticalScrollBar().setValue(
+            self.verticalScrollBar().value() + delta.y())
         self.zoom_changed.emit(self._scale)
+        self._update_selection_handles()
 
     def zoom_in(self) -> None:
         if self._pix_item is not None:
@@ -314,7 +352,8 @@ class ImageViewer(QGraphicsView):
         if self._pix_item is None:
             return
         factor = 1.18 if event.angleDelta().y() > 0 else 1 / 1.18
-        self._apply_zoom(factor)
+        self._apply_zoom(factor, event.position().toPoint())
+        event.accept()
 
     def leaveEvent(self, event) -> None:
         """Cancel in-progress drawing when mouse leaves the viewport."""
@@ -326,6 +365,164 @@ class ImageViewer(QGraphicsView):
             self._draw_start = None
         super().leaveEvent(event)
 
+    def _clear_resize_state(self) -> None:
+        self._resizing = False
+        self._resize_handle = ""
+        self._resize_index = -1
+        self._resize_origin = None
+        self._resize_changed = False
+
+    def _handle_size_scene(self) -> float:
+        return max(4.0, 9.0 / max(self.current_scale(), 0.001))
+
+    def _handle_hit_tolerance(self) -> float:
+        return max(5.0, 9.0 / max(self.current_scale(), 0.001))
+
+    def _shape_rect(self, index: int) -> QRectF | None:
+        if self._annotation is None or not (0 <= index < len(self._annotation.shapes)):
+            return None
+        shape = self._annotation.shapes[index]
+        if shape.shape_type != "rectangle" or len(shape.points) < 2:
+            return None
+        (x1, y1), (x2, y2) = shape.points[0], shape.points[1]
+        return QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized()
+
+    def _rect_handle_points(self, rect: QRectF) -> dict[str, QPointF]:
+        cx = rect.center().x()
+        cy = rect.center().y()
+        return {
+            "nw": QPointF(rect.left(), rect.top()),
+            "n": QPointF(cx, rect.top()),
+            "ne": QPointF(rect.right(), rect.top()),
+            "e": QPointF(rect.right(), cy),
+            "se": QPointF(rect.right(), rect.bottom()),
+            "s": QPointF(cx, rect.bottom()),
+            "sw": QPointF(rect.left(), rect.bottom()),
+            "w": QPointF(rect.left(), cy),
+        }
+
+    def _clear_handle_items(self) -> None:
+        for it in self._handle_items:
+            try:
+                self._scene.removeItem(it)
+            except RuntimeError:
+                pass
+        self._handle_items.clear()
+
+    def _update_selection_handles(self) -> None:
+        self._clear_handle_items()
+        if not self._edit_mode or not self._annotation_visible:
+            return
+        rect = self._shape_rect(self._selected_index)
+        if rect is None:
+            return
+        size = self._handle_size_scene()
+        half = size / 2
+        pen = QPen(QColor(T.ACCENT))
+        pen.setWidthF(1.5)
+        pen.setCosmetic(True)
+        brush = QBrush(QColor(T.CONTENT))
+        for pos in self._rect_handle_points(rect).values():
+            item = QGraphicsRectItem(
+                QRectF(pos.x() - half, pos.y() - half, size, size)
+            )
+            item.setPen(pen)
+            item.setBrush(brush)
+            item.setZValue(30)
+            item.setVisible(self._annotation_visible)
+            self._scene.addItem(item)
+            self._handle_items.append(item)
+
+    def _handle_at_rect(self, rect: QRectF, scene_pos: QPointF) -> str:
+        tol = self._handle_hit_tolerance()
+        x = scene_pos.x()
+        y = scene_pos.y()
+        for name in ("nw", "ne", "se", "sw"):
+            p = self._rect_handle_points(rect)[name]
+            if abs(x - p.x()) <= tol and abs(y - p.y()) <= tol:
+                return name
+        if abs(y - rect.top()) <= tol and rect.left() - tol <= x <= rect.right() + tol:
+            return "n"
+        if abs(x - rect.right()) <= tol and rect.top() - tol <= y <= rect.bottom() + tol:
+            return "e"
+        if abs(y - rect.bottom()) <= tol and rect.left() - tol <= x <= rect.right() + tol:
+            return "s"
+        if abs(x - rect.left()) <= tol and rect.top() - tol <= y <= rect.bottom() + tol:
+            return "w"
+        return ""
+
+    def _resize_hit_at(self, scene_pos: QPointF) -> tuple[int, str]:
+        rect = self._shape_rect(self._selected_index)
+        if rect is not None:
+            handle = self._handle_at_rect(rect, scene_pos)
+            if handle:
+                return self._selected_index, handle
+        if self._annotation is None:
+            return -1, ""
+        for index in range(len(self._annotation.shapes) - 1, -1, -1):
+            rect = self._shape_rect(index)
+            if rect is None:
+                continue
+            handle = self._handle_at_rect(rect, scene_pos)
+            if handle:
+                return index, handle
+        return -1, ""
+
+    def _cursor_for_handle(self, handle: str) -> Qt.CursorShape:
+        if handle in ("nw", "se"):
+            return Qt.CursorShape.SizeFDiagCursor
+        if handle in ("ne", "sw"):
+            return Qt.CursorShape.SizeBDiagCursor
+        if handle in ("e", "w"):
+            return Qt.CursorShape.SizeHorCursor
+        if handle in ("n", "s"):
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.CrossCursor
+
+    def _update_hover_cursor(self, scene_pos: QPointF) -> None:
+        _, handle = self._resize_hit_at(scene_pos)
+        if handle:
+            self.setCursor(self._cursor_for_handle(handle))
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def _bounded_resize_rect(self, scene_pos: QPointF) -> QRectF | None:
+        if self._resize_origin is None:
+            return None
+        rect = QRectF(self._resize_origin)
+        bounds = self._scene.sceneRect()
+        min_size = self._resize_min_size
+        x = min(max(scene_pos.x(), bounds.left()), bounds.right())
+        y = min(max(scene_pos.y(), bounds.top()), bounds.bottom())
+
+        if "w" in self._resize_handle:
+            rect.setLeft(min(x, rect.right() - min_size))
+        if "e" in self._resize_handle:
+            rect.setRight(max(x, rect.left() + min_size))
+        if "n" in self._resize_handle:
+            rect.setTop(min(y, rect.bottom() - min_size))
+        if "s" in self._resize_handle:
+            rect.setBottom(max(y, rect.top() + min_size))
+        return rect.normalized()
+
+    def _apply_resize(self, scene_pos: QPointF) -> None:
+        if self._annotation is None:
+            return
+        if not (0 <= self._resize_index < len(self._annotation.shapes)):
+            return
+        rect = self._bounded_resize_rect(scene_pos)
+        if rect is None:
+            return
+        shape = self._annotation.shapes[self._resize_index]
+        shape.points = [(rect.left(), rect.top()), (rect.right(), rect.bottom())]
+        if 0 <= self._resize_index < len(self._shape_items):
+            item = self._shape_items[self._resize_index]
+            if isinstance(item, QGraphicsRectItem):
+                item.setRect(rect)
+        self._resize_changed = True
+        self._selected_index = self._resize_index
+        self._update_selection_handles()
+
     # ---------- 编辑事件 ----------
 
     def mousePressEvent(self, event):  # type: ignore[override]
@@ -336,6 +533,17 @@ class ImageViewer(QGraphicsView):
                 return
         if self._edit_mode and event.button() == Qt.MouseButton.LeftButton and self._pix_item is not None:
             scene_pos = self.mapToScene(event.pos())
+            if not (self._draw_shape_type == "polygon" and self._poly_points):
+                resize_index, handle = self._resize_hit_at(scene_pos)
+                if handle:
+                    self.select_shape(resize_index)
+                    self._resizing = True
+                    self._resize_handle = handle
+                    self._resize_index = resize_index
+                    self._resize_origin = self._shape_rect(resize_index)
+                    self._resize_changed = False
+                    self.setCursor(self._cursor_for_handle(handle))
+                    return
             if self._draw_shape_type == "point":
                 hit = self._hit_test(scene_pos)
                 if hit >= 0:
@@ -389,6 +597,9 @@ class ImageViewer(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore[override]
+        if self._resizing:
+            self._apply_resize(self.mapToScene(event.pos()))
+            return
         if self._drawing and self._temp_rect_item is not None and self._draw_start is not None:
             scene_pos = self.mapToScene(event.pos())
             rect = QRectF(self._draw_start, scene_pos).normalized()
@@ -398,6 +609,8 @@ class ImageViewer(QGraphicsView):
             # 实时预览：把鼠标当作下一个顶点
             self._update_temp_polygon(self.mapToScene(event.pos()))
             return
+        if self._edit_mode and self._pix_item is not None:
+            self._update_hover_cursor(self.mapToScene(event.pos()))
         super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event):  # type: ignore[override]
@@ -426,6 +639,16 @@ class ImageViewer(QGraphicsView):
             self._temp_poly_item.setPolygon(poly)
 
     def mouseReleaseEvent(self, event):  # type: ignore[override]
+        if self._resizing:
+            self._apply_resize(self.mapToScene(event.pos()))
+            changed = self._resize_changed
+            selected = self._resize_index
+            self._clear_resize_state()
+            if selected >= 0:
+                self.select_shape(selected)
+            if changed:
+                self.shapes_changed.emit()
+            return
         if self._drawing and self._temp_rect_item is not None and self._draw_start is not None:
             self._drawing = False
             rect = self._temp_rect_item.rect()

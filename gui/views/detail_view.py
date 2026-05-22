@@ -50,6 +50,7 @@ from PyQt6.QtGui import QImage, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -75,6 +76,7 @@ from core.target_readiness import sample_is_complete_for_target
 from core.task_types import TaskType
 from core.unified import BBox, Region, Sample, SampleSet
 from gui import i18n
+from gui.category_display import display_category_name, has_semantic_category
 from gui.theme import T
 from gui.views.detail_specs import (
     DetailSegment,
@@ -237,6 +239,7 @@ class DetailView(QWidget):
         # DatasetBrowserView via ``set_annotation_format``.
         self._annotation_format: str = "labelme"
         self._target_format: str = ""
+        self._project_class_names: list[str] = []
         # Write gate — DatasetBrowserView flips this from AppState
         # ``scan_active_changed``. While False, every save handler shows
         # a blocking InfoBar and returns early. Guards against the
@@ -339,7 +342,12 @@ class DetailView(QWidget):
         lay.addWidget(self.back_btn)
 
         self.crumb_label = BodyLabel("—")
-        lay.addWidget(self.crumb_label)
+        self.crumb_label.setMinimumWidth(0)
+        self.crumb_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        lay.addWidget(self.crumb_label, 1)
         # Scope marker — every save/edit/status flip in DetailView acts on
         # the current image. One badge in the breadcrumb covers the whole
         # surface so individual buttons don't need to repeat it.
@@ -363,6 +371,7 @@ class DetailView(QWidget):
         self.next_incomplete_btn.setToolTip(
             "跳到下一张缺 Caption / 对话 / Grounding 的图片 (Tab)")
         self.next_incomplete_btn.setFixedHeight(28)
+        self.next_incomplete_btn.setMaximumWidth(128)
         self.next_incomplete_btn.clicked.connect(self.next_incomplete_image)
         self.next_incomplete_btn.hide()
         self.zoom_out_btn = ToolButton(FIF.REMOVE)
@@ -415,9 +424,17 @@ class DetailView(QWidget):
         self.shape_poly_btn.hide()
         self.shape_point_btn.hide()
 
+        self.label_hint = CaptionLabel("框类别")
+        self.label_hint.setToolTip(
+            "当前绘制框的类别；下拉可选择已有类别，也可以输入新类别")
+        self.label_hint.hide()
+
         self.label_combo = EditableComboBox()
         self.label_combo.setMinimumWidth(120)
-        self.label_combo.setToolTip("绘制时使用的标签名")
+        self.label_combo.setMaximumWidth(150)
+        self.label_combo.setPlaceholderText("选择或输入类别")
+        self.label_combo.setToolTip(
+            "当前绘制框的类别；下拉可选择已有类别，也可以输入新类别")
         self.label_combo.currentTextChanged.connect(
             lambda t: self.viewer.set_draw_label(t))
         self.label_combo.hide()
@@ -449,6 +466,7 @@ class DetailView(QWidget):
         lay.addWidget(self.shape_rect_btn)
         lay.addWidget(self.shape_poly_btn)
         lay.addWidget(self.shape_point_btn)
+        lay.addWidget(self.label_hint)
         lay.addWidget(self.label_combo)
         lay.addWidget(self.delete_shape_btn)
         lay.addWidget(self.save_btn)
@@ -464,6 +482,38 @@ class DetailView(QWidget):
         lay.addWidget(self.help_btn)
 
         return topbar
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_toolbar_compact()
+
+    def _apply_toolbar_compact(self) -> None:
+        """Keep the single-image toolbar usable in non-maximized windows."""
+        w = self.width()
+        if not hasattr(self, "crumb_label"):
+            return
+
+        self.crumb_label.setMaximumWidth(
+            360 if w >= 1350 else 240 if w >= 1120 else 150
+        )
+        self._scope_badge.setVisible(w >= 1080)
+
+        self.next_incomplete_btn.setText(
+            "下一张未完成" if w >= 1280 else "未完成"
+        )
+        self.next_incomplete_btn.setMaximumWidth(128 if w >= 1280 else 82)
+        self.next_incomplete_btn.setVisible(bool(self._target_format))
+
+        self.label_combo.setMinimumWidth(96 if w < 1160 else 120)
+        self.label_combo.setMaximumWidth(112 if w < 1160 else 150)
+        self.label_hint.setVisible(self.edit_btn.isChecked() and w >= 1040)
+
+        # These actions remain available by shortcut/tooltip; hiding the
+        # lowest-priority icons keeps save/delete/shape tools from colliding.
+        self.actual_btn.setVisible(w >= 980)
+        self.fit_btn.setVisible(w >= 900)
+        self.move_cat_btn.setVisible(w >= 1020)
+        self.help_btn.setVisible(w >= 1120)
 
     def _build_sidebar(self) -> QFrame:
         # Renamed object name — the widget is now hosted inside the
@@ -488,7 +538,7 @@ class DetailView(QWidget):
         side_layout.addLayout(self._meta_row("路径", self.info_path))
         side_layout.addLayout(self._meta_row("大小", self.info_size))
         side_layout.addLayout(self._meta_row("尺寸", self.info_dim))
-        side_layout.addLayout(self._meta_row("类别", self.info_cat))
+        side_layout.addLayout(self._meta_row("图片分组", self.info_cat))
 
         side_layout.addSpacing(T.GAP)
         side_layout.addWidget(self._build_completion_card())
@@ -703,6 +753,7 @@ class DetailView(QWidget):
             self.shape_poly_btn.hide()
             self.shape_point_btn.hide()
         self.next_incomplete_btn.setVisible(bool(self._target_format))
+        self._apply_toolbar_compact()
 
     def _traditional_mode_copy(self) -> tuple[str, list[str]]:
         """Return the right-panel mode label for shape-based tasks."""
@@ -857,6 +908,9 @@ class DetailView(QWidget):
         Passing ``None`` falls back to the DEFAULT_SPEC shape.
         """
         new_task_type = project.task_type if project is not None else None
+        self._project_class_names = list(
+            getattr(project, "class_names", []) or []
+        )
         self._target_format = (
             getattr(project, "target_format", "") if project is not None else ""
         )
@@ -876,6 +930,7 @@ class DetailView(QWidget):
             )
         if new_spec == self._spec and new_task_type == self._task_type:
             self.next_incomplete_btn.setVisible(bool(self._target_format))
+            self._apply_toolbar_compact()
             if 0 <= self._index < len(self._images):
                 self._update_completion_card(self._images[self._index])
             return
@@ -883,6 +938,7 @@ class DetailView(QWidget):
         self._spec = new_spec
         self._rebuild_panes()
         self._update_topbar_for_spec()
+        self._apply_toolbar_compact()
 
     def _annotation_segment_text(self) -> str:
         """Use plain "标注" when there is no VLM sibling tab."""
@@ -1026,9 +1082,13 @@ class DetailView(QWidget):
         self._clear_shape_undo()
 
         # Update breadcrumb immediately — cheap, user feedback.
+        crumb_parts = []
+        if has_semantic_category(img.category):
+            crumb_parts.append(display_category_name(img.category))
+        crumb_parts.append(img.path.name)
         self.crumb_label.setText(
-            f"{img.category}  /  {img.path.name}   "
-            f"{self._index + 1} / {len(self._images)}"
+            "  /  ".join(crumb_parts)
+            + f"   {self._index + 1} / {len(self._images)}"
         )
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
@@ -1179,7 +1239,7 @@ class DetailView(QWidget):
             self.info_dim.setText(f"{r.width()} × {r.height()} px")
         else:
             self.info_dim.setText("—")
-        self.info_cat.setText(img.category)
+        self.info_cat.setText(display_category_name(img.category))
 
         # Conflict-detection baseline — remember mtime at load so _on_save
         # can catch external edits.
@@ -1394,6 +1454,7 @@ class DetailView(QWidget):
         # Classification/anomaly/pair never reach here (edit_btn hidden),
         # but be defensive in case someone programmatically toggles it.
         tools = self._spec.shape_tools
+        self.label_hint.setVisible(on)
         self.label_combo.setVisible(on)
         self.delete_shape_btn.setVisible(on)
         self.save_btn.setVisible(on)
@@ -1415,6 +1476,7 @@ class DetailView(QWidget):
             # in polygon mode instead of forcing the user to pick.
             if tools:
                 self._set_shape_type(tools[0])
+        self._apply_toolbar_compact()
 
     def _set_shape_type(self, st: str) -> None:
         self.shape_rect_btn.setChecked(st == "rectangle")
@@ -1423,20 +1485,43 @@ class DetailView(QWidget):
         self.viewer.set_draw_shape_type(st)
 
     def _refresh_label_combo(self) -> None:
-        existing = sorted({
+        labels = set(self._project_class_names)
+        labels.update(
             s.label for s in (self._annotation.shapes
                               if self._annotation else [])
-        })
+            if s.label
+        )
+        if self._sample_set is not None:
+            try:
+                for sample in self._sample_set.samples:
+                    labels.update(
+                        r.label for r in sample.regions if r.label)
+            except Exception:
+                pass
+        existing = sorted(labels)
         current = self.label_combo.currentText()
         self.label_combo.blockSignals(True)
         self.label_combo.clear()
         if existing:
             self.label_combo.addItems(existing)
+            if current in existing:
+                self.label_combo.setCurrentText(current)
+            else:
+                self.label_combo.setCurrentText(existing[0])
         else:
             self.label_combo.addItem("object")
-        if current:
-            self.label_combo.setCurrentText(current)
+            if current:
+                self.label_combo.setCurrentText(current)
         self.label_combo.blockSignals(False)
+        if hasattr(self, "viewer"):
+            self.viewer.set_draw_label(
+                self.label_combo.currentText() or "object")
+
+    def _remember_current_label_choice(self) -> None:
+        label = (self.label_combo.currentText() or "").strip()
+        if not label or label in self._project_class_names:
+            return
+        self._project_class_names.append(label)
 
     def _on_shapes_changed(self) -> None:
         self._dirty = True
@@ -1714,6 +1799,8 @@ class DetailView(QWidget):
             sample.regions = _annotation_to_regions(self._annotation)
             sample.has_label = True
             sample.label_path = label_path
+        self._remember_current_label_choice()
+        self._refresh_label_combo()
         # Refresh conflict baseline to the file we just wrote — any
         # further external edits show up on the next save.
         try:

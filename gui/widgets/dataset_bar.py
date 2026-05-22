@@ -19,7 +19,13 @@ from PyQt6.QtCore import (
     pyqtSignal,
 )
 from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
@@ -164,8 +170,18 @@ class DatasetBar(QFrame):
         title_box.setSpacing(0)
         self._name_label = CaptionLabel(i18n.t("ds.empty"))
         self._name_label.setObjectName("datasetName")
+        self._name_label.setMinimumWidth(0)
+        self._name_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         self._path_label = CaptionLabel("")
         self._path_label.setObjectName("datasetPath")
+        self._path_label.setMinimumWidth(0)
+        self._path_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         self._fmt_label = CaptionLabel("")
         self._fmt_label.setObjectName("datasetFmt")
         self._fmt_label.setVisible(False)
@@ -174,6 +190,7 @@ class DatasetBar(QFrame):
         self._target_task_type = None
         self._last_sample_set = None
         self._annotation_progress: tuple[int, int] | None = None
+        self._workflow_summary_active = False
         # Scan-in-progress banner — sits next to the path. Hidden unless
         # AppState.scan_active is True.  A visible text cue lets the user
         # know stat numbers are still settling, complementing the pulsing
@@ -195,13 +212,12 @@ class DatasetBar(QFrame):
         title_box.addLayout(path_row)
 
         title_row.addLayout(title_box)
-        lay.addLayout(title_row)
-
-        lay.addStretch(1)
+        lay.addLayout(title_row, 1)
 
         # --- Middle: stat strip (5 cells) ---
         strip = QFrame()
         strip.setObjectName("statStrip")
+        self._stat_strip = strip
         strip_lay = QHBoxLayout(strip)
         strip_lay.setContentsMargins(0, 0, 0, 0)
         strip_lay.setSpacing(0)
@@ -257,6 +273,33 @@ class DatasetBar(QFrame):
         lay.addWidget(self._open_btn)
 
         i18n.bus.language_changed.connect(self._retranslate)
+        self._apply_compact_layout()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_compact_layout()
+
+    def _apply_compact_layout(self) -> None:
+        """Hide lower-priority stat cells before the header starts crowding."""
+        if not hasattr(self, "_stat_ratio"):
+            return
+        w = self.width()
+        workflow = bool(self._workflow_summary_active)
+
+        self._path_label.setVisible(w >= 980)
+        self._fmt_label.setVisible(bool(self._annotation_format) and w >= 1080)
+        self._stat_classes.setVisible(w >= 980)
+
+        self._stat_ratio.setVisible(
+            (w >= 1320 and not workflow) or w >= 1720
+        )
+        self._stat_flagged.setVisible(
+            (w >= 1160 and not workflow) or w >= 1580
+        )
+
+        self._stat_pending.setVisible(workflow and w >= 1120)
+        self._stat_review.setVisible(workflow and w >= 1450)
+        self._stat_ready.setVisible(workflow and w >= 1580)
 
     def _retranslate(self, _lang: str) -> None:
         # name label only re-applies when cleared (otherwise it shows the
@@ -482,13 +525,13 @@ class DatasetBar(QFrame):
         else:
             self._fmt_label.setVisible(False)
             self._fmt_label.setToolTip("")
+        self._apply_compact_layout()
 
     def set_workflow_summary(self, summary: WorkflowSummary | None) -> None:
         """Show/hide workflow stat cells based on active workflow."""
         active = summary is not None and summary.total > 0
-        self._stat_pending.setVisible(active)
-        self._stat_review.setVisible(active)
-        self._stat_ready.setVisible(active)
+        self._workflow_summary_active = active
+        self._apply_compact_layout()
         if not active:
             return
         pending = summary.new + summary.prelabeled
@@ -497,6 +540,7 @@ class DatasetBar(QFrame):
         self._stat_pending.set_value(str(pending), warn=pending > 0)
         self._stat_review.set_value(str(review), warn=review > 0)
         self._stat_ready.set_value(str(ready))
+        self._apply_compact_layout()
 
     @staticmethod
     def _fmt_path(p: Path | None) -> str:
