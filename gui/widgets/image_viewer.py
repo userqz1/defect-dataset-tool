@@ -1,6 +1,7 @@
 """Image viewer with mouse-wheel zoom, drag-pan, and LabelMe annotation overlay."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
@@ -34,7 +35,8 @@ PALETTE = [
 
 
 def color_for_label(label: str) -> QColor:
-    idx = abs(hash(label)) % len(PALETTE)
+    digest = hashlib.md5(label.encode("utf-8")).hexdigest()
+    idx = int(digest[:8], 16) % len(PALETTE)
     return QColor(PALETTE[idx])
 
 
