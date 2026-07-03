@@ -1036,16 +1036,13 @@ class BrowserView(QWidget):
         menu = RoundMenu(parent=self._sel_workflow_btn)
         menu.addAction(Action(
             i18n.t("wf.submit_review"),
-            triggered=lambda: self._emit_workflow("review_pending")))
-        menu.addAction(Action(
-            i18n.t("wf.approve"),
             triggered=lambda: self._emit_workflow("ready")))
+        menu.addAction(Action(
+            i18n.t("wf.mark_review"),
+            triggered=lambda: self._emit_workflow("review_pending")))
         menu.addAction(Action(
             i18n.t("wf.reject"),
             triggered=lambda: self._emit_workflow("needs_fix")))
-        menu.addAction(Action(
-            i18n.t("wf.mark_ready"),
-            triggered=lambda: self._emit_workflow("ready")))
         menu.exec(self._sel_workflow_btn.mapToGlobal(
             self._sel_workflow_btn.rect().bottomLeft()))
 

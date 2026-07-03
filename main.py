@@ -216,7 +216,8 @@ def _load_app_icon() -> QIcon | None:
 
 def main() -> int:
     _setup_logging()
-    logging.getLogger(__name__).info("DataForge starting")
+    log = logging.getLogger(__name__)
+    log.info("DataForge starting")
     _migrate_cache_dir()
     _install_windows_app_id()
     app = QApplication(sys.argv)
@@ -227,11 +228,27 @@ def main() -> int:
     if icon is not None:
         app.setWindowIcon(icon)
 
+    # --- exit diagnostics (temporary) -------------------------------
+    # The app sometimes vanishes without a native crash in fault.log.
+    # These probes tell us *how* it exits: if `lastWindowClosed` fires
+    # then quitOnLastWindowClosed is auto-quitting the app when some
+    # transient top-level window (popup / dialog) closes.  If only
+    # `aboutToQuit` fires, something explicitly called quit().  If
+    # neither logs before the process dies, it's a hard native crash.
+    log.info("quitOnLastWindowClosed=%s", app.quitOnLastWindowClosed())
+    app.lastWindowClosed.connect(
+        lambda: log.warning("EXIT-PROBE: lastWindowClosed signal fired"))
+    app.aboutToQuit.connect(
+        lambda: log.warning("EXIT-PROBE: aboutToQuit signal fired"))
+    # ----------------------------------------------------------------
+
     window = MainWindow()
     if icon is not None:
         window.setWindowIcon(icon)
     window.show()
-    return app.exec()
+    rc = app.exec()
+    log.warning("EXIT-PROBE: app.exec() returned %s", rc)
+    return rc
 
 
 if __name__ == "__main__":

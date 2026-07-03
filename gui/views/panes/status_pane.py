@@ -9,6 +9,10 @@ Three buttons gate themselves by the current status:
     new / prelabeled / annotating / needs_fix → [标注完成]
     review_pending                             → [通过] [需修补]
     ready / exported                           → nothing
+
+``标注完成`` moves directly to ``ready``.  The earlier "finish means
+review_pending" behavior left solo users in a hidden queue: the image
+looked complete, but it was not counted as export-ready.
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ WF_STATUS_LABELS: dict[str, str] = {
 class StatusPane(QWidget):
     """状态 segment body — current status + transition buttons."""
 
-    # Payload: new status key ("review_pending" / "ready" / "needs_fix").
+    # Payload: new status key ("ready" / "review_pending" / "needs_fix").
     status_change_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -63,7 +67,7 @@ class StatusPane(QWidget):
         self._submit_btn = PrimaryPushButton(i18n.t("wf.submit_review"))
         self._submit_btn.setFixedHeight(28)
         self._submit_btn.clicked.connect(
-            lambda: self.status_change_requested.emit("review_pending"))
+            lambda: self.status_change_requested.emit("ready"))
         row.addWidget(self._submit_btn)
 
         self._approve_btn = PushButton(i18n.t("wf.approve"))

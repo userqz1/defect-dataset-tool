@@ -168,11 +168,20 @@ class MainWindow(FluentWindow):
         except Exception:
             logger.debug("nav rail lockdown failed", exc_info=True)
 
-        # Geometry: set on the first show so the chosen screen reflects
-        # where the window actually landed (multi-monitor setups would
-        # otherwise always pick primary).  Guarded against re-firing
-        # via _geometry_set.
+        # Geometry: fine-tuned on the first show so the chosen screen
+        # reflects where the window actually landed (multi-monitor setups
+        # would otherwise always pick primary).  Guarded via _geometry_set.
         self._geometry_set: bool = False
+        # …but pre-size to the PRIMARY screen NOW, before the first show, so
+        # the initial painted frame is already near-final.  Without this the
+        # window first paints at minimumSize (1080×680) then jumps to the
+        # fitted size one tick later — which reads as a small window flashing
+        # before the main window appears.  On a single monitor showEvent's
+        # re-fit lands on the same numbers, so there's no visible resize.
+        from PyQt6.QtGui import QGuiApplication
+        _primary = QGuiApplication.primaryScreen()
+        if _primary is not None:
+            self._apply_fitted_geometry(_primary)
 
     # ---------- Geometry ----------
 
@@ -185,24 +194,29 @@ class MainWindow(FluentWindow):
             QTimer.singleShot(0, self._fit_and_center)
 
     def _fit_and_center(self) -> None:
-        """Pick a sensible default size and center on the active screen.
+        """Re-fit for the screen the window actually landed on.
 
-        Targets 82% × 82% of available screen, capped at 1500×920 so
-        ultra-wide displays don't render an unwieldy window.  Prefers
-        the screen the window currently lives on (multi-monitor); falls
-        back to primary.
+        Runs one tick after the first show — ``screen()`` only reports the
+        real landing screen post-show (multi-monitor).  The initial size was
+        already pre-set to the primary screen in ``__init__``, so on a single
+        monitor this lands on the same numbers and produces no visible resize.
         """
         from PyQt6.QtGui import QGuiApplication
 
         screen = self.screen() or QGuiApplication.primaryScreen()
-        if screen is None:
-            return
+        if screen is not None:
+            self._apply_fitted_geometry(screen)
+
+    def _apply_fitted_geometry(self, screen) -> None:
+        """Size to 82%×82% of ``screen`` (capped 1500×920) and center on it.
+
+        Targets 82% of the available geometry, capped so ultra-wide displays
+        don't render an unwieldy window, floored at the minimum size so tiny
+        screens still get a usable window.
+        """
         geom = screen.availableGeometry()
         w = min(int(geom.width() * 0.82), 1500)
         h = min(int(geom.height() * 0.82), 920)
-        # Floor at the minimum size so tiny screens still get a usable
-        # window — setMinimumSize already enforces this on resize but
-        # we want the post-center math to read the same numbers.
         w = max(w, self.minimumWidth())
         h = max(h, self.minimumHeight())
         self.resize(w, h)
@@ -351,7 +365,6 @@ class MainWindow(FluentWindow):
         intent_to_stage = {
             "overview": StageIndex.OVERVIEW,
             "inbox":    StageIndex.INBOX,
-            "process":  StageIndex.PROCESS,
             "annotate": StageIndex.ANNOTATE,
             "review":   StageIndex.REVIEW,
             "delivery": StageIndex.DELIVERY,

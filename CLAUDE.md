@@ -12,18 +12,31 @@ App data lives in `~/.dataforge/` (project metadata, cache, settings).
 
 ## Commands
 
-The project uses a conda env named `defect-tool`. Conda is not on PATH; use the env's python directly:
+The project uses a conda env named `defect-tool` (Python 3.11), with conda on PATH (`condabin`). Use `conda run -n defect-tool` — portable, no hardcoded path (`--no-capture-output` streams output live, which matters for the GUI app and pytest):
 
 ```bash
 # Run the app
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe main.py
+conda run --no-capture-output -n defect-tool python main.py
 
 # Install deps (unset proxy first to avoid SSL errors)
 unset HTTP_PROXY HTTPS_PROXY
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+conda run -n defect-tool python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Run the test suite (pytest config lives in pyproject.toml: testpaths=tests, pythonpath=.)
+conda run --no-capture-output -n defect-tool python -m pytest
+
+# Run a single test file / test
+conda run --no-capture-output -n defect-tool python -m pytest tests/test_splitter.py
+conda run --no-capture-output -n defect-tool python -m pytest tests/test_splitter.py::test_name -q
+
+# Lint (ruff config in pyproject.toml: line-length 100, py311 target)
+conda run -n defect-tool python -m ruff check .
 ```
 
-No test suite exists yet. When added, use pytest.
+If a long-lived shell (e.g. the agent's) doesn't recognize `conda` — a stale PATH snapshot from before conda was added — reload PATH from the registry first (portable, no hardcoded path):
+`$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`
+
+Tests live in `tests/` and cover `core/` only (pure-Python, no GUI) — every suite is a `core/` module's unit test (e.g. `test_splitter.py`, `test_exporters.py`, `test_format_migrate.py`, `*_roundtrip.py` for the LLM-dataset formats). GUI is not under test. New `core/` modules should ship a matching `tests/test_<module>.py`.
 
 ## Architecture (must follow)
 
@@ -37,17 +50,17 @@ No test suite exists yet. When added, use pytest.
   - Data models: `models.py` (dataclasses: `Dataset`, `Category`, `ImageInfo`, `Annotation`, `Shape`), `unified.py` (unified SampleSet model bridging raw scan + workflow state).
   - Scanning: `dataset.py` (two-phase scan + layout detection), `index_cache.py` (SQLite cache).
   - Annotation: `annotation.py` (LabelMe parser), `annotation_formats.py` (multi-format), `annotation_writer.py` (write-back).
-  - Format pipeline: `format_in.py` / `format_out.py` (read/write), `format_rt.py` (round-trip validation), `format_convert.py` / `format_migrate.py` (cross-format migration).
+  - Format pipeline: `format_in.py` / `format_out.py` (read/write), `format_rt.py` (round-trip validation), `format_convert.py` / `format_migrate.py` (cross-format migration), `pairing.py` (image/label pairing), `annotation_preset.py` (label preset schemes).
   - Workflow: `workflow.py` (sample-state machine), `workflow_store.py` (per-sample persistence), `inbox.py` (batch staging).
-  - Processing: `quality.py`, `dedup.py`, `augment.py`, `transform.py`, `convert.py`, `predictor.py`, `splitter.py`, `task_readiness.py`.
+  - Processing: `quality.py`, `dedup.py`, `augment.py`, `transform.py`, `convert.py`, `predictor.py`, `splitter.py`, `grounding_bulk.py` (bulk VLM grounding), `task_readiness.py` / `target_readiness.py` (per-task / per-target-format readiness checks), `version_builder.py` (training-version assembly).
   - Pipeline / ingest / schema: `pipeline/`, `ingest/`, `schema/` packages (run-config, file-ingest rules, per-format compliance).
-  - Exporters: `exporter/{yolo,coco,voc,imagefolder,mvtec,subset,report,csv_export,jsonl,llava,sharegpt,swift}.py` — each behind a common interface.
+  - Exporters: `exporter/{yolo,coco,voc,labelme,imagefolder,pairedfolder,mvtec,subset,report,csv_export,jsonl,llava,sharegpt,swift}.py` — each behind a common interface.
   - Infrastructure: `config.py`, `project.py`, `recent.py`, `user_settings.py`, `fileops.py`, `stats.py`, `thumbnail_cache.py`, `history.py`, `api.py`, `task_types.py`.
 
 - **`gui/`** — PyQt6 + qfluentwidgets.
   - `main_window.py` — `FluentWindow` with Home (`DatasetWelcome`) + Browser (`DatasetBrowserView`) on the nav rail; Settings is a floating popup (`SettingsView`); `OrganizeView` is on the stack but reached only from the 新数据 stage. Brand title bar (`BrandTitleBar`). Nav rail is **locked at 60px icon-only** via collapse + monkey-patched `panel.expand` no-op + `resizeEvent` re-collapse.
   - `views/` — `dataset_welcome.py` (recents + open/create), `organize_view.py` (ingest/organize helper), `dataset_browser_view.py` (3-column workbench shell), `browser_view.py` (grid + filter chips + pagination), `detail_view.py` (single-image shell), `detail_specs.py` (per-task-type pane spec), `panes/` (`image_label_pane.py`, `annotation_pane.py`, `vlm_pane.py`, `status_pane.py` — DetailView's task-typed sub-panes), `settings_view.py` (floating popup).
-  - `widgets/` — Reusable components: `workspace_sidebar.py` (slim 5-row vertical stage nav with `StageIndex` constants), `context_panel.py` (right column shell, hosts catalog/inspector pages), `catalog_panel.py` + `category_tree.py` + `distribution_chart.py` (catalog page), `dataset_bar.py` (top strip + global toolbar: refresh/undo), `thumbnail_grid.py` (card grid + delegate), `image_viewer.py` (pan/zoom + shape overlay), `batch_list.py` (新数据 stage body), `review_hub.py` (审核修复 stage body — quality/dedup/stats), `delivery_hub.py` (数据交付 stage body — format/process/LLM/export), `project_manage_hub.py` (项目管理 stage body — meta + history), `llm_data_card.py`, `scope_badge.py`, `chips.py`, `preview_pane.py`, `brand_title_bar.py`.
+  - `widgets/` — Reusable components: `workspace_sidebar.py` (slim vertical stage nav with `StageIndex` constants — the authoritative stage list), `context_panel.py` (right column shell, hosts catalog/inspector pages), `catalog_panel.py` + `category_tree.py` + `distribution_chart.py` (catalog page), `dataset_bar.py` (top strip + global toolbar: refresh/undo), `thumbnail_grid.py` (card grid + delegate), `image_viewer.py` (pan/zoom + shape overlay). **Stage bodies** (one per `StageIndex`): `project_overview_hub.py` (项目概览), `batch_list.py` (新数据), `browser_view.py`↔`detail_view.py` (标注工作台), `review_hub.py` (审核修复 — quality/dedup/stats), `delivery_hub.py` (导出 — direct export + LLM data + read-only cleanup of legacy versions). `project_manage_hub.py` holds project-meta/history surfaces hosted outside the stage stack. Plus `llm_data_card.py`, `scope_badge.py`, `chips.py`, `preview_pane.py`, `brand_title_bar.py`. Orphaned after dataset-versioning was de-scoped (kept, unwired): `training_version_hub.py`, `split_slider.py`.
   - `controllers/` — Browser-shell business logic, extracted from `DatasetBrowserView`: `browser_runtime.py` (shared context: state + bar + hub references + shell), `dataset_session_controller.py` (scan/refresh/worker lifecycle, gates `state.scan_active`), `browser_tool_controller.py` (executes hub `*_requested` signals via `BatchRunner`), `browser_chrome_controller.py` (context-panel page swap + detail drill in/out + sidebar↔stack sync), `workflow_controller.py` (sample-workflow orchestration on `MainWindow`).
   - `workers/` — QThread wrappers: `BatchWorker` (generic `fn(progress_cb)` runner), `BatchRunner` (worker + progress dialog + result handler), `ScanWorker` (dataset scan), `ThumbnailWorker` (lazy thumbnails).
   - `dialogs/` — Parameter-collection + progress dialogs: `op_dialogs.py` (progress, failure detail, move-to-category), `tool_dialogs.py` (quality / stats / dedup config + results), `batch_ops.py`, `history_dialog.py`, `export_wizard.py`, `export_validation_dialog.py`, `category_dialogs.py`, `project_dialogs.py`, `task_type_dialog.py` (task-type picker on first dataset open), `import_annot_dialog.py`, `convert_annot_dialog.py`, `migrate_format_dialog.py`, `llm_format_reference.py`.
@@ -57,7 +70,9 @@ No test suite exists yet. When added, use pytest.
 - **`config/default_config.yaml`** — Externalized config (cache paths, image extensions, theme).
 - **`main.py`** — Entry point. App data dir: `~/.dataforge/`.
 
-### Navigation & signal flow (IA v3.1)
+### Navigation & signal flow
+
+`StageIndex` in `gui/widgets/workspace_sidebar.py` is the authoritative stage list — read it before touching navigation. As of this writing it has **5 stages**, wired to the stage stack in `DatasetBrowserView.__init__` (`insertWidget(StageIndex.X, …)`):
 
 ```
 MainWindow (FluentWindow, 60px icon-only nav rail)
@@ -65,17 +80,23 @@ MainWindow (FluentWindow, 60px icon-only nav rail)
 │   ├── Recents list + "open dataset" / "create project"
 │   └── open_dataset(path, intent="") → switchTo(browser) → _apply_intent(intent)
 ├── Browser (DatasetBrowserView)         ← 3-column workbench shell
-│   ├── Col 1 — WorkspaceSidebar (slim 168px stage nav, 5 rows)
+│   ├── Col 1 — WorkspaceSidebar (slim vertical stage nav)
 │   ├── Col 2 — DatasetBar (title, path, stat pills, refresh/undo, catalog toggle, open)
-│   │           + 5-stage stack (indexed via StageIndex):
-│   │   ├── INBOX     (新数据)        — BatchListPanel
-│   │   ├── ANNOTATE  (标注工作台)     — BrowserView ↔ DetailView (browser_stack)
-│   │   ├── REVIEW    (审核修复)       — ReviewHub (quality / dedup / stats)
-│   │   ├── DELIVERY  (数据交付)       — DeliveryHub (format / process / LLM / export)
-│   │   └── MANAGE    (项目管理)       — ProjectManageHub (meta + history)
-│   └── Col 3 — ContextPanel (collapsible 340px; catalog page on ANNOTATE, etc.)
+│   │           + stage stack (indexed via StageIndex):
+│   │   ├── OVERVIEW  (项目概览)        — ProjectOverviewHub          [default on open]
+│   │   ├── INBOX     (新数据)         — BatchListPanel
+│   │   ├── ANNOTATE  (标注工作台)      — BrowserView ↔ DetailView (browser_stack)
+│   │   ├── REVIEW    (审核修复)        — ReviewHub (quality / dedup / stats)
+│   │   └── DELIVERY  (导出)           — DeliveryHub (export-first: direct export + legacy-version cleanup)
+│   └── Col 3 — ContextPanel (collapsible; catalog page on ANNOTATE, etc.)
 └── Settings (SettingsView popup, bottom-left, NOT a route)
     └── theme_changed → _on_theme_changed()
+
+Dataset-versioning was intentionally de-scoped: there is no PROCESS/数据处理 stage and no
+in-app "generate version" entry. Export (DeliveryHub) is the single delivery path. The
+pure-core builder (`core/version_builder.py`) and the now-orphaned `TrainingVersionHub` /
+`split_slider.py` widgets are kept for reversibility; DeliveryHub still lists any
+already-generated `<project>/versions/` snapshots read-only so they can be opened or deleted.
 
 OrganizeView is registered on the stack but NOT on the nav rail —
 reached from the INBOX stage's "导入新批次" button (browser emits
@@ -122,9 +143,9 @@ Signal wiring lives directly in `MainWindow.__init__()` and `DatasetBrowserView.
 
 1. Create or extend `core/<feature>.py` (pure Python, `progress_cb` supported for anything > ~100ms).
 2. Pick the owning stage hub and add a `<kind>_requested` signal + button:
-   - **`ReviewHub`** — read-only quality / dedup / stats analyses.
-   - **`DeliveryHub`** — output-producing actions (format conversion, process tools, LLM-data capabilities, dataset export).
-   - **`ProjectManageHub`** — project-meta operations (history, settings).
+   - **`ReviewHub`** (审核修复) — read-only quality / dedup / stats analyses.
+   - **`DeliveryHub`** (导出) — output-producing actions (format conversion, LLM-data capabilities, dataset export).
+   - **`ProjectOverviewHub`** (项目概览) — landing dashboard.
 3. Add a matching `run_<kind>` handler on `BrowserToolController`: open any config dialog, then run the core call via `BatchRunner(parent, title).run(task=…, on_done=…)`.
 4. Wire the hub signal → controller method in `DatasetBrowserView.__init__()` (signal wiring is inline, not a separate method).
 5. If it produces a derived artifact (quality issues, dedup groups, stats), store it on `AppState` via a `set_*` method so other views can subscribe.
@@ -143,7 +164,7 @@ Signal wiring lives directly in `MainWindow.__init__()` and `DatasetBrowserView.
 - **Annotation schema drift**: Parser must be tolerant of malformed JSON and record failures.
 - **SSL/proxy on this machine**: Unset `HTTP_PROXY`/`HTTPS_PROXY` before pip/conda installs; use Tsinghua mirrors.
 - **Config is read-once**: `core/config.load()` is `@lru_cache(maxsize=1)`. Changes need app restart.
-- **Hub buttons require a loaded dataset**: ReviewHub + DeliveryHub + ProjectManageHub action buttons + DatasetBar refresh are gated off `AppState.dataset.total_images > 0`. Capability checkboxes on DeliveryHub gate separately on `project is not None` — a project can be reconfigured before the scan lands.
+- **Hub buttons require a loaded dataset**: ReviewHub + DeliveryHub action buttons + DatasetBar refresh are gated off `AppState.dataset.total_images > 0`. Capability checkboxes on DeliveryHub gate separately on `project is not None` — a project can be reconfigured before the scan lands.
 - **Mutation tools gate on `scan_active`**: `state.can_write` is False while the scan worker runs; DetailView edits and every `*_requested` handler must respect this so we don't race the scan.
 - **Window geometry**: Set on the first `showEvent` (deferred one tick) so `screen()` reports the actual landing screen on multi-monitor setups; eagerly sizing in `__init__` always picks primary.
 - **Nav rail is icon-only**: Permanently 60px via `panel.collapse()` + monkey-patched `panel.expand` no-op + `resizeEvent` re-collapse. Old auto-expand-at-1100px behavior is gone.

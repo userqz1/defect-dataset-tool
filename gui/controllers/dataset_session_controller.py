@@ -382,9 +382,8 @@ class DatasetSessionController(QObject):
     def _set_tools_enabled(self, enabled: bool) -> None:
         """Gate every dataset-wide action surface.
 
-        After the IA v3 split, "tools" is spread across four widgets:
+        After the IA v3 split, "tools" is spread across three widgets:
           - DatasetBar refresh button (global refresh)
-          - TrainingVersionHub generate button (versioned training snapshot)
           - DeliveryHub action buttons (copy conversion / export / VLM export)
           - ReviewHub action buttons (quality / dedup / stats)
 
@@ -392,7 +391,6 @@ class DatasetSessionController(QObject):
         enable/disable alone doesn't say whether an op is undoable.
         """
         self._rt.dataset_bar.set_refresh_enabled(enabled)
-        self._rt.training_hub.set_actions_enabled(enabled)
         self._rt.delivery_hub.set_actions_enabled(enabled)
         self._rt.review_hub.set_actions_enabled(enabled)
         self.refresh_undo_state()

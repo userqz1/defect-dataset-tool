@@ -352,7 +352,6 @@ class ProjectOverviewHub(QWidget):
         # CTA — single recommended action
         total = getattr(wf, "total", 0) if wf else 0
         annotating = getattr(wf, "annotating", 0) if wf else 0
-        version_count = self._version_count(proj)
         if total == 0:
             self._status.set_cta(
                 i18n.t("overview.cta.import"), StageIndex.INBOX)
@@ -363,28 +362,11 @@ class ProjectOverviewHub(QWidget):
             self._status.set_cta(
                 i18n.t("overview.cta.review"), StageIndex.REVIEW)
         elif ready > 0:
-            if version_count <= 0:
-                self._status.set_cta(
-                    i18n.t("overview.cta.version"), StageIndex.PROCESS)
-            else:
-                self._status.set_cta(
-                    i18n.t("overview.cta.export"), StageIndex.DELIVERY)
-        elif version_count > 0:
             self._status.set_cta(
                 i18n.t("overview.cta.export"), StageIndex.DELIVERY)
         else:
             self._status.set_cta(
                 i18n.t("overview.cta.annotate"), StageIndex.ANNOTATE)
-
-    @staticmethod
-    def _version_count(project: Project | None) -> int:
-        if project is None:
-            return 0
-        try:
-            from core.version_builder import list_training_versions
-            return len(list_training_versions(project.root_path))
-        except Exception:
-            return 0
 
     def _refresh_classes(self) -> None:
         tree = self._cls_tree

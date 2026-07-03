@@ -45,7 +45,6 @@ from gui.theme import T
 _STAGES: list[tuple[str, FIF]] = [
     ("stage.overview", FIF.HOME),
     ("stage.inbox",    FIF.MAIL),
-    ("stage.process",  FIF.DEVELOPER_TOOLS),
     ("stage.annotate", FIF.EDIT),
     ("stage.review",   FIF.CERTIFICATE),
     ("stage.delivery", FIF.SHARE),
@@ -55,12 +54,11 @@ _STAGES: list[tuple[str, FIF]] = [
 # Named indices — callers import these instead of typing raw ints, so
 # a later reorder doesn't silently break the wiring.
 class StageIndex:
-    OVERVIEW = 0    # 项目概览 (NEW · IA v2 phase 1)
+    OVERVIEW = 0    # 项目概览
     INBOX = 1       # 新数据
-    PROCESS = 2     # 数据处理
-    ANNOTATE = 3    # 标注工作台
-    REVIEW = 4      # 审核修复
-    DELIVERY = 5    # 导出
+    ANNOTATE = 2    # 标注工作台
+    REVIEW = 3      # 审核修复
+    DELIVERY = 4    # 导出
 
 
 class _StageRow(QFrame):

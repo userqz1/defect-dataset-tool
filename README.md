@@ -31,12 +31,14 @@
 
 ## 📣 最近更新
 
-- **2026.04 · IA v2 主改造完成**
-  - 新四阶段导航：**收件箱 / 标注 / 审核 / 项目中心**
+- **2026.06 · 导出优先 + 五阶段定型**
+  - 导航定型为五阶段：**概览 / 新数据 / 标注 / 审核 / 导出**
+  - 数据集版本管理弱化：导出（`DeliveryHub`）成为唯一交付路径，不再在本地堆训练快照
+- **2026.04 · IA v2 主改造**
+  - 阶段化导航（后续演进为五阶段）
   - DetailView 按任务类型模板化
   - 项目能力（Caption / Conversations / Grounding）打通 `project.json` 持久化
   - 顶栏全局动作：刷新 / 撤销
-  - 退役 `tool_sidebar`，UI 收口于阶段页
 - **2026.03 · 1.0 发布**
   - 统一 SampleSet 模型 + Workflow 状态机
   - 支持 LLaVA / ShareGPT / Swift / JSONL 多模态导出
@@ -49,14 +51,15 @@
 
 ## 🌟 主要特性
 
-### 1. 四阶段工作流
+### 1. 五阶段工作流
 
 | 阶段 | 页面 | 主要操作 |
 |---|---|---|
-| 📥 **收件箱** | `BatchListPanel` | 批次导入、按分类提交 |
+| 🏠 **概览** | `ProjectOverviewHub` | 项目状态总览 · 下一步引导 |
+| 📥 **新数据** | `BatchListPanel` | 批次导入、按分类提交 |
 | ✏️ **标注** | `BrowserView` ↔ `DetailView` | 网格浏览 · 单图标注（按任务模板化） · VLM 描述 / 对话 / 区域文本 |
 | 🔍 **审核** | `ReviewHub` | 质量检查 · 重复检测 · 数据统计 |
-| 📦 **项目中心** | `ProjectHub` | 项目能力 · 格式中心 · 处理 · 导出 · 历史 |
+| 📦 **导出** | `DeliveryHub` | 训练格式导出 · 标注格式转换 · LLM 数据能力 |
 
 顶部 `DatasetBar` 常驻：脉动同步点、数据集名 / 路径、统计条（图片数 / 分类 / 标注率 / 最大:最小 / 问题数）、**全局刷新 / 撤销**、catalog 开关、打开按钮。
 
@@ -84,13 +87,9 @@ DetailView 根据 `Project.task_type` 自动加载对应的标注组件：
 - **目标检测**：YOLO / COCO / VOC 目录结构
 - **图像分类**：ImageFolder（子集导出）
 - **多模态大模型**：LLaVA / ShareGPT / Swift / JSONL
-- 内置划分（ratio / manual / stratified）+ 工作流状态过滤（仅导出 ready）
+- 内置划分（按比例 / 手动集合）+ 工作流状态过滤（仅导出 ready）
 
-### 5. 处理工具箱（项目中心 · 处理）
-
-🔍 缩放 · ✂️ 裁剪 · 🔄 旋转 · 🔁 翻转 · 🖼️ 格式转换 · ➕ 数据增强 · 🤖 AI 预标注（YOLO 模型辅助）
-
-### 6. 审核工具箱（审核）
+### 5. 审核工具箱（审核）
 
 🔎 质量检查（损坏 / 模糊 / 极端尺寸 / 标注异常） · 📑 重复检测（pHash） · 📊 统计分析（类别分布 / 标注密度 / 区域面积）
 
@@ -98,23 +97,34 @@ DetailView 根据 `Project.task_type` 自动加载对应的标注组件：
 
 ## ⚡ 快速开始
 
-### 环境准备
-
-项目使用 conda 环境 `defect-tool`（Python 3.11）。conda 不在 PATH，直接用 env 里的 `python.exe`：
+### 获取代码
 
 ```bash
-# 创建环境（如果还没有）
-conda create -n defect-tool python=3.11 -y
-
-# 安装依赖（先解除代理再走清华源，避免 SSL 错误）
-unset HTTP_PROXY HTTPS_PROXY
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+git clone https://github.com/userqz1/defect-dataset-tool.git
+cd defect-dataset-tool
 ```
+
+### 环境准备
+
+项目基于 **Python 3.11**，推荐用 conda 管理环境：
+
+```bash
+# 创建并激活环境
+conda create -n defect-tool python=3.11 -y
+conda activate defect-tool
+
+# 安装依赖
+pip install -r requirements.txt
+# 国内网络慢可走清华源：
+# pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+> 不用 conda 也行：任意 Python 3.11 环境（venv / virtualenv）下 `pip install -r requirements.txt` 即可。
 
 ### 启动
 
 ```bash
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe main.py
+python main.py
 ```
 
 应用数据目录：`~/.dataforge/`（项目元信息、缓存、用户设置）。
@@ -160,8 +170,8 @@ defect_dataset_tool/
 │   └── project.py           # 项目元信息持久化
 ├── gui/                     # PyQt6 + qfluentwidgets
 │   ├── views/               # dataset_browser_view / browser_view / detail_view / settings_view ...
-│   ├── widgets/             # dataset_bar / project_hub / review_hub / stage_nav / thumbnail_grid ...
-│   ├── controllers/         # session / tool / chrome 三控制器
+│   ├── widgets/             # workspace_sidebar / dataset_bar / review_hub / delivery_hub / thumbnail_grid ...
+│   ├── controllers/         # runtime / session / tool / chrome / workflow 控制器
 │   ├── workers/             # ScanWorker / BatchWorker / ThumbnailWorker
 │   ├── dialogs/             # 参数 + 进度对话框
 │   ├── theme.py             # 三层样式系统：tokens

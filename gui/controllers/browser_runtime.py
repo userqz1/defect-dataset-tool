@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from gui.widgets.batch_list import BatchListPanel
     from gui.widgets.catalog_panel import CatalogPanel
     from gui.widgets.context_panel import ContextPanel
-    from gui.widgets.training_version_hub import TrainingVersionHub
     from gui.widgets.dataset_bar import DatasetBar
     from gui.widgets.delivery_hub import DeliveryHub
     from gui.widgets.review_hub import ReviewHub
@@ -28,12 +27,11 @@ class BrowserRuntime:
     Created once by DatasetBrowserView and passed to each controller.
     Controllers read widgets but never replace them.
 
-    IA v3.1:
-    - ``workspace_sidebar`` — left, slim stage nav (5 rows, 168px).
+    - ``workspace_sidebar`` — left, slim stage nav.
     - ``context_panel``     — right, stack of context pages (catalog
       on 标注工作台 grid; future per-image Inspector on detail).
-    - ``training_hub`` — training version generation (replaces old process_hub).
-    - ``delivery_hub`` — export/LLM data delivery.
+    - ``delivery_hub`` — export + LLM data delivery (also hosts the
+      read-only cleanup list for any legacy generated versions).
     """
 
     state: AppState
@@ -44,7 +42,6 @@ class BrowserRuntime:
     dataset_bar: DatasetBar
     workspace_sidebar: WorkspaceSidebar
     context_panel: ContextPanel
-    training_hub: TrainingVersionHub
     delivery_hub: DeliveryHub
     review_hub: ReviewHub
     thumb_worker: ThumbnailWorker

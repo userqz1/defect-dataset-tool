@@ -405,7 +405,6 @@ class BrowserToolController:
     def _refresh_training_versions(self) -> None:
         project = self._rt.state.project
         if project is None:
-            self._rt.training_hub.set_versions([])
             self._rt.delivery_hub.set_versions([])
             return
         try:
@@ -413,7 +412,6 @@ class BrowserToolController:
             versions = list_training_versions(project.root_path)
         except Exception:
             versions = []
-        self._rt.training_hub.set_versions(versions)
         self._rt.delivery_hub.set_versions(versions)
 
     def _on_delete_training_version(self, path: str) -> None:

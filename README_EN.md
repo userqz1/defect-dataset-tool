@@ -31,8 +31,11 @@ Whether your data is "raw images only", "half-labeled", or "fully annotated", Da
 
 ## 📣 Recent Updates
 
-- **2026.04 · IA v2 main restructure done**
-  - New four-stage navigation: **Inbox / Annotate / Review / Project Hub**
+- **2026.06 · Export-first + five stages**
+  - Navigation settled into five stages: **Overview / New Data / Annotate / Review / Export**
+  - Dataset versioning de-scoped: Export (`DeliveryHub`) is the single delivery path; no local training snapshots
+- **2026.04 · IA v2 main restructure**
+  - Staged navigation (later evolved into five stages)
   - DetailView templates by task type
   - Project capabilities (Caption / Conversations / Grounding) wired through `project.json` persistence
   - Top-bar global actions: refresh / undo
@@ -49,14 +52,15 @@ Whether your data is "raw images only", "half-labeled", or "fully annotated", Da
 
 ## 🌟 Key Features
 
-### 1. Four-stage workflow
+### 1. Five-stage workflow
 
 | Stage | Page | Main actions |
 |---|---|---|
-| 📥 **Inbox** | `BatchListPanel` | Batch ingestion, commit by category |
+| 🏠 **Overview** | `ProjectOverviewHub` | Project status dashboard · next-step CTA |
+| 📥 **New Data** | `BatchListPanel` | Batch ingestion, commit by category |
 | ✏️ **Annotate** | `BrowserView` ↔ `DetailView` | Grid browse · Single-image annotation (templated by task) · VLM caption / chat / region text |
 | 🔍 **Review** | `ReviewHub` | Quality check · Duplicate detection · Statistics |
-| 📦 **Project Hub** | `ProjectHub` | Capabilities · Format center · Process · Export · History |
+| 📦 **Export** | `DeliveryHub` | Training-format export · Annotation format conversion · LLM data capabilities |
 
 The persistent top `DatasetBar` shows: pulsing sync indicator, dataset name / path, stats pills (image count / categories / annotation rate / max:min / issues), **global refresh / undo**, catalog toggle, open button.
 
@@ -84,13 +88,9 @@ DetailView automatically loads the right annotation component based on `Project.
 - **Object detection** — YOLO / COCO / VOC directory layouts
 - **Image classification** — ImageFolder (subset export)
 - **Multimodal LLMs** — LLaVA / ShareGPT / Swift / JSONL
-- Built-in splitting (ratio / manual / stratified) + workflow-state filtering (export only `ready` samples)
+- Built-in splitting (by ratio / manual sets) + workflow-state filtering (export only `ready` samples)
 
-### 5. Processing toolbox (Project Hub · Process)
-
-🔍 Resize · ✂️ Crop · 🔄 Rotate · 🔁 Flip · 🖼️ Format convert · ➕ Augment · 🤖 AI pre-annotation (YOLO-assisted)
-
-### 6. Review toolbox (Review)
+### 5. Review toolbox (Review)
 
 🔎 Quality check (corrupt / blurry / extreme size / annotation anomalies) · 📑 Duplicate detection (pHash) · 📊 Statistics (class distribution / annotation density / region area)
 
@@ -98,23 +98,34 @@ DetailView automatically loads the right annotation component based on `Project.
 
 ## ⚡ Quick Start
 
-### Environment
-
-The project uses a conda env named `defect-tool` (Python 3.11). Conda is not on PATH; use the env's `python.exe` directly:
+### Get the code
 
 ```bash
-# Create the env (if you haven't yet)
-conda create -n defect-tool python=3.11 -y
-
-# Install deps (unset proxy first, use Tsinghua mirror to avoid SSL errors)
-unset HTTP_PROXY HTTPS_PROXY
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+git clone https://github.com/userqz1/defect-dataset-tool.git
+cd defect-dataset-tool
 ```
+
+### Environment
+
+The project targets **Python 3.11**. Using conda is recommended:
+
+```bash
+# Create and activate the env
+conda create -n defect-tool python=3.11 -y
+conda activate defect-tool
+
+# Install dependencies
+pip install -r requirements.txt
+# Behind a slow mirror? Use a faster index, e.g. Tsinghua in mainland China:
+# pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+> conda is optional — any Python 3.11 environment (venv / virtualenv) works: just `pip install -r requirements.txt`.
 
 ### Launch
 
 ```bash
-C:/ProgramData/miniconda3/envs/defect-tool/python.exe main.py
+python main.py
 ```
 
 App data directory: `~/.dataforge/` (project metadata, cache, user settings).
@@ -160,8 +171,8 @@ defect_dataset_tool/
 │   └── project.py           # Project metadata persistence
 ├── gui/                     # PyQt6 + qfluentwidgets
 │   ├── views/               # dataset_browser_view / browser_view / detail_view / settings_view ...
-│   ├── widgets/             # dataset_bar / project_hub / review_hub / stage_nav / thumbnail_grid ...
-│   ├── controllers/         # session / tool / chrome — three controllers
+│   ├── widgets/             # workspace_sidebar / dataset_bar / review_hub / delivery_hub / thumbnail_grid ...
+│   ├── controllers/         # runtime / session / tool / chrome / workflow controllers
 │   ├── workers/             # ScanWorker / BatchWorker / ThumbnailWorker
 │   ├── dialogs/             # Parameter + progress dialogs
 │   ├── theme.py             # Three-layer styling: tokens

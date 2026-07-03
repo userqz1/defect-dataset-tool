@@ -25,7 +25,6 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
-from core.target_readiness import export_key_for_target_format
 from gui import i18n
 from gui.theme import T
 from gui.widgets.scope_badge import Scope, ScopeBadge
@@ -44,15 +43,6 @@ def _schema_display_name(target_format: str) -> str:
     except Exception:
         pass
     return target_format
-
-
-def _same_export_format(a: str, b: str) -> bool:
-    if not a or not b:
-        return False
-    try:
-        return export_key_for_target_format(a) == export_key_for_target_format(b)
-    except Exception:
-        return a.strip().lower() == b.strip().lower()
 
 
 def _version_meta(version) -> str:
@@ -141,10 +131,10 @@ class _TaskCard(QFrame):
 
 
 class _DeliveryVersionRow(QFrame):
-    """One frozen target-format version."""
+    """One legacy generated version — open to inspect, delete to reclaim space."""
 
     open_requested = pyqtSignal(str)
-    deliver_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, version, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -175,31 +165,28 @@ class _DeliveryVersionRow(QFrame):
             lambda: self.open_requested.emit(self._path))
         root.addWidget(self._open_btn)
 
-        self._deliver_btn = PrimaryPushButton()
-        self._deliver_btn.setIcon(FIF.SHARE)
-        self._deliver_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._deliver_btn.clicked.connect(
-            lambda: self.deliver_requested.emit(self._path))
-        root.addWidget(self._deliver_btn)
+        self._delete_btn = PushButton()
+        self._delete_btn.setIcon(FIF.DELETE)
+        self._delete_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._delete_btn.clicked.connect(
+            lambda: self.delete_requested.emit(self._path))
+        root.addWidget(self._delete_btn)
 
         self.retranslate()
 
     def set_actions_enabled(self, enabled: bool) -> None:
         self._open_btn.setEnabled(enabled)
-        self._deliver_btn.setEnabled(enabled)
+        self._delete_btn.setEnabled(enabled)
 
     def retranslate(self) -> None:
         self._meta.setText(_version_meta(self._version))
         self._open_btn.setText(i18n.t("delivery.version.open"))
-        self._deliver_btn.setText(i18n.t("delivery.version.deliver"))
+        self._delete_btn.setText(i18n.t("delivery.version.delete"))
 
 
 class _TargetDeliveryCard(QFrame):
-    """Primary card: deliver the current project's target format."""
+    """Primary card: export the current project's target format directly."""
 
-    open_requested = pyqtSignal(str)
-    deliver_requested = pyqtSignal(str)
-    generate_requested = pyqtSignal()
     export_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -210,8 +197,6 @@ class _TargetDeliveryCard(QFrame):
         self._actions_enabled = False
         self._target_format = ""
         self._task_type = None
-        self._versions: list = []
-        self._latest = None
         self._sample_set = None
 
         root = QVBoxLayout(self)
@@ -245,30 +230,13 @@ class _TargetDeliveryCard(QFrame):
         btn_row.setSpacing(T.GAP)
         btn_row.addStretch(1)
 
-        self._export_btn = PushButton(i18n.t("delivery.target.export_now"))
+        self._export_btn = PrimaryPushButton(i18n.t("delivery.target.export_now"))
         self._export_btn.setIcon(FIF.SEND)
         self._export_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._export_btn.setMinimumWidth(120)
         self._export_btn.clicked.connect(
             lambda: self.export_requested.emit(self._target_format))
         btn_row.addWidget(self._export_btn)
-
-        self._generate_btn = PushButton(i18n.t("delivery.target.generate"))
-        self._generate_btn.setIcon(FIF.ADD)
-        self._generate_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._generate_btn.clicked.connect(self.generate_requested.emit)
-        btn_row.addWidget(self._generate_btn)
-
-        self._open_btn = PushButton(i18n.t("delivery.target.open"))
-        self._open_btn.setIcon(FIF.FOLDER)
-        self._open_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._open_btn.clicked.connect(self._open_latest)
-        btn_row.addWidget(self._open_btn)
-
-        self._deliver_btn = PrimaryPushButton(i18n.t("delivery.target.deliver"))
-        self._deliver_btn.setIcon(FIF.SHARE)
-        self._deliver_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._deliver_btn.clicked.connect(self._deliver_latest)
-        btn_row.addWidget(self._deliver_btn)
 
         root.addLayout(btn_row)
         self._refresh()
@@ -282,10 +250,6 @@ class _TargetDeliveryCard(QFrame):
         self._task_type = getattr(project, "task_type", None) if project else None
         self._refresh()
 
-    def set_versions(self, versions) -> None:
-        self._versions = list(versions or [])
-        self._refresh()
-
     def set_sample_set(self, sample_set) -> None:
         self._sample_set = sample_set
         self._refresh()
@@ -294,63 +258,21 @@ class _TargetDeliveryCard(QFrame):
         self._title.setText(i18n.t("delivery.target.title"))
         self._badge.setText(i18n.t("scope.readonly"))
         self._export_btn.setText(i18n.t("delivery.target.export_now"))
-        self._open_btn.setText(i18n.t("delivery.target.open"))
-        self._deliver_btn.setText(i18n.t("delivery.target.deliver"))
         self._refresh()
-
-    def _matching_versions(self) -> list:
-        return [
-            version for version in self._versions
-            if _same_export_format(
-                str(getattr(version, "fmt", "")), self._target_format)
-        ]
 
     def _refresh(self) -> None:
         target_name = _schema_display_name(self._target_format)
         self._target.setText(i18n.t("delivery.target.current", fmt=target_name))
-
-        matches = self._matching_versions()
-        self._latest = matches[0] if matches else None
         has_target = bool(self._target_format)
-        has_latest = self._latest is not None
 
         if not has_target:
             self._status.setText(i18n.t("delivery.target.no_target"))
             self._meta.setText(i18n.t("delivery.target.no_target_hint"))
-        elif has_latest:
-            self._status.setText(i18n.t(
-                "delivery.target.ready",
-                name=str(getattr(self._latest, "name", "")),
-            ))
-            self._meta.setText(_version_meta(self._latest))
         else:
-            self._status.setText(i18n.t(
-                "delivery.target.missing",
-                fmt=target_name,
-            ))
-            completion = self._completion_text()
-            hint = i18n.t("delivery.target.hint")
-            self._meta.setText(
-                f"{completion} · {hint}" if completion else hint)
+            self._status.setText(i18n.t("delivery.target.export_hint"))
+            self._meta.setText(self._completion_text())
 
-        self._generate_btn.setText(i18n.t(
-            "delivery.target.regenerate" if has_latest
-            else "delivery.target.generate"
-        ))
-        self._generate_btn.setEnabled(self._actions_enabled and has_target)
         self._export_btn.setEnabled(self._actions_enabled and has_target)
-        self._open_btn.setVisible(has_latest)
-        self._deliver_btn.setVisible(has_latest)
-        self._open_btn.setEnabled(self._actions_enabled and has_latest)
-        self._deliver_btn.setEnabled(self._actions_enabled and has_latest)
-
-    def _open_latest(self) -> None:
-        if self._latest is not None:
-            self.open_requested.emit(str(getattr(self._latest, "path", "")))
-
-    def _deliver_latest(self) -> None:
-        if self._latest is not None:
-            self.deliver_requested.emit(str(getattr(self._latest, "path", "")))
 
     def _completion_text(self) -> str:
         ss = self._sample_set
@@ -369,10 +291,16 @@ class _TargetDeliveryCard(QFrame):
 
 
 class _VersionDeliveryCard(QFrame):
-    """List versions matching the active target format."""
+    """Read-only cleanup list for legacy generated versions.
+
+    New workflows no longer generate versions; this card only surfaces
+    snapshots already sitting under ``<project>/versions`` so the user
+    can open or delete them to reclaim disk space.  Hidden entirely
+    when no such versions exist.
+    """
 
     open_requested = pyqtSignal(str)
-    deliver_requested = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -381,7 +309,6 @@ class _VersionDeliveryCard(QFrame):
 
         self._rows: list[_DeliveryVersionRow] = []
         self._actions_enabled = False
-        self._target_format = ""
         self._versions: list = []
 
         root = QVBoxLayout(self)
@@ -417,9 +344,8 @@ class _VersionDeliveryCard(QFrame):
         for row in self._rows:
             row.set_actions_enabled(enabled)
 
-    def set_project(self, project) -> None:
-        self._target_format = getattr(project, "target_format", "") if project else ""
-        self._rebuild()
+    def has_versions(self) -> bool:
+        return bool(self._versions)
 
     def set_versions(self, versions) -> None:
         self._versions = list(versions or [])
@@ -441,17 +367,12 @@ class _VersionDeliveryCard(QFrame):
                 widget.deleteLater()
         self._rows = []
 
-        versions = [
-            version for version in self._versions
-            if _same_export_format(
-                str(getattr(version, "fmt", "")), self._target_format)
-        ]
-        self._empty.setVisible(not versions)
-        for version in versions:
+        self._empty.setVisible(not self._versions)
+        for version in self._versions:
             row = _DeliveryVersionRow(version)
             row.set_actions_enabled(self._actions_enabled)
             row.open_requested.connect(self.open_requested.emit)
-            row.deliver_requested.connect(self.deliver_requested.emit)
+            row.delete_requested.connect(self.delete_requested.emit)
             self._rows_lay.addWidget(row)
             self._rows.append(row)
 
@@ -461,8 +382,7 @@ class DeliveryHub(QFrame):
 
     convert_annot_requested = pyqtSignal()
     open_version_requested = pyqtSignal(str)
-    deliver_version_requested = pyqtSignal(str)
-    generate_version_requested = pyqtSignal()
+    delete_version_requested = pyqtSignal(str)
     export_requested = pyqtSignal(str)
     start_vlm_workflow_requested = pyqtSignal()
     bulk_fill_region_text_requested = pyqtSignal()
@@ -493,20 +413,15 @@ class DeliveryHub(QFrame):
         self._action_buttons: list[PushButton | PrimaryPushButton] = []
 
         self._target_card = _TargetDeliveryCard()
-        self._target_card.open_requested.connect(
-            self.open_version_requested.emit)
-        self._target_card.deliver_requested.connect(
-            self.deliver_version_requested.emit)
-        self._target_card.generate_requested.connect(
-            self.generate_version_requested.emit)
         self._target_card.export_requested.connect(self.export_requested.emit)
         inner_lay.addWidget(self._target_card)
 
         self._version_card = _VersionDeliveryCard()
         self._version_card.open_requested.connect(
             self.open_version_requested.emit)
-        self._version_card.deliver_requested.connect(
-            self.deliver_version_requested.emit)
+        self._version_card.delete_requested.connect(
+            self.delete_version_requested.emit)
+        self._version_card.setVisible(False)
         inner_lay.addWidget(self._version_card)
 
         self._secondary_title = StrongBodyLabel(
@@ -537,14 +452,13 @@ class DeliveryHub(QFrame):
 
     def set_project(self, project) -> None:
         self._target_card.set_project(project)
-        self._version_card.set_project(project)
 
     def set_sample_set(self, _sample_set) -> None:
         self._target_card.set_sample_set(_sample_set)
 
     def set_versions(self, versions) -> None:
-        self._target_card.set_versions(versions)
         self._version_card.set_versions(versions)
+        self._version_card.setVisible(self._version_card.has_versions())
 
     def _add_card(self, card: _TaskCard, container: QVBoxLayout) -> None:
         container.addWidget(card)

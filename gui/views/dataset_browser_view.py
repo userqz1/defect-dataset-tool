@@ -8,11 +8,12 @@ IA v3.1: 3-column chrome:
 
 The middle column hosts the five stage pages:
 
+- **项目概览**     — ProjectOverviewHub (console + next-step CTA, default landing).
 - **新数据**       — BatchListPanel (incoming-batch staging).
-- **训练版本**      — TrainingVersionHub (versioned training snapshots).
 - **标注工作台**    — Browser↔Detail flow.
 - **审核修复**     — ReviewHub (quality / dedup / stats).
-- **导出**         — DeliveryHub (training export / VLM export / copy conversion).
+- **导出**         — DeliveryHub (export-first: direct export / VLM export / copy conversion;
+  also a read-only cleanup list for any legacy generated versions).
 
 The right ContextPanel hosts a stack of pages and surfaces whichever
 matches the user's current focus — Catalog on the 标注工作台 grid,
@@ -97,10 +98,6 @@ class DatasetBrowserView(QWidget):
         from gui.widgets.batch_list import BatchListPanel
         self._batch_list = BatchListPanel()
 
-        # 训练版本 stage body — generate versioned training snapshots.
-        from gui.widgets.training_version_hub import TrainingVersionHub
-        self._training_hub = TrainingVersionHub()
-
         # 导出 stage body — output-producing actions only.
         from gui.widgets.delivery_hub import DeliveryHub
         self._delivery_hub = DeliveryHub()
@@ -109,13 +106,10 @@ class DatasetBrowserView(QWidget):
         from gui.widgets.review_hub import ReviewHub
         self._review_hub = ReviewHub()
 
-        # Build the 6 stage pages (IA v2 phase 1: Overview is the new
-        # default landing; existing 5 stages keep their content unchanged
-        # and shift right by one index).
+        # Build the 5 stage pages (Overview is the default landing).
         self._stage_stack = QStackedWidget()
         self._stage_stack.insertWidget(StageIndex.OVERVIEW, self._overview_hub)
         self._stage_stack.insertWidget(StageIndex.INBOX,    self._batch_list)
-        self._stage_stack.insertWidget(StageIndex.PROCESS,  self._training_hub)
         self._stage_stack.insertWidget(StageIndex.ANNOTATE, self._browser_stack)
         self._stage_stack.insertWidget(StageIndex.REVIEW,   self._review_hub)
         self._stage_stack.insertWidget(StageIndex.DELIVERY, self._delivery_hub)
@@ -172,7 +166,6 @@ class DatasetBrowserView(QWidget):
             dataset_bar=self._dataset_bar,
             workspace_sidebar=self._workspace_sidebar,
             context_panel=self._context_panel,
-            training_hub=self._training_hub,
             delivery_hub=self._delivery_hub,
             review_hub=self._review_hub,
             thumb_worker=self._thumb,
@@ -198,10 +191,8 @@ class DatasetBrowserView(QWidget):
         self._delivery_hub.export_requested.connect(self._tools.run_export)
         self._delivery_hub.open_version_requested.connect(
             self._tools.open_training_version)
-        self._delivery_hub.deliver_version_requested.connect(
-            self._tools.deliver_training_version)
-        self._delivery_hub.generate_version_requested.connect(
-            lambda: self.set_active_stage(StageIndex.PROCESS))
+        self._delivery_hub.delete_version_requested.connect(
+            self._tools.delete_training_version)
         # 大模型标注向导 — pick caps + category, then prep workbench:
         # apply caps → switch to ANNOTATE → filter category → drill
         # into first incomplete image.
@@ -219,14 +210,6 @@ class DatasetBrowserView(QWidget):
             self._overview_hub.set_workflow_summary)
         self._overview_hub.navigate_stage.connect(self.set_active_stage)
 
-        # TrainingVersionHub — generate versioned training snapshots.
-        self._training_hub.generate_requested.connect(
-            self._tools.run_training_version)
-        self._training_hub.open_version_requested.connect(
-            self._tools.open_training_version)
-        self._training_hub.delete_version_requested.connect(
-            self._tools.delete_training_version)
-        self._state.dataset_changed.connect(self._training_hub.set_dataset)
         self._browser.target_format_changed.connect(
             self._on_target_format_changed)
 
@@ -305,9 +288,6 @@ class DatasetBrowserView(QWidget):
         )
         self._state.sample_set_changed.connect(
             self._dataset_bar.update_from_sample_set
-        )
-        self._state.sample_set_changed.connect(
-            self._training_hub.set_sample_set
         )
         # LLM-data zone in DeliveryHub reads caption / conversations /
         # grounding counts off the live SampleSet — wire it here so
@@ -856,16 +836,10 @@ class DatasetBrowserView(QWidget):
         self._detail.set_project_profile(project)
         self._browser.set_target_format(project)
         self._delivery_hub.set_project(project)
-        self._training_hub.set_project(project)
         self._refresh_training_versions(project)
-        # Filter training version format chips by project task type
-        task_type = getattr(project, "task_type", None)
-        if task_type:
-            self._training_hub.set_task_type(task_type)
 
     def _refresh_training_versions(self, project) -> None:
         if project is None:
-            self._training_hub.set_versions([])
             self._delivery_hub.set_versions([])
             return
         try:
@@ -873,7 +847,6 @@ class DatasetBrowserView(QWidget):
             versions = list_training_versions(project.root_path)
         except Exception:
             versions = []
-        self._training_hub.set_versions(versions)
         self._delivery_hub.set_versions(versions)
 
     def cleanup(self) -> None:
