@@ -228,27 +228,18 @@ def main() -> int:
     if icon is not None:
         app.setWindowIcon(icon)
 
-    # --- exit diagnostics (temporary) -------------------------------
-    # The app sometimes vanishes without a native crash in fault.log.
-    # These probes tell us *how* it exits: if `lastWindowClosed` fires
-    # then quitOnLastWindowClosed is auto-quitting the app when some
-    # transient top-level window (popup / dialog) closes.  If only
-    # `aboutToQuit` fires, something explicitly called quit().  If
-    # neither logs before the process dies, it's a hard native crash.
-    log.info("quitOnLastWindowClosed=%s", app.quitOnLastWindowClosed())
-    app.lastWindowClosed.connect(
-        lambda: log.warning("EXIT-PROBE: lastWindowClosed signal fired"))
-    app.aboutToQuit.connect(
-        lambda: log.warning("EXIT-PROBE: aboutToQuit signal fired"))
-    # ----------------------------------------------------------------
+    # Root-cause fix for the "自动闪退": Qt's quitOnLastWindowClosed would
+    # auto-quit the whole app when some transient top-level (an async popup /
+    # tooltip / flyout) closed while it happened to be the last visible
+    # window.  Turn that auto-quit OFF; the app now exits only when the main
+    # window's closeEvent explicitly quits (see MainWindow.closeEvent).
+    app.setQuitOnLastWindowClosed(False)
 
     window = MainWindow()
     if icon is not None:
         window.setWindowIcon(icon)
     window.show()
-    rc = app.exec()
-    log.warning("EXIT-PROBE: app.exec() returned %s", rc)
-    return rc
+    return app.exec()
 
 
 if __name__ == "__main__":

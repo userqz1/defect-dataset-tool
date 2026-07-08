@@ -489,3 +489,7 @@ class MainWindow(FluentWindow):
         from PyQt6.QtWidgets import QApplication
         QApplication.processEvents()
         super().closeEvent(e)
+        # quitOnLastWindowClosed is OFF (main.py) so closing dialogs never
+        # kills the app — closing THE MAIN WINDOW must therefore quit
+        # explicitly, else the process would linger with no window.
+        QApplication.quit()
