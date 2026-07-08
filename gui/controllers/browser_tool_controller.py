@@ -235,6 +235,9 @@ class BrowserToolController:
     def run_stats(self) -> None:
         self._on_stats()
 
+    def run_fix_oob(self) -> None:
+        self._on_fix_oob()
+
     # -- Helpers --
 
     def _window(self):
@@ -1194,6 +1197,76 @@ class BrowserToolController:
             parent=self._window(), duration=3500,
             position=InfoBarPosition.TOP,
         )
+
+    def _on_fix_oob(self) -> None:
+        """Clamp out-of-bounds boxes to the image edge + drop strays, write back.
+
+        Complements the ``oob`` / ``zero_area`` detection in 质量检查: quality
+        reports them, this fixes them in place across the whole SampleSet and
+        rewrites each touched label in the project's annotation format.
+        """
+        ss = self._rt.state.sample_set
+        if ss is None or not self._rt.state.sample_set_ready:
+            InfoBar.warning("统一模型未就绪", "请等扫描完成后再修复越界框",
+                            parent=self._window(), duration=3000,
+                            position=InfoBarPosition.TOP)
+            return
+        if not self._rt.state.can_write:
+            return
+        project = self._rt.state.project
+        ann_fmt = project.annotation_format if project else "labelme"
+
+        def task(progress_cb):
+            from core.annotation_fix import clamp_shapes
+            from core.annotation_writer import write_annotation_as
+            from core.models import Annotation, Shape
+            samples = list(ss.samples)
+            total = len(samples)
+            n_clamped = n_removed = n_files = 0
+            for i, sample in enumerate(samples):
+                if progress_cb:
+                    progress_cb(i, total, sample.image_path.name)
+                w, h = sample.image_width, sample.image_height
+                if w <= 0 or h <= 0 or not sample.regions:
+                    continue
+                shapes = []
+                for r in sample.regions:
+                    if r.bbox is not None:
+                        pts = [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y2)]
+                    elif r.polygon:
+                        pts = list(r.polygon)
+                    else:
+                        pts = []
+                    shapes.append(Shape(label=r.label,
+                                        shape_type=r.shape_type, points=pts))
+                kept, c, rm = clamp_shapes(shapes, w, h)
+                if c or rm:
+                    ann = Annotation(image_path=sample.image_path, shapes=kept)
+                    write_annotation_as(ann, sample.image_path, ann_fmt)
+                    n_clamped += c
+                    n_removed += rm
+                    n_files += 1
+            if progress_cb:
+                progress_cb(total, total, "")
+            return (n_clamped, n_removed, n_files)
+
+        def done(result):
+            n_clamped, n_removed, n_files = result
+            if n_files == 0:
+                InfoBar.success("越界框检查完成", "未发现越界或图像外的框",
+                                parent=self._window(), duration=3000,
+                                position=InfoBarPosition.TOP)
+                return
+            InfoBar.success(
+                "已修复越界框",
+                f"裁剪 {n_clamped} 个 · 删除 {n_removed} 个 · 涉及 {n_files} 个文件",
+                parent=self._window(), duration=6000,
+                position=InfoBarPosition.TOP)
+            # Reread the corrected labels so the grid / SampleSet reflect them.
+            self._session.rescan(force=True)
+
+        from gui.workers.batch_runner import BatchRunner
+        BatchRunner(self._rt.shell, "修复越界框").run(task=task, on_done=done)
 
     def _on_quality_check(self) -> None:
         n_images = self._image_count()

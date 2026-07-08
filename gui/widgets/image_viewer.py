@@ -507,6 +507,19 @@ class ImageViewer(QGraphicsView):
             rect.setBottom(max(y, rect.top() + min_size))
         return rect.normalized()
 
+    def _clamp_to_scene(self, pos: QPointF) -> QPointF:
+        """Clamp a scene-space point into the image (sceneRect) bounds.
+
+        Keeps a freshly-drawn box inside the image edges, matching what
+        ``_bounded_resize_rect`` already does for handle drags — so the
+        annotation tool itself can never produce an out-of-bounds box.
+        """
+        b = self._scene.sceneRect()
+        return QPointF(
+            min(max(pos.x(), b.left()), b.right()),
+            min(max(pos.y(), b.top()), b.bottom()),
+        )
+
     def _apply_resize(self, scene_pos: QPointF) -> None:
         if self._annotation is None:
             return
@@ -582,6 +595,9 @@ class ImageViewer(QGraphicsView):
                 return
             # 否则开始绘制新 rect
             self._drawing = True
+            # Clamp the draw origin into the image so a box dragged past the
+            # edge is never created out of bounds (matches resize clamping).
+            scene_pos = self._clamp_to_scene(scene_pos)
             self._draw_start = scene_pos
             color = color_for_label(self._draw_label)
             pen = QPen(color)
@@ -603,7 +619,7 @@ class ImageViewer(QGraphicsView):
             self._apply_resize(self.mapToScene(event.pos()))
             return
         if self._drawing and self._temp_rect_item is not None and self._draw_start is not None:
-            scene_pos = self.mapToScene(event.pos())
+            scene_pos = self._clamp_to_scene(self.mapToScene(event.pos()))
             rect = QRectF(self._draw_start, scene_pos).normalized()
             self._temp_rect_item.setRect(rect)
             return

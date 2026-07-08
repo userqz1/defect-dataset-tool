@@ -225,6 +225,7 @@ class DatasetBrowserView(QWidget):
         self._review_hub.quality_requested.connect(self._tools.run_quality)
         self._review_hub.dedup_requested.connect(self._tools.run_dedup)
         self._review_hub.stats_requested.connect(self._tools.run_stats)
+        self._review_hub.fix_oob_requested.connect(self._tools.run_fix_oob)
         self._review_hub.jump_to_image_requested.connect(
             self._on_review_jump_to_image)
         self._review_hub.mark_needs_fix_requested.connect(

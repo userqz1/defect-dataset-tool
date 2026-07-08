@@ -149,6 +149,7 @@ class _ReviewToolbar(QFrame):
     quality_clicked = pyqtSignal()
     dedup_clicked = pyqtSignal()
     stats_clicked = pyqtSignal()
+    fix_oob_clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -187,6 +188,17 @@ class _ReviewToolbar(QFrame):
             i18n.t("scope.dataset_unknown"), Scope.NEUTRAL)
         lay.addLayout(self._pair(self._stats_btn, self._stats_scope))
 
+        # 修复越界框 — clamp OOB boxes to the image edge + drop strays.
+        # A write action (unlike the three analyses above) but it belongs
+        # here: 质检 is what surfaces the oob / zero_area counts this fixes.
+        self._fix_oob_btn = PushButton(i18n.t("review.toolbar.fix_oob"))
+        self._fix_oob_btn.setIcon(FIF.EDIT)
+        self._fix_oob_btn.setFixedHeight(32)
+        self._fix_oob_btn.clicked.connect(self.fix_oob_clicked.emit)
+        self._fix_oob_scope = ScopeBadge(
+            i18n.t("scope.dataset_unknown"), Scope.NEUTRAL)
+        lay.addLayout(self._pair(self._fix_oob_btn, self._fix_oob_scope))
+
         lay.addStretch(1)
         self._dataset_count: int = 0
 
@@ -201,7 +213,8 @@ class _ReviewToolbar(QFrame):
         return h
 
     def set_enabled(self, enabled: bool) -> None:
-        for btn in (self._quality_btn, self._dedup_btn, self._stats_btn):
+        for btn in (self._quality_btn, self._dedup_btn, self._stats_btn,
+                    self._fix_oob_btn):
             btn.setEnabled(enabled)
 
     def set_dataset_count(self, n: int) -> None:
@@ -210,13 +223,14 @@ class _ReviewToolbar(QFrame):
         text = (i18n.t("scope.dataset", n=n) if n > 0
                 else i18n.t("scope.dataset_unknown"))
         for badge in (self._quality_scope, self._dedup_scope,
-                      self._stats_scope):
+                      self._stats_scope, self._fix_oob_scope):
             badge.setText(text)
 
     def retranslate(self) -> None:
         self._quality_btn.setText(i18n.t("review.toolbar.run_quality"))
         self._dedup_btn.setText(i18n.t("review.toolbar.run_dedup"))
         self._stats_btn.setText(i18n.t("review.toolbar.view_stats"))
+        self._fix_oob_btn.setText(i18n.t("review.toolbar.fix_oob"))
         # Repaint the scope badges so the localized template applies.
         self.set_dataset_count(self._dataset_count)
 
@@ -494,6 +508,7 @@ class ReviewHub(QFrame):
     quality_requested = pyqtSignal()
     dedup_requested = pyqtSignal()
     stats_requested = pyqtSignal()
+    fix_oob_requested = pyqtSignal()
 
     # New — DatasetBrowserView subscribes to drive the workbench shell.
     jump_to_image_requested = pyqtSignal(object)         # ImageInfo
@@ -528,6 +543,7 @@ class ReviewHub(QFrame):
         self._toolbar.quality_clicked.connect(self.quality_requested.emit)
         self._toolbar.dedup_clicked.connect(self.dedup_requested.emit)
         self._toolbar.stats_clicked.connect(self.stats_requested.emit)
+        self._toolbar.fix_oob_clicked.connect(self.fix_oob_requested.emit)
         root.addWidget(self._toolbar)
 
         # -- Summary strip ----------------------------------------------
