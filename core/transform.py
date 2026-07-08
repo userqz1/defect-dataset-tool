@@ -25,7 +25,7 @@ def _output_path(src: Path, suffix: str, inplace: bool) -> Path:
 
 def _load_json(label: Path) -> dict | None:
     try:
-        data = json.loads(label.read_text(encoding="utf-8"))
+        data = json.loads(label.read_text(encoding="utf-8-sig"))
         return data if isinstance(data, dict) else None
     except Exception:
         return None

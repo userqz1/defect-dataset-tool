@@ -69,6 +69,7 @@ from qfluentwidgets import (
     ToolButton,
 )
 
+from core.labels import normalize_label
 from core.annotation_writer import write_annotation
 from core.models import Annotation, ImageInfo, Shape
 from core.project import Project
@@ -908,9 +909,14 @@ class DetailView(QWidget):
         Passing ``None`` falls back to the DEFAULT_SPEC shape.
         """
         new_task_type = project.task_type if project is not None else None
-        self._project_class_names = list(
-            getattr(project, "class_names", []) or []
-        )
+        self._project_class_names = [
+            label
+            for label in (
+                normalize_label(v)
+                for v in (getattr(project, "class_names", []) or [])
+            )
+            if label
+        ]
         self._target_format = (
             getattr(project, "target_format", "") if project is not None else ""
         )
@@ -1487,19 +1493,28 @@ class DetailView(QWidget):
     def _refresh_label_combo(self) -> None:
         labels = set(self._project_class_names)
         labels.update(
-            s.label for s in (self._annotation.shapes
-                              if self._annotation else [])
-            if s.label
+            label
+            for label in (
+                normalize_label(s.label)
+                for s in (self._annotation.shapes if self._annotation else [])
+            )
+            if label
         )
         if self._sample_set is not None:
             try:
                 for sample in self._sample_set.samples:
                     labels.update(
-                        r.label for r in sample.regions if r.label)
+                        label
+                        for label in (
+                            normalize_label(r.label)
+                            for r in sample.regions
+                        )
+                        if label
+                    )
             except Exception:
                 pass
         existing = sorted(labels)
-        current = self.label_combo.currentText()
+        current = normalize_label(self.label_combo.currentText())
         self.label_combo.blockSignals(True)
         self.label_combo.clear()
         if existing:
@@ -1518,7 +1533,7 @@ class DetailView(QWidget):
                 self.label_combo.currentText() or "object")
 
     def _remember_current_label_choice(self) -> None:
-        label = (self.label_combo.currentText() or "").strip()
+        label = normalize_label(self.label_combo.currentText())
         if not label or label in self._project_class_names:
             return
         self._project_class_names.append(label)

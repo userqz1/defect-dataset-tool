@@ -69,7 +69,7 @@ def _new_label_path(new_image_path: Path, original_label: Path) -> Path:
 def _update_image_path_in_json(json_path: Path, new_image_name: str) -> None:
     """Update the `imagePath` field of a LabelMe JSON in-place. Best-effort."""
     try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+        data = json.loads(json_path.read_text(encoding="utf-8-sig"))
     except Exception:
         return
     if isinstance(data, dict):

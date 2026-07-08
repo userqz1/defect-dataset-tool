@@ -41,6 +41,24 @@ class TestParseLabelme:
         assert len(result.annotation.shapes) == 1
         assert result.annotation.shapes[0].label == "cat"
 
+    def test_utf8_bom_and_trailing_label_newline(self, tmp_path):
+        data = {
+            "imagePath": "test.jpg",
+            "imageWidth": 640,
+            "imageHeight": 480,
+            "shapes": [
+                {"label": "fastener_core\n", "shape_type": "rectangle",
+                 "points": [[10, 20], [100, 200]]},
+            ],
+        }
+        p = tmp_path / "test.json"
+        p.write_text("\ufeff" + json.dumps(data), encoding="utf-8")
+
+        result = parse_labelme(p)
+
+        assert result.ok
+        assert result.annotation.shapes[0].label == "fastener_core"
+
     def test_empty_shapes(self, tmp_path):
         data = {"imagePath": "x.jpg", "shapes": []}
         p = tmp_path / "empty.json"

@@ -21,6 +21,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .annotation import ParseResult, parse_labelme
+from .labels import normalize_label
 from .models import Annotation, Shape
 
 LABEL_EXTENSIONS = {".json", ".txt", ".xml"}
@@ -164,11 +165,11 @@ def load_yolo_classes(label_dir: Path) -> list[str]:
             p = d / name
             if p.is_file():
                 try:
-                    return [
-                        line.strip()
-                        for line in p.read_text(encoding="utf-8").splitlines()
-                        if line.strip()
+                    labels = [
+                        normalize_label(line)
+                        for line in p.read_text(encoding="utf-8-sig").splitlines()
                     ]
+                    return [label for label in labels if label]
                 except OSError:
                     pass
     return []
@@ -202,7 +203,7 @@ def parse_yolo(
       points as pixels silently corrupts data (review #4).
     """
     try:
-        text = label_path.read_text(encoding="utf-8")
+        text = label_path.read_text(encoding="utf-8-sig")
     except OSError as e:
         return ParseResult(None, f"read failed: {e}")
 
@@ -234,7 +235,7 @@ def parse_yolo(
         x2, y2 = cxp + wp / 2, cyp + hp / 2
         if class_names:
             if 0 <= cls < len(class_names):
-                label = class_names[cls]
+                label = normalize_label(class_names[cls])
             else:
                 # Out-of-range index vs the provided classes.txt. Keep the
                 # numeric label with a ``#`` prefix so it can't collide
@@ -244,6 +245,9 @@ def parse_yolo(
                 label = f"#{cls}"
         else:
             label = str(cls)
+        label = normalize_label(label)
+        if not label:
+            continue
         shapes.append(
             Shape(label=label, shape_type="rectangle", points=[(x1, y1), (x2, y2)])
         )
@@ -277,7 +281,7 @@ def parse_voc(label_path: Path, image_path: Path | None = None) -> ParseResult:
             ymax = float(bnd.findtext("ymax", "0"))
         except ValueError:
             continue
-        label = (name_el.text or "").strip()
+        label = normalize_label(name_el.text)
         if not label:
             continue
         shapes.append(
@@ -325,7 +329,9 @@ def parse_coco(json_path: Path) -> CocoIndex | None:
     cats: dict[int, str] = {}
     for c in data.get("categories", []):
         if isinstance(c, dict) and "id" in c and "name" in c:
-            cats[int(c["id"])] = str(c["name"])
+            label = normalize_label(c["name"])
+            if label:
+                cats[int(c["id"])] = label
 
     images_by_id: dict[int, str] = {}
     for img in data.get("images", []):
@@ -353,7 +359,9 @@ def parse_coco(json_path: Path) -> CocoIndex | None:
             x, y, w, h = (float(v) for v in bbox[:4])
         except (TypeError, ValueError):
             continue
-        label = cats.get(int(cid), str(cid))
+        label = normalize_label(cats.get(int(cid), str(cid)))
+        if not label:
+            continue
         by_stem.setdefault(stem, []).append(
             Shape(
                 label=label,

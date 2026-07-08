@@ -36,6 +36,26 @@ class TestRoundTrip:
         (pdir / "project.json").write_text("{not json", encoding="utf-8")
         assert load_project(tmp_path) is None
 
+    def test_bom_project_json_normalizes_class_names(self, tmp_path):
+        pdir = tmp_path / ".dataforge"
+        pdir.mkdir()
+        payload = {
+            "name": "demo",
+            "task_type": "object_detection",
+            "class_names": ["\ufefffastener_core\n", "fastener_core"],
+            "browse_state": {},
+            "split_state": {},
+            "export_config": {},
+            "review_progress": {},
+        }
+        (pdir / "project.json").write_text(
+            "\ufeff" + json.dumps(payload), encoding="utf-8")
+
+        loaded = load_project(tmp_path)
+
+        assert loaded is not None
+        assert loaded.class_names == ["fastener_core"]
+
 
 class TestBackwardCompat:
     """Reviewer's note: ``data_standard`` was a never-used placeholder.

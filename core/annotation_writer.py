@@ -13,6 +13,7 @@ from xml.etree import ElementTree as ET
 from PIL import Image
 
 from .annotation_formats import detect_format, load_yolo_classes
+from .labels import normalize_label
 from .models import Annotation, Shape
 
 
@@ -96,16 +97,19 @@ def write_labelme(annotation: Annotation, label_path: Path, image_path: Path) ->
     base["imageData"] = None
     base["imageWidth"] = iw
     base["imageHeight"] = ih
-    base["shapes"] = [
-        {
-            "label": s.label,
+    shapes: list[dict] = []
+    for s in annotation.shapes:
+        label = normalize_label(s.label)
+        if not label:
+            continue
+        shapes.append({
+            "label": label,
             "points": [[float(x), float(y)] for x, y in s.points],
             "group_id": None,
             "shape_type": s.shape_type,
             "flags": {},
-        }
-        for s in annotation.shapes
-    ]
+        })
+    base["shapes"] = shapes
     label_path.parent.mkdir(parents=True, exist_ok=True)
     label_path.write_text(
         json.dumps(base, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -128,10 +132,13 @@ def write_yolo(annotation: Annotation, label_path: Path, image_path: Path) -> No
         for s in annotation.shapes:
             if not s.points or len(s.points) < 2:
                 continue
-            if s.label not in name_to_idx:
-                name_to_idx[s.label] = len(name_to_idx)
-                new_classes.append(s.label)
-            idx = name_to_idx[s.label]
+            label = normalize_label(s.label)
+            if not label:
+                continue
+            if label not in name_to_idx:
+                name_to_idx[label] = len(name_to_idx)
+                new_classes.append(label)
+            idx = name_to_idx[label]
             xs = [p[0] for p in s.points]
             ys = [p[1] for p in s.points]
             x1, x2 = min(xs), max(xs)
@@ -186,6 +193,9 @@ def write_voc(annotation: Annotation, label_path: Path, image_path: Path) -> Non
     for s in annotation.shapes:
         if not s.points or len(s.points) < 2:
             continue
+        label = normalize_label(s.label)
+        if not label:
+            continue
         xs = [p[0] for p in s.points]
         ys = [p[1] for p in s.points]
         x1, x2 = min(xs), max(xs)
@@ -193,7 +203,7 @@ def write_voc(annotation: Annotation, label_path: Path, image_path: Path) -> Non
         if x2 - x1 <= 0 or y2 - y1 <= 0:
             continue
         obj = ET.SubElement(root, "object")
-        ET.SubElement(obj, "name").text = s.label
+        ET.SubElement(obj, "name").text = label
         ET.SubElement(obj, "difficult").text = "0"
         bnd = ET.SubElement(obj, "bndbox")
         ET.SubElement(bnd, "xmin").text = f"{int(x1)}"
@@ -269,7 +279,7 @@ def read_conversations(image_path: Path) -> list[dict[str, str]]:
     p = conversation_sidecar_path(image_path)
     if p.is_file():
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
             if isinstance(data, list):
                 return [
                     d for d in data
@@ -298,8 +308,16 @@ def write_grounding(
     """
     p = grounding_sidecar_path(image_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    clean_grounding = []
+    for item in grounding:
+        if not isinstance(item, dict):
+            continue
+        clean = dict(item)
+        if "label" in clean:
+            clean["label"] = normalize_label(clean.get("label"))
+        clean_grounding.append(clean)
     p.write_text(
-        json.dumps(grounding, ensure_ascii=False, indent=2),
+        json.dumps(clean_grounding, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return p
@@ -310,10 +328,14 @@ def read_grounding(image_path: Path) -> list[dict]:
     p = grounding_sidecar_path(image_path)
     if p.is_file():
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
             if isinstance(data, list):
                 return [
-                    d for d in data
+                    {
+                        **d,
+                        "label": normalize_label(d.get("label", "")),
+                    }
+                    for d in data
                     if isinstance(d, dict) and ("label" in d or "text" in d)
                 ]
         except (OSError, json.JSONDecodeError):
@@ -345,7 +367,10 @@ def write_image_labels(image_path: Path, labels: list[str]) -> Path:
     Returns the path that was written/deleted.
     """
     p = image_labels_sidecar_path(image_path)
-    if not labels:
+    clean_labels = [
+        label for label in (normalize_label(v) for v in labels) if label
+    ]
+    if not clean_labels:
         try:
             p.unlink(missing_ok=True)
         except OSError:
@@ -353,7 +378,7 @@ def write_image_labels(image_path: Path, labels: list[str]) -> Path:
         return p
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        json.dumps({"labels": list(labels)}, ensure_ascii=False, indent=2),
+        json.dumps({"labels": clean_labels}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return p
@@ -368,11 +393,15 @@ def read_image_labels(image_path: Path) -> list[str]:
     p = image_labels_sidecar_path(image_path)
     if p.is_file():
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict):
                 labels = data.get("labels", [])
                 if isinstance(labels, list):
-                    return [str(s) for s in labels if isinstance(s, (str, int))]
+                    return [
+                        label
+                        for label in (normalize_label(s) for s in labels)
+                        if label
+                    ]
         except (OSError, json.JSONDecodeError):
             pass
     return []

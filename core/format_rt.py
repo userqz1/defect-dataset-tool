@@ -151,7 +151,7 @@ def _reimport(out_dir: Path, reimport_fmt: str, export_fmt: str) -> SampleSet:
         if classes_txt.exists():
             yolo_names = [
                 ln.strip()
-                for ln in classes_txt.read_text(encoding="utf-8").splitlines()
+                for ln in classes_txt.read_text(encoding="utf-8-sig").splitlines()
                 if ln.strip()
             ]
 

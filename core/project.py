@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .labels import normalize_label
 from .recent import load_recent
 from .task_types import TaskType
 
@@ -156,7 +157,7 @@ def _infer_json_preset(paths: list[Path]) -> tuple[TaskType, str]:
     saw_image_label = False
     for path in paths:
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(raw, dict):
@@ -274,13 +275,27 @@ def _safe_get(d: dict, key: str, default=None):
     return v if v is not None else default
 
 
+def _normalize_class_names(values) -> list[str]:
+    """Normalize persisted project class names while preserving order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(values, list):
+        return out
+    for value in values:
+        label = normalize_label(value)
+        if label and label not in seen:
+            out.append(label)
+            seen.add(label)
+    return out
+
+
 def load_project(root: Path) -> Project | None:
     """Load project from .dataforge/project.json. Returns None if not found."""
     path = _project_path(root)
     if not path.is_file():
         return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(raw, dict):
@@ -332,7 +347,7 @@ def load_project(root: Path) -> Project | None:
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         notes=raw.get("notes", ""),
-        class_names=raw.get("class_names", []),
+        class_names=_normalize_class_names(raw.get("class_names", [])),
         annotation_format=ann_fmt,
         preset_id=preset_id,
         # Capability flags — default off for legacy projects that were
@@ -383,7 +398,7 @@ def save_project(project: Project) -> None:
         "created_at": project.created_at,
         "updated_at": project.updated_at,
         "notes": project.notes,
-        "class_names": project.class_names,
+        "class_names": _normalize_class_names(project.class_names),
         "annotation_format": project.annotation_format,
         "preset_id": project.preset_id,
         "enable_caption": project.enable_caption,

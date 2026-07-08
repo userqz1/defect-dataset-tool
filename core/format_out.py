@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from .labels import normalize_label
 from .unified import BBox, Region, Sample, SampleSet
 
 # ──────────────────────────────────────────────────────────────────────
@@ -135,10 +136,11 @@ def _generate_answer(regions: list[Region]) -> str:
     """Auto-generate a natural-language answer from regions."""
     if not regions:
         return "这张图片中未发现标注目标。"
-    counts = Counter(r.label for r in regions)
+    labels = [normalize_label(r.label) or r.label for r in regions]
+    counts = Counter(labels)
     total = len(regions)
     if total == 1:
-        return f"图片中存在1个 {regions[0].label}。"
+        return f"图片中存在1个 {labels[0]}。"
     parts = [f"{c}个 {l}" for l, c in counts.most_common()]
     return f"图片中存在{total}个目标：{'、'.join(parts)}。"
 
@@ -195,8 +197,11 @@ def _sample_grounding(
             if report is not None:
                 report.grounding_dropped_no_bbox += 1
             continue
+        label = normalize_label(r.label)
+        if not label:
+            continue
         entries.append({
-            "label": r.label,
+            "label": label,
             "text": text,
             "bbox": [int(round(bb.x1)), int(round(bb.y1)),
                      int(round(bb.x2)), int(round(bb.y2))],
@@ -299,13 +304,14 @@ def _write_yolo(ss: SampleSet, opts: ExportOptions,
                 bb = r.ensure_bbox()
                 if bb is None or iw <= 0 or ih <= 0:
                     continue
-                if r.label not in cls_idx:
+                label = normalize_label(r.label)
+                if label not in cls_idx:
                     continue
                 cx, cy, w, h = bb.to_yolo(iw, ih)
                 if w <= 0 or h <= 0:
                     continue
                 lines.append(
-                    f"{cls_idx[r.label]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                    f"{cls_idx[label]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
             lbl_dir.mkdir(parents=True, exist_ok=True)
             (lbl_dir / (sample.image_path.stem + ".txt")).write_text(
                 "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
@@ -365,15 +371,18 @@ def _write_coco(ss: SampleSet, opts: ExportOptions,
                     bb = r.ensure_bbox()
                     if bb is None:
                         continue
-                    if r.label not in cat_idx:
-                        cat_idx[r.label] = len(cat_idx) + 1
+                    label = normalize_label(r.label)
+                    if not label:
+                        continue
+                    if label not in cat_idx:
+                        cat_idx[label] = len(cat_idx) + 1
                     x, y, w, h = bb.to_xywh()
                     if w <= 0 or h <= 0:
                         continue
                     anns_json.append({
                         "id": next_ann,
                         "image_id": next_img,
-                        "category_id": cat_idx[r.label],
+                        "category_id": cat_idx[label],
                         "bbox": [x, y, w, h],
                         "area": w * h,
                         "iscrowd": int(r.iscrowd),
@@ -435,8 +444,11 @@ def _write_voc(ss: SampleSet, opts: ExportOptions,
                     bb = r.ensure_bbox()
                     if bb is None or bb.width <= 0 or bb.height <= 0:
                         continue
+                    label = normalize_label(r.label)
+                    if not label:
+                        continue
                     obj = ET.SubElement(root, "object")
-                    ET.SubElement(obj, "name").text = r.label
+                    ET.SubElement(obj, "name").text = label
                     ET.SubElement(obj, "difficult").text = (
                         "1" if r.difficult else "0")
                     ET.SubElement(obj, "truncated").text = (
@@ -482,8 +494,11 @@ def _write_labelme(ss: SampleSet, opts: ExportOptions,
                 pts = _region_points(r)
                 if not pts:
                     continue
+                label = normalize_label(r.label)
+                if not label:
+                    continue
                 shapes.append({
-                    "label": r.label,
+                    "label": label,
                     "points": [[x, y] for x, y in pts],
                     "group_id": None,
                     "shape_type": r.shape_type,
@@ -559,17 +574,18 @@ def _write_csv(ss: SampleSet, opts: ExportOptions,
                     rel = str(sample.image_path)
                 if sample.regions:
                     for r in sample.regions:
+                        label = normalize_label(r.label)
                         bb = r.ensure_bbox()
                         if bb:
                             writer.writerow([
-                                rel, sample.category, r.label,
+                                rel, sample.category, label,
                                 f"{bb.x1:.1f}", f"{bb.y1:.1f}",
                                 f"{bb.x2:.1f}", f"{bb.y2:.1f}",
                                 r.shape_type, split,
                             ])
                         else:
                             writer.writerow([
-                                rel, sample.category, r.label,
+                                rel, sample.category, label,
                                 "", "", "", "", r.shape_type, split,
                             ])
                 else:
@@ -610,8 +626,11 @@ def _write_jsonl(ss: SampleSet, opts: ExportOptions,
                 annots = []
                 for r in sample.regions:
                     bb = r.ensure_bbox()
+                    label = normalize_label(r.label)
+                    if not label:
+                        continue
                     d: dict[str, Any] = {
-                        "label": r.label,
+                        "label": label,
                         "shape_type": r.shape_type,
                     }
                     if bb:

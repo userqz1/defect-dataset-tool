@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .labels import normalize_label
+
 
 # ---------- Geometry primitives ----------
 
@@ -96,6 +98,9 @@ class Region:
     iscrowd: bool = False
     attributes: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.label = normalize_label(self.label)
+
     def ensure_bbox(self) -> BBox | None:
         """Return ``bbox``, deriving from polygon/keypoints if absent."""
         if self.bbox is not None:
@@ -157,9 +162,14 @@ class Sample:
     @property
     def class_names(self) -> list[str]:
         """Unique sorted labels across all regions + image_labels."""
-        names: set[str] = set(self.image_labels)
+        names: set[str] = {
+            label for label in (normalize_label(v) for v in self.image_labels)
+            if label
+        }
         for r in self.regions:
-            names.add(r.label)
+            label = normalize_label(r.label)
+            if label:
+                names.add(label)
         return sorted(names)
 
     @property

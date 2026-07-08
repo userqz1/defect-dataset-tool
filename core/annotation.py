@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .labels import normalize_label
 from .models import Annotation, Shape
 
 
@@ -49,7 +50,7 @@ def parse_labelme(json_path: Path, image_path: Path | None = None) -> ParseResul
     for i, raw in enumerate(raw_shapes):
         if not isinstance(raw, dict):
             continue
-        label = str(raw.get("label", "")).strip()
+        label = normalize_label(raw.get("label", ""))
         shape_type = str(raw.get("shape_type", "polygon"))
         raw_points = raw.get("points", [])
         if not label or not isinstance(raw_points, list):

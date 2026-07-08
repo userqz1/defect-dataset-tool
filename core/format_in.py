@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from .labels import normalize_label
 from .models import Dataset, ImageInfo
 from .unified import BBox, Region, Sample, SampleSet
 
@@ -404,7 +405,7 @@ def _read_labelme(sample: Sample, json_path: Path,
     for raw in data.get("shapes", []):
         if not isinstance(raw, dict):
             continue
-        label = str(raw.get("label", "")).strip()
+        label = normalize_label(raw.get("label", ""))
         if not label:
             continue
         shape_type = str(raw.get("shape_type", "polygon"))
@@ -441,7 +442,7 @@ def _read_labelme(sample: Sample, json_path: Path,
 def _read_yolo(sample: Sample, txt_path: Path,
                class_names: list[str] | None) -> None:
     try:
-        text = txt_path.read_text(encoding="utf-8")
+        text = txt_path.read_text(encoding="utf-8-sig")
     except OSError:
         return
 
@@ -464,9 +465,12 @@ def _read_yolo(sample: Sample, txt_path: Path,
             continue
 
         if class_names and 0 <= cls_id < len(class_names):
-            label = class_names[cls_id]
+            label = normalize_label(class_names[cls_id])
         else:
             label = f"#{cls_id}" if class_names else str(cls_id)
+        label = normalize_label(label)
+        if not label:
+            continue
 
         bbox = BBox.from_yolo(cx, cy, w, h, iw, ih)
         conf = float(parts[5]) if len(parts) > 5 else 1.0
@@ -484,9 +488,12 @@ def _load_yolo_classes(label_dir: Path) -> list[str]:
             if p.is_file():
                 try:
                     return [
-                        ln.strip()
-                        for ln in p.read_text(encoding="utf-8").splitlines()
-                        if ln.strip()
+                        label
+                        for label in (
+                            normalize_label(ln)
+                            for ln in p.read_text(encoding="utf-8-sig").splitlines()
+                        )
+                        if label
                     ]
                 except OSError:
                     pass
@@ -524,7 +531,7 @@ def _read_voc(sample: Sample, xml_path: Path) -> None:
         bnd = obj.find("bndbox")
         if name_el is None or bnd is None:
             continue
-        label = (name_el.text or "").strip()
+        label = normalize_label(name_el.text)
         if not label:
             continue
         try:
@@ -584,7 +591,9 @@ def _build_coco_index(
     cats: dict[int, str] = {}
     for c in data.get("categories", []):
         if isinstance(c, dict) and "id" in c and "name" in c:
-            cats[int(c["id"])] = str(c["name"])
+            label = normalize_label(c["name"])
+            if label:
+                cats[int(c["id"])] = label
 
     img_by_id: dict[int, str] = {}
     size_by_stem: dict[str, tuple[int, int]] = {}
@@ -628,7 +637,10 @@ def _read_coco_sample(sample: Sample,
     anns = index.by_stem.get(stem, [])
     for ann in anns:
         cid = ann.get("category_id")
-        label = index.categories.get(int(cid), str(cid)) if cid is not None else ""
+        label = (
+            normalize_label(index.categories.get(int(cid), str(cid)))
+            if cid is not None else ""
+        )
         if not label:
             continue
 

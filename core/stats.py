@@ -133,7 +133,7 @@ def _parse_one(img):
         if img.label_path.suffix.lower() == ".json":
             try:
                 import json as _json
-                raw = _json.loads(img.label_path.read_text(encoding="utf-8"))
+                raw = _json.loads(img.label_path.read_text(encoding="utf-8-sig"))
                 w = int(raw.get("imageWidth", 0))
                 h = int(raw.get("imageHeight", 0))
                 if w > 0 and h > 0:

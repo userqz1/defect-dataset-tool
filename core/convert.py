@@ -87,7 +87,7 @@ def convert_one(image_path: Path, opts: ConvertOptions) -> Path:
         new_label = new_path.with_suffix(".json")
         if new_label != label:
             try:
-                data = json.loads(label.read_text(encoding="utf-8"))
+                data = json.loads(label.read_text(encoding="utf-8-sig"))
                 if isinstance(data, dict):
                     data["imagePath"] = new_path.name
                 new_label.write_text(

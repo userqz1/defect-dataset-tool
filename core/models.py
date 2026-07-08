@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .labels import normalize_label
+
 
 @dataclass
 class Shape:
@@ -11,6 +13,9 @@ class Shape:
     shape_type: str  # polygon / rectangle / point / line / circle
     points: list[tuple[float, float]]
     text: str = ""   # per-region caption / referring expression
+
+    def __post_init__(self) -> None:
+        self.label = normalize_label(self.label)
 
 
 @dataclass

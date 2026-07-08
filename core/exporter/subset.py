@@ -66,7 +66,7 @@ def _unique(path: Path) -> Path:
 
 def _patch_image_path(json_path: Path, new_name: str) -> None:
     try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
+        data = json.loads(json_path.read_text(encoding="utf-8-sig"))
         if isinstance(data, dict):
             data["imagePath"] = new_name
             json_path.write_text(

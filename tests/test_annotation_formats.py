@@ -164,6 +164,11 @@ class TestLoadYoloClasses:
         result = load_yolo_classes(tmp_path)
         assert result == ["cat", "dog"]
 
+    def test_from_classes_txt_strips_bom_and_newlines(self, tmp_path):
+        _touch(tmp_path / "classes.txt", "\ufefffastener_core\n\nLoose\n")
+        result = load_yolo_classes(tmp_path)
+        assert result == ["fastener_core", "Loose"]
+
     def test_from_parent_dir(self, tmp_path):
         _touch(tmp_path / "classes.txt", "a\nb\n")
         sub = tmp_path / "labels"
@@ -297,3 +302,12 @@ class TestParseCoco:
         idx = parse_coco(p)
         assert idx.categories == {1: "dog", 2: "cat"}
         assert idx.by_stem["a"][0].label == "cat"
+
+    def test_category_names_are_normalized(self, tmp_path):
+        p = self._coco_json(
+            tmp_path,
+            categories=[{"id": 1, "name": "fastener_core\n"}],
+        )
+        idx = parse_coco(p)
+        assert idx.categories == {1: "fastener_core"}
+        assert idx.by_stem["a"][0].label == "fastener_core"
