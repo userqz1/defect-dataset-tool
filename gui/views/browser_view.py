@@ -171,12 +171,9 @@ class BrowserView(QWidget):
         self.search.textChanged.connect(lambda _: self._search_timer.start())
         filter_bar.addWidget(self.search)
 
-        self._target_format_btn = PushButton()
-        self._target_format_btn.setIcon(FIF.TAG)
-        self._target_format_btn.setFixedHeight(T.CONTROL_HEIGHT)
-        self._target_format_btn.clicked.connect(self._show_target_format_menu)
-        filter_bar.addWidget(self._target_format_btn)
-        self._refresh_target_format_button()
+        # 目标格式选择器已从标注页移除：标注阶段不绑定导出格式（内容驱动），
+        # 交付格式改在「导出」阶段选。内部 _target_format 仍由 set_target_format()
+        # 从项目默认值同步，仅供已标注/未标注统计使用，不再暴露为可点选控件。
 
         # Segmented chip group (Claude-web redesign): chips live inside a
         # single bg-subtle container rather than each carrying its own border.
@@ -339,7 +336,6 @@ class BrowserView(QWidget):
     def _retranslate(self, _lang: str) -> None:
         """Refresh i18n-driven widget text after language switch."""
         self.search.setPlaceholderText(i18n.t("filter.search_placeholder"))
-        self._refresh_target_format_button()
         for mode, chip in self._chips.items():
             chip.setText(i18n.t(self._chip_i18n[mode]))
         # Recompute selection-bar labels via the usual handler — it sets
@@ -389,7 +385,6 @@ class BrowserView(QWidget):
         self._target_format = getattr(project, "target_format", "") if project else ""
         self._target_task_type = getattr(project, "task_type", None) if project else None
         self._target_format_options = self._schema_options_for_project(project)
-        self._refresh_target_format_button()
         self._rebuild_annotated_cache()
         if self._filter_mode in (FilterMode.LABELED, FilterMode.UNLABELED):
             self._apply_filter_and_show()
@@ -437,54 +432,9 @@ class BrowserView(QWidget):
         except Exception:
             return []
 
-    def _target_format_display(self) -> str:
-        target = self._target_format or ""
-        if not target:
-            return i18n.t("annotation.target_format.none")
-        for key, name in self._target_format_options:
-            if target_format_for_schema_key(key) == target or key == target:
-                return name
-        return target
-
-    def _refresh_target_format_button(self) -> None:
-        if not hasattr(self, "_target_format_btn"):
-            return
-        self._target_format_btn.setText(i18n.t(
-            "annotation.target_format.button",
-            fmt=self._target_format_display(),
-        ))
-        self._target_format_btn.setEnabled(bool(self._target_format_options))
-        self._target_format_btn.setToolTip(
-            i18n.t("annotation.target_format.tooltip"))
-
-    def _show_target_format_menu(self) -> None:
-        if not self._target_format_options:
-            return
-        menu = RoundMenu(parent=self._target_format_btn)
-        current = self._target_format
-        for key, name in self._target_format_options:
-            target = target_format_for_schema_key(key)
-            label = name
-            if target == current or key == current:
-                label = f"{name}  ✓"
-            menu.addAction(Action(
-                FIF.TAG,
-                label,
-                triggered=lambda _=False, t=target: self._select_target_format(t),
-            ))
-        pos = self._target_format_btn.mapToGlobal(
-            self._target_format_btn.rect().bottomLeft())
-        menu.exec(pos)
-
-    def _select_target_format(self, target_format: str) -> None:
-        if not target_format or target_format == self._target_format:
-            return
-        self._target_format = target_format
-        self._refresh_target_format_button()
-        self._rebuild_annotated_cache()
-        if self._filter_mode in (FilterMode.LABELED, FilterMode.UNLABELED):
-            self._apply_filter_and_show()
-        self.target_format_changed.emit(target_format)
+    # 目标格式选择器 UI 已移除（标注不绑定导出格式）。_target_format 仅作为
+    # 已标注/未标注统计的内部依据，由 set_target_format() 从项目默认值同步；
+    # 不再有可点选的按钮 / 菜单，也不再对外发 target_format_changed。
 
     # ---------- 状态持久化 ----------
 

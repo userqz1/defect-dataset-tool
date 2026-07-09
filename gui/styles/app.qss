@@ -785,6 +785,27 @@ QFrame#detailTopBar {
     border-bottom: 1px solid $BORDER;
 }
 
+/* Bottom-corner viewer HUD — floating zoom controls + cursor coords +
+ * pixel readout. An opaque rounded panel so it stays legible over any
+ * image. Lives on the QGraphicsView viewport, out of the top ribbon. */
+QFrame#viewerHud {
+    background-color: $CONTENT;
+    border: 1px solid $BORDER;
+    border-radius: 6px;
+}
+CaptionLabel#viewerHudInfo {
+    color: $TEXT_2;
+    padding: 4px 8px;
+}
+QLabel#viewerHudSwatch {
+    border: 1px solid $BORDER;
+    border-radius: 2px;
+}
+QFrame#viewerHudSep {
+    color: $BORDER;
+    max-width: 1px;
+}
+
 /* Image inspector — hosted inside the right ContextPanel as
  * ContextPage.INSPECTOR (P1.6).  Bg/border come from the panel
  * itself; the inner frame stays transparent so its content reads as

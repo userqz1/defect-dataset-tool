@@ -58,6 +58,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    ComboBox,
     EditableComboBox,
     FluentIcon as FIF,
     InfoBar,
@@ -90,6 +91,18 @@ from gui.views.panes.image_label_pane import ImageLabelPane
 from gui.views.panes.status_pane import StatusPane, WF_STATUS_LABELS
 from gui.views.panes.vlm_pane import VlmPane
 from gui.widgets.image_viewer import ImageViewer
+
+
+# 形状切换器的单一事实源：(token, 图标, 中文标签, 提示)。顺序即工具栏顺序。
+# token 必须与 ImageViewer.set_draw_shape_type / LabelMe shape_type 一致。
+_SHAPE_CHOICES: tuple[tuple[str, object, str, str], ...] = (
+    ("rectangle", FIF.LAYOUT, "矩形", "矩形 (R)"),
+    ("polygon", FIF.IOT, "多边形", "多边形 (P) — 左键加点，双击/回车闭合，右键取消"),
+    ("point", FIF.PIN, "关键点", "关键点 (K)"),
+    ("circle", FIF.PIE_SINGLE, "圆", "圆 (C) — 从圆心向外拖拽定半径"),
+    ("ellipse", FIF.PIE_SINGLE, "椭圆", "椭圆 — 拖拽外接框，宽高可不等"),
+    ("linestrip", FIF.MINIMIZE, "折线", "折线 (L) — 左键加点，双击/回车结束，右键取消"),
+)
 
 
 # ── Region ↔ Shape bridge (unified model ↔ legacy viewer model) ────
@@ -241,6 +254,9 @@ class DetailView(QWidget):
         self._annotation_format: str = "labelme"
         self._target_format: str = ""
         self._project_class_names: list[str] = []
+        # Guards the shape dropdown against re-entrant signals when we
+        # sync it programmatically (shortcut-driven / repopulate).
+        self._syncing_shape_combo: bool = False
         # Write gate — DatasetBrowserView flips this from AppState
         # ``scan_active_changed``. While False, every save handler shows
         # a blocking InfoBar and returns early. Guards against the
@@ -306,7 +322,8 @@ class DetailView(QWidget):
         body.setSpacing(0)
 
         self.viewer = ImageViewer()
-        self.viewer.zoom_changed.connect(self._on_zoom_changed)
+        # Zoom % now lives in the viewer's own bottom-corner HUD, not the
+        # top toolbar — no _on_zoom_changed wiring needed here.
         self.viewer.shapes_changed.connect(self._on_shapes_changed)
         self.viewer.selection_changed.connect(self._on_selection_changed)
         self.toggle_anno_btn.toggled.connect(self.viewer.set_annotation_visible)
@@ -375,18 +392,8 @@ class DetailView(QWidget):
         self.next_incomplete_btn.setMaximumWidth(128)
         self.next_incomplete_btn.clicked.connect(self.next_incomplete_image)
         self.next_incomplete_btn.hide()
-        self.zoom_out_btn = ToolButton(FIF.REMOVE)
-        self.zoom_out_btn.setToolTip("缩小")
-        self.zoom_out_btn.clicked.connect(lambda: self.viewer.zoom_out())
-        self.zoom_in_btn = ToolButton(FIF.ADD)
-        self.zoom_in_btn.setToolTip("放大")
-        self.zoom_in_btn.clicked.connect(lambda: self.viewer.zoom_in())
-        self.fit_btn = ToolButton(FIF.ZOOM)
-        self.fit_btn.setToolTip("适应窗口")
-        self.fit_btn.clicked.connect(lambda: self.viewer.reset_view())
-        self.actual_btn = ToolButton(FIF.FULL_SCREEN)
-        self.actual_btn.setToolTip("实际像素 1:1")
-        self.actual_btn.clicked.connect(lambda: self.viewer.zoom_to_actual())
+        # 缩放控件（缩小/放大/适应/1:1 + 百分比）已从顶栏移到图像视图自己的
+        # 左下角 HUD（还带光标坐标 + 像素值），顶栏因此清爽很多。
         self.toggle_anno_btn = ToolButton(FIF.VIEW)
         self.toggle_anno_btn.setCheckable(True)
         self.toggle_anno_btn.setChecked(True)
@@ -404,38 +411,28 @@ class DetailView(QWidget):
         self.edit_btn.setToolTip("编辑标注 (E) — 拖拽绘制 / 点选删除")
         self.edit_btn.toggled.connect(self._on_edit_toggled)
 
-        self.shape_rect_btn = ToolButton(FIF.LAYOUT)
-        self.shape_rect_btn.setCheckable(True)
-        self.shape_rect_btn.setChecked(True)
-        self.shape_rect_btn.setToolTip("矩形 (R)")
-        self.shape_poly_btn = ToolButton(FIF.IOT)
-        self.shape_poly_btn.setCheckable(True)
-        self.shape_poly_btn.setToolTip(
-            "多边形 (P) — 左键加点, 双击/回车闭合, 右键取消")
-        self.shape_point_btn = ToolButton(FIF.PIN)
-        self.shape_point_btn.setCheckable(True)
-        self.shape_point_btn.setToolTip("关键点 (K)")
-        self.shape_rect_btn.clicked.connect(
-            lambda: self._set_shape_type("rectangle"))
-        self.shape_poly_btn.clicked.connect(
-            lambda: self._set_shape_type("polygon"))
-        self.shape_point_btn.clicked.connect(
-            lambda: self._set_shape_type("point"))
-        self.shape_rect_btn.hide()
-        self.shape_poly_btn.hide()
-        self.shape_point_btn.hide()
+        # 形状切换器：一个"图标 + 文字"的下拉框(不是 5 个按钮 —— 那样顶栏会挤爆
+        # 且中文被截)。下拉列表每项带图标+中文名；只占一个控件位，编辑模式才显示，
+        # 内容按当前任务允许的形状动态填充。
+        self.shape_combo = ComboBox()
+        self.shape_combo.setMinimumWidth(96)
+        self.shape_combo.setToolTip("选择要绘制的形状；也可用快捷键 R/P/K/C/L")
+        self.shape_combo.currentIndexChanged.connect(
+            self._on_shape_combo_changed)
+        self.shape_combo.hide()
 
-        self.label_hint = CaptionLabel("框类别")
+        self.label_hint = CaptionLabel("类别")
         self.label_hint.setToolTip(
-            "当前绘制框的类别；下拉可选择已有类别，也可以输入新类别")
+            "当前绘制形状的类别；下拉可选择已有类别，也可以输入新类别")
         self.label_hint.hide()
 
         self.label_combo = EditableComboBox()
-        self.label_combo.setMinimumWidth(120)
-        self.label_combo.setMaximumWidth(150)
+        # 只给下限，不锁死最大宽度（长类名会被截）。下拉列表本身自适应最长项，
+        # 所以即便按钮面较窄，展开选择时也能看到完整类名。
+        self.label_combo.setMinimumWidth(160)
         self.label_combo.setPlaceholderText("选择或输入类别")
         self.label_combo.setToolTip(
-            "当前绘制框的类别；下拉可选择已有类别，也可以输入新类别")
+            "当前绘制形状的类别；下拉可选择已有类别，也可以输入新类别")
         self.label_combo.currentTextChanged.connect(
             lambda t: self.viewer.set_draw_label(t))
         self.label_combo.hide()
@@ -445,31 +442,18 @@ class DetailView(QWidget):
         self.save_btn.clicked.connect(self._on_save)
         self.save_btn.hide()
 
-        self.delete_shape_btn = ToolButton(FIF.DELETE)
-        self.delete_shape_btn.setToolTip("删除选中标注 (Del)")
-        self.delete_shape_btn.clicked.connect(self._delete_selected_shape)
-        self.delete_shape_btn.hide()
-
-        self.zoom_label = BodyLabel("100%")
-        self.zoom_label.setMinimumWidth(48)
-        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # 删除按钮已从顶栏移到"标注列表"面板(对象位置与类别 旁) —— 删除是对
+        # 标注列表的操作，放那儿更贴切，也给顶栏腾了地方。Del 快捷键仍走
+        # _delete_selected_shape；列表面板的删除按钮走 delete_shape_requested。
 
         lay.addWidget(self.prev_btn)
         lay.addWidget(self.next_btn)
         lay.addWidget(self.next_incomplete_btn)
-        lay.addWidget(self.zoom_out_btn)
-        lay.addWidget(self.zoom_label)
-        lay.addWidget(self.zoom_in_btn)
-        lay.addWidget(self.fit_btn)
-        lay.addWidget(self.actual_btn)
         lay.addWidget(self.toggle_anno_btn)
         lay.addWidget(self.edit_btn)
-        lay.addWidget(self.shape_rect_btn)
-        lay.addWidget(self.shape_poly_btn)
-        lay.addWidget(self.shape_point_btn)
+        lay.addWidget(self.shape_combo)
         lay.addWidget(self.label_hint)
         lay.addWidget(self.label_combo)
-        lay.addWidget(self.delete_shape_btn)
         lay.addWidget(self.save_btn)
 
         self.move_cat_btn = ToolButton(FIF.FOLDER)
@@ -483,6 +467,32 @@ class DetailView(QWidget):
         lay.addWidget(self.help_btn)
 
         return topbar
+
+    def _populate_shape_combo(self, tools: tuple[str, ...]) -> None:
+        """Fill the shape dropdown with exactly the tools this task allows.
+
+        Each item carries icon + Chinese label + the shape token as data.
+        Preserves the current selection when possible so re-populating on a
+        spec refresh doesn't yank the user off their chosen tool.
+        """
+        keep = self.shape_combo.currentData()
+        self._syncing_shape_combo = True
+        self.shape_combo.clear()
+        for token, icon, label, _tip in _SHAPE_CHOICES:
+            if token in tools:
+                self.shape_combo.addItem(label, icon=icon, userData=token)
+        # Restore prior selection if it's still offered.
+        idx = self.shape_combo.findData(keep)
+        if idx >= 0:
+            self.shape_combo.setCurrentIndex(idx)
+        self._syncing_shape_combo = False
+
+    def _on_shape_combo_changed(self, idx: int) -> None:
+        if idx < 0 or self._syncing_shape_combo:
+            return
+        token = self.shape_combo.itemData(idx)
+        if token:
+            self.viewer.set_draw_shape_type(token)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -505,14 +515,12 @@ class DetailView(QWidget):
         self.next_incomplete_btn.setMaximumWidth(128 if w >= 1280 else 82)
         self.next_incomplete_btn.setVisible(bool(self._target_format))
 
-        self.label_combo.setMinimumWidth(96 if w < 1160 else 120)
-        self.label_combo.setMaximumWidth(112 if w < 1160 else 150)
-        self.label_hint.setVisible(self.edit_btn.isChecked() and w >= 1040)
+        # 形状 + 类别各只占一个下拉框，顶栏不再拥挤。"类别"提示文字在窄窗收起
+        # (下拉本身仍在)，其余低优先级图标按窗宽逐个收起即可。
+        self.label_hint.setVisible(self.edit_btn.isChecked() and w >= 1160)
 
         # These actions remain available by shortcut/tooltip; hiding the
         # lowest-priority icons keeps save/delete/shape tools from colliding.
-        self.actual_btn.setVisible(w >= 980)
-        self.fit_btn.setVisible(w >= 900)
         self.move_cat_btn.setVisible(w >= 1020)
         self.help_btn.setVisible(w >= 1120)
 
@@ -567,11 +575,8 @@ class DetailView(QWidget):
         self._summary_title.setObjectName("inspectorSummaryTitle")
         lay.addWidget(self._summary_title)
 
-        self._summary_target = CaptionLabel("—")
-        self._summary_target.setObjectName("inspectorSummaryLine")
-        self._summary_target.setWordWrap(True)
-        lay.addWidget(self._summary_target)
-
+        # 标注阶段与导出格式解耦：不再显示"目标格式"。是否满足某个
+        # 导出格式的要求，是导出阶段的事，标注时只管画形状 / 填 VLM。
         self._summary_traditional = CaptionLabel("—")
         self._summary_traditional.setObjectName("inspectorSummaryLine")
         self._summary_traditional.setWordWrap(True)
@@ -653,6 +658,9 @@ class DetailView(QWidget):
                 # Right-click "删除此标注" on a list row.
                 self._annotation_pane.delete_shape_requested.connect(
                     self._on_pane_delete_shape)
+                # Double-click / "重命名" a list row → rename that shape's label.
+                self._annotation_pane.rename_shape_requested.connect(
+                    self._on_pane_rename_shape)
                 entries.append((
                     DetailSegment.ANNOTATION, "annotation",
                     self._annotation_segment_text(), self._annotation_pane,
@@ -734,25 +742,20 @@ class DetailView(QWidget):
 
         When a task has no shape tools (classification / anomaly /
         pair), edit mode is meaningless — hide the edit button so the
-        user can't enter a state they can't act on.  Individual shape
-        buttons (rect/poly) are only visible in edit mode and are
-        further gated by which tools the spec allows.
+        user can't enter a state they can't act on.  The shape dropdown is
+        only visible in edit mode and is populated with exactly the tools
+        the spec allows.
         """
         has_tools = bool(self._spec.shape_tools)
         self.edit_btn.setVisible(has_tools)
         if not has_tools and self.edit_btn.isChecked():
-            # Force edit mode off so orphaned shape-edit widgets don't
+            # Force edit mode off so the orphaned shape dropdown doesn't
             # linger after a task switch.
             self.edit_btn.setChecked(False)
-        if self.edit_btn.isChecked():
-            tools = self._spec.shape_tools
-            self.shape_rect_btn.setVisible("rectangle" in tools)
-            self.shape_poly_btn.setVisible("polygon" in tools)
-            self.shape_point_btn.setVisible("point" in tools)
-        else:
-            self.shape_rect_btn.hide()
-            self.shape_poly_btn.hide()
-            self.shape_point_btn.hide()
+        on = self.edit_btn.isChecked()
+        if on:
+            self._populate_shape_combo(self._spec.shape_tools)
+        self.shape_combo.setVisible(on)
         self.next_incomplete_btn.setVisible(bool(self._target_format))
         self._apply_toolbar_compact()
 
@@ -1050,28 +1053,26 @@ class DetailView(QWidget):
 
     @staticmethod
     def _shape_tools_for_target(project: Project) -> tuple[str, ...]:
-        """Return drawing tools appropriate for the project target."""
-        if project.task_type in {
+        """Drawing tools for the annotation stage — content-driven, NOT gated
+        by the export format.
+
+        A defect is whatever shape it is (box / polygon / circle / linestrip /
+        point); the annotator records that fact freely.  Adapting it to the
+        target format (circle→bbox, linestrip→skip, …) is the EXPORT stage's job,
+        with a compliance prompt before writing.  Only tasks that carry no
+        shape annotation at all (classification / anomaly / image-pair)
+        return no tools.
+        """
+        shape_tasks = {
+            TaskType.DETECTION,
+            TaskType.ORIENTED_DET,
             TaskType.SEMANTIC_SEG,
             TaskType.INSTANCE_SEG,
-            TaskType.ORIENTED_DET,
-        }:
-            return ("polygon",)
-        if project.task_type is TaskType.KEYPOINT:
-            return ("point", "rectangle")
-        if project.task_type is not TaskType.DETECTION:
+            TaskType.KEYPOINT,
+        }
+        if project.task_type not in shape_tasks:
             return ()
-
-        target = (project.target_format or "").strip().lower()
-        target = (
-            target.replace(" ", "")
-            .replace("-", "")
-            .replace("_", "")
-            .replace("/", "")
-        )
-        if target in {"labelme", "labelmejson", "jsonl", "jsonlines"}:
-            return ("rectangle", "polygon")
-        return ("rectangle",)
+        return ("rectangle", "polygon", "point", "circle", "ellipse", "linestrip")
 
     # ════════════════════════════════════════════════════════════════
     # Image loading + cache + prefetch
@@ -1314,10 +1315,6 @@ class DetailView(QWidget):
         sample = self._find_sample(img)
         shapes = self._annotation.shapes if self._annotation else []
 
-        self._summary_target.setVisible(bool(self._target_format))
-        if self._target_format:
-            self._summary_target.setText(f"目标格式：{self._target_format}")
-
         self._summary_traditional.setVisible(self._spec.has_annotation)
         self._summary_vlm.setVisible(self._spec.has_vlm)
 
@@ -1451,22 +1448,18 @@ class DetailView(QWidget):
     # Viewer feedback (zoom / selection / shapes)
     # ════════════════════════════════════════════════════════════════
 
-    def _on_zoom_changed(self, scale: float) -> None:
-        self.zoom_label.setText(f"{scale * 100:.0f}%")
-
     def _on_edit_toggled(self, on: bool) -> None:
         self.viewer.set_edit_mode(on)
-        # Visibility is the intersection of edit-mode + spec shape_tools.
-        # Classification/anomaly/pair never reach here (edit_btn hidden),
-        # but be defensive in case someone programmatically toggles it.
+        # Shape dropdown + 类别 + save appear only in edit mode (delete now
+        # lives in the shape-list pane).  Classification/anomaly/pair never
+        # reach here (edit_btn hidden), but be defensive if toggled.
         tools = self._spec.shape_tools
         self.label_hint.setVisible(on)
         self.label_combo.setVisible(on)
-        self.delete_shape_btn.setVisible(on)
         self.save_btn.setVisible(on)
-        self.shape_rect_btn.setVisible(on and "rectangle" in tools)
-        self.shape_poly_btn.setVisible(on and "polygon" in tools)
-        self.shape_point_btn.setVisible(on and "point" in tools)
+        if on:
+            self._populate_shape_combo(tools)
+        self.shape_combo.setVisible(on)
         if on:
             # No annotation yet → seed an empty one so drawn shapes have
             # somewhere to land.
@@ -1485,10 +1478,17 @@ class DetailView(QWidget):
         self._apply_toolbar_compact()
 
     def _set_shape_type(self, st: str) -> None:
-        self.shape_rect_btn.setChecked(st == "rectangle")
-        self.shape_poly_btn.setChecked(st == "polygon")
-        self.shape_point_btn.setChecked(st == "point")
+        """Activate a draw shape + reflect it in the shape dropdown.
+
+        Called by the R/P/K/C/L shortcuts (which must move the dropdown to
+        match) and internally when seeding the default tool.
+        """
         self.viewer.set_draw_shape_type(st)
+        idx = self.shape_combo.findData(st)
+        if idx >= 0 and idx != self.shape_combo.currentIndex():
+            self._syncing_shape_combo = True
+            self.shape_combo.setCurrentIndex(idx)
+            self._syncing_shape_combo = False
 
     def _refresh_label_combo(self) -> None:
         labels = set(self._project_class_names)
@@ -1640,6 +1640,37 @@ class DetailView(QWidget):
             return
         self._push_shape_undo("删除标注")
         self.viewer.delete_shape_at(idx)
+
+    def _on_pane_rename_shape(self, idx: int, new_label: str) -> None:
+        """Inline-rename one shape's label from the annotation list.
+
+        Updates the shape in place, re-renders the canvas so the box color
+        follows the new label, and refreshes the list + 类别 combo. Guarded by
+        the write gate; a no-op (blank / unchanged) label is ignored.
+        """
+        if self._block_write_if_scanning():
+            return
+        if self._annotation is None:
+            return
+        if not (0 <= idx < len(self._annotation.shapes)):
+            return
+        label = normalize_label(new_label)
+        if not label or label == self._annotation.shapes[idx].label:
+            return
+        self._push_shape_undo("重命名标注")
+        self._annotation.shapes[idx].label = label
+        # Re-render so the shape's color tracks the new label, then refresh
+        # the list + 类别 combo and keep the renamed row selected.
+        self.viewer.set_annotation(self._annotation)
+        self._dirty = True
+        if self._annotation_pane is not None:
+            self._annotation_pane.refresh_shape_list(self._annotation)
+        if self._vlm_pane is not None and self._vlm_pane.has_grounding:
+            self._vlm_pane.refresh_shape_list(self._annotation)
+        self._refresh_label_combo()
+        self._update_completion_card()
+        self.save_btn.setToolTip("保存标注 (Ctrl+S) — 有未保存修改")
+        self.viewer.select_shape(idx)
 
     def _delete_selected_shape(self) -> None:
         """Delete-on-canvas wrapper that snapshots before the cut.
@@ -2098,6 +2129,14 @@ class DetailView(QWidget):
               and self.edit_btn.isChecked()
               and "point" in self._spec.shape_tools):
             self._set_shape_type("point")
+        elif (e.key() == Qt.Key.Key_L
+              and self.edit_btn.isChecked()
+              and "linestrip" in self._spec.shape_tools):
+            self._set_shape_type("linestrip")
+        elif (e.key() == Qt.Key.Key_C
+              and self.edit_btn.isChecked()
+              and "circle" in self._spec.shape_tools):
+            self._set_shape_type("circle")
         elif (e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
               and self.edit_btn.isChecked()):
             self.viewer.finish_polygon()
@@ -2138,7 +2177,9 @@ class DetailView(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(T.GAP)
         key = CaptionLabel(label)
-        key.setFixedWidth(48)
+        # 最小宽度而非固定宽度：最长的键"图片分组"(4 个 CJK ≈ 54px)在 48px 下
+        # 会被截。所有键的自然宽度都 < 60，落到同一下限 → 列仍对齐，且不截字。
+        key.setMinimumWidth(60)
         key.setAlignment(Qt.AlignmentFlag.AlignTop)
         row.addWidget(key)
         row.addWidget(value_widget, 1)
