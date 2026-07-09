@@ -130,9 +130,11 @@ def _sample_to_annotation(sample: Sample) -> Annotation:
     for r in sample.regions:
         pts = _region_to_points(r)
         if pts:
+            # LabelMe has no ellipse → emit the bbox points as a polygon.
+            st = "polygon" if r.shape_type == "ellipse" else r.shape_type
             shapes.append(Shape(
                 label=r.label,
-                shape_type=r.shape_type,
+                shape_type=st,
                 points=pts,
                 text=r.text,
             ))
@@ -140,11 +142,30 @@ def _sample_to_annotation(sample: Sample) -> Annotation:
 
 
 def _region_to_points(r: Region) -> list[tuple[float, float]]:
-    """Extract point list from a Region for the legacy writer."""
+    """Extract point list from a Region for the legacy writer.
+
+    Mirrors ``format_out._region_points``: circle → ``[center, edge]`` and
+    point → a single coordinate, so migrating LabelMe→LabelMe doesn't turn a
+    circle/point into a 4-corner polygon that still claims to be a circle.
+    """
+    st = r.shape_type
+    if st == "circle" and r.bbox:
+        bb = r.bbox
+        cx, cy = (bb.x1 + bb.x2) / 2.0, (bb.y1 + bb.y2) / 2.0
+        rad = (bb.x2 - bb.x1) / 2.0
+        return [(cx, cy), (cx + rad, cy)]
+    if st == "point":
+        if r.keypoints:
+            x, y, _v = r.keypoints[0]
+            return [(x, y)]
+        if r.bbox:
+            bb = r.bbox
+            return [((bb.x1 + bb.x2) / 2.0, (bb.y1 + bb.y2) / 2.0)]
+        return []
     if r.polygon:
         return list(r.polygon)
     if r.bbox:
-        if r.shape_type == "rectangle":
+        if st == "rectangle":
             return [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y2)]
         return [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y1),
                 (r.bbox.x2, r.bbox.y2), (r.bbox.x1, r.bbox.y2)]

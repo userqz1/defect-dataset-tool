@@ -10,7 +10,7 @@ from .labels import normalize_label
 @dataclass
 class Shape:
     label: str
-    shape_type: str  # polygon / rectangle / point / line / circle
+    shape_type: str  # polygon / rectangle / point / linestrip / circle
     points: list[tuple[float, float]]
     text: str = ""   # per-region caption / referring expression
 

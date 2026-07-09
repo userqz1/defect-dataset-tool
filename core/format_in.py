@@ -415,7 +415,8 @@ def _read_labelme(sample: Sample, json_path: Path,
             continue
 
         region = Region(label=label, shape_type=shape_type)
-        if shape_type == "rectangle" and len(pts) >= 2:
+        if shape_type in ("rectangle", "ellipse") and len(pts) >= 2:
+            # Ellipse is stored (like a rect) by its bounding box.
             region.bbox = BBox.from_points(pts)
         elif shape_type in ("polygon", "linestrip"):
             region.polygon = pts

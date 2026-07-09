@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import shutil
 from collections import Counter
 from dataclasses import dataclass, field
@@ -121,15 +122,17 @@ def _copy_path(src: Path, dst_dir: Path, report: ExportResult) -> str:
 
 
 def _iter_splits(ss: SampleSet):
-    """Yield (split_name, samples) for non-empty splits."""
-    for name, samples in [("train", ss.train), ("val", ss.val),
+    """Yield (split_name, samples) for non-empty splits.
+
+    Unsplit samples are folded INTO the train batch (not yielded as a second
+    ``"train"``) so per-split-file writers (COCO/VOC/JSONL/…) don't write
+    ``*_train.*`` twice and silently overwrite the first batch.
+    """
+    train = list(ss.train) + list(ss.unsplit)
+    for name, samples in [("train", train), ("val", ss.val),
                           ("test", ss.test)]:
         if samples:
             yield name, samples
-    # Unsplit samples go into train
-    unsplit = ss.unsplit
-    if unsplit:
-        yield "train", unsplit
 
 
 def _generate_answer(regions: list[Region]) -> str:
@@ -301,17 +304,37 @@ def _write_yolo(ss: SampleSet, opts: ExportOptions,
 
             lines: list[str] = []
             for r in sample.regions:
-                bb = r.ensure_bbox()
-                if bb is None or iw <= 0 or ih <= 0:
+                if iw <= 0 or ih <= 0:
                     continue
                 label = normalize_label(r.label)
                 if label not in cls_idx:
                     continue
-                cx, cy, w, h = bb.to_yolo(iw, ih)
+                cid = cls_idx[label]
+                if r.polygon and len(r.polygon) >= 3:
+                    # YOLO-seg line: class + normalized polygon points
+                    # (clamped to [0,1]). Otherwise segmentation masks are
+                    # silently flattened to boxes on export.
+                    coords: list[float] = []
+                    for px, py in r.polygon:
+                        coords.append(min(max(px / iw, 0.0), 1.0))
+                        coords.append(min(max(py / ih, 0.0), 1.0))
+                    lines.append(
+                        f"{cid} " + " ".join(f"{c:.6f}" for c in coords))
+                    continue
+                bb = r.ensure_bbox()
+                if bb is None:
+                    continue
+                # Clamp corners to the image so exported coords stay in
+                # [0,1] — Ultralytics rejects/clips out-of-bounds boxes.
+                cbb = BBox(min(max(bb.x1, 0.0), float(iw)),
+                           min(max(bb.y1, 0.0), float(ih)),
+                           min(max(bb.x2, 0.0), float(iw)),
+                           min(max(bb.y2, 0.0), float(ih)))
+                cx, cy, w, h = cbb.to_yolo(iw, ih)
                 if w <= 0 or h <= 0:
                     continue
                 lines.append(
-                    f"{cls_idx[label]} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                    f"{cid} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
             lbl_dir.mkdir(parents=True, exist_ok=True)
             (lbl_dir / (sample.image_path.stem + ".txt")).write_text(
                 "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
@@ -322,7 +345,14 @@ def _write_yolo(ss: SampleSet, opts: ExportOptions,
     # classes.txt + data.yaml
     (out / "classes.txt").write_text(
         "\n".join(cls_list) + "\n", encoding="utf-8")
-    yaml = ["path: .", "train: images/train", "val: images/val"]
+    # Only reference splits that actually exist on disk — hardcoding
+    # `val: images/val` when there's no val split makes Ultralytics error on
+    # a missing directory (unsplit samples land in train, so gate on either).
+    yaml = ["path: ."]
+    if ss.train or ss.unsplit:
+        yaml.append("train: images/train")
+    if ss.val:
+        yaml.append("val: images/val")
     if ss.test:
         yaml.append("test: images/test")
     yaml += [f"nc: {len(cls_list)}",
@@ -347,10 +377,16 @@ def _write_coco(ss: SampleSet, opts: ExportOptions,
     total = sum(len(batch) for _, batch in all_samples)
     done = 0
 
+    # ONE global category map for every split file. Building it per-split (by
+    # encounter order) let the same category_id mean different classes in
+    # train vs val — a COCO consumer reads the map from one file and applies
+    # it to all, so that silently mislabels the dataset. 1-indexed per COCO.
+    cat_idx = {name: i + 1 for i, name in enumerate(ss.class_names)}
+    cats_json = [{"id": cid, "name": name} for name, cid in cat_idx.items()]
+
     for split, samples in all_samples:
         images_json: list[dict] = []
         anns_json: list[dict] = []
-        cat_idx: dict[str, int] = {}
         next_img = 1
         next_ann = 1
 
@@ -372,31 +408,31 @@ def _write_coco(ss: SampleSet, opts: ExportOptions,
                     if bb is None:
                         continue
                     label = normalize_label(r.label)
-                    if not label:
-                        continue
                     if label not in cat_idx:
-                        cat_idx[label] = len(cat_idx) + 1
+                        continue
                     x, y, w, h = bb.to_xywh()
                     if w <= 0 or h <= 0:
                         continue
-                    anns_json.append({
+                    ann = {
                         "id": next_ann,
                         "image_id": next_img,
                         "category_id": cat_idx[label],
                         "bbox": [x, y, w, h],
                         "area": w * h,
                         "iscrowd": int(r.iscrowd),
-                    })
+                    }
+                    # Keep segmentation masks instead of silently dropping
+                    # them to bbox-only (COCO allows both on one annotation).
+                    if r.polygon and len(r.polygon) >= 3:
+                        ann["segmentation"] = [
+                            [c for pt in r.polygon for c in pt]]
+                    anns_json.append(ann)
                     next_ann += 1
                 next_img += 1
                 report.written_labels += 1
             except Exception as e:
                 report.skipped.append((sample.image_path, str(e)))
 
-        cats_json = [
-            {"id": cid, "name": name}
-            for name, cid in sorted(cat_idx.items(), key=lambda x: x[1])
-        ]
         (ann_dir / f"instances_{split}.json").write_text(
             json.dumps({"images": images_json, "annotations": anns_json,
                          "categories": cats_json},
@@ -454,10 +490,12 @@ def _write_voc(ss: SampleSet, opts: ExportOptions,
                     ET.SubElement(obj, "truncated").text = (
                         "1" if r.truncated else "0")
                     bnd = ET.SubElement(obj, "bndbox")
-                    ET.SubElement(bnd, "xmin").text = f"{int(bb.x1)}"
-                    ET.SubElement(bnd, "ymin").text = f"{int(bb.y1)}"
-                    ET.SubElement(bnd, "xmax").text = f"{int(bb.x2)}"
-                    ET.SubElement(bnd, "ymax").text = f"{int(bb.y2)}"
+                    # round() not int(): int() floors toward zero and
+                    # under-reports every box by up to a pixel.
+                    ET.SubElement(bnd, "xmin").text = f"{round(bb.x1)}"
+                    ET.SubElement(bnd, "ymin").text = f"{round(bb.y1)}"
+                    ET.SubElement(bnd, "xmax").text = f"{round(bb.x2)}"
+                    ET.SubElement(bnd, "ymax").text = f"{round(bb.y2)}"
                 (xml_dir / (sample.image_path.stem + ".xml")).write_bytes(
                     ET.tostring(root, encoding="utf-8", xml_declaration=True))
                 report.written_labels += 1
@@ -501,13 +539,24 @@ def _write_labelme(ss: SampleSet, opts: ExportOptions,
                     "label": label,
                     "points": [[x, y] for x, y in pts],
                     "group_id": None,
-                    "shape_type": r.shape_type,
+                    # LabelMe has no "ellipse"; _region_points emits an oval
+                    # polygon for it, so write it out as a polygon.
+                    "shape_type": ("polygon" if r.shape_type == "ellipse"
+                                   else r.shape_type),
                     "flags": {},
                 })
+            # JSON lands in labels/<split>/ but the image in images/<split>/;
+            # a bare filename makes labelme look next to the JSON and fail to
+            # load. Point at the copied image relative to the JSON's dir (or
+            # the absolute source when we didn't copy).
+            if opts.copy_images:
+                image_path = f"../../images/{split}/{sample.image_path.name}"
+            else:
+                image_path = str(sample.image_path)
             lme = {
                 "version": "5.0.0",
                 "flags": {},
-                "imagePath": sample.image_path.name,
+                "imagePath": image_path,
                 "imageData": None,
                 "imageWidth": sample.image_width,
                 "imageHeight": sample.image_height,
@@ -527,12 +576,36 @@ def _write_labelme(ss: SampleSet, opts: ExportOptions,
 
 
 def _region_points(r: Region) -> list[tuple[float, float]]:
-    """Extract the best point list for LabelMe serialization."""
+    """Extract the LabelMe point list that matches ``r.shape_type``.
+
+    LabelMe validates point counts per type: ``circle`` MUST be exactly
+    ``[center, edge]`` (2 pts) and ``point`` exactly 1 pt. A circle/point
+    region only carries a bbox after import, so emitting the generic
+    4-corner polygon here (while writing ``shape_type: "circle"``) produces
+    JSON the labelme GUI rejects. Reconstruct the right geometry instead.
+    """
+    st = r.shape_type
+    if st == "circle" and r.bbox:
+        bb = r.bbox
+        cx, cy = (bb.x1 + bb.x2) / 2.0, (bb.y1 + bb.y2) / 2.0
+        rad = (bb.x2 - bb.x1) / 2.0  # bbox of a circle is a 2r × 2r square
+        return [(cx, cy), (cx + rad, cy)]
+    if st == "ellipse" and r.bbox:
+        # LabelMe has no ellipse → sample an oval polygon from the bbox.
+        return _ellipse_polygon(r.bbox)
+    if st == "point":
+        if r.keypoints:
+            x, y, _v = r.keypoints[0]
+            return [(x, y)]
+        if r.bbox:
+            bb = r.bbox
+            return [((bb.x1 + bb.x2) / 2.0, (bb.y1 + bb.y2) / 2.0)]
+        return []
     if r.polygon:
         return r.polygon
     if r.bbox:
         bb = r.bbox
-        if r.shape_type == "rectangle":
+        if st == "rectangle":
             return [(bb.x1, bb.y1), (bb.x2, bb.y2)]
         # polygon from bbox
         return [(bb.x1, bb.y1), (bb.x2, bb.y1),
@@ -540,6 +613,17 @@ def _region_points(r: Region) -> list[tuple[float, float]]:
     if r.keypoints:
         return [(x, y) for x, y, _v in r.keypoints]
     return []
+
+
+def _ellipse_polygon(bb: BBox, n: int = 24) -> list[tuple[float, float]]:
+    """Sample *n* points around the ellipse inscribed in *bb*."""
+    cx, cy = (bb.x1 + bb.x2) / 2.0, (bb.y1 + bb.y2) / 2.0
+    rx, ry = (bb.x2 - bb.x1) / 2.0, (bb.y2 - bb.y1) / 2.0
+    return [
+        (cx + rx * math.cos(2.0 * math.pi * k / n),
+         cy + ry * math.sin(2.0 * math.pi * k / n))
+        for k in range(n)
+    ]
 
 
 # ── CSV ───────────────────────────────────────────────────────────────

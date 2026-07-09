@@ -90,7 +90,7 @@ class Region:
     bbox: BBox | None = None
     polygon: list[tuple[float, float]] | None = None
     keypoints: list[tuple[float, float, int]] | None = None  # (x, y, vis)
-    shape_type: str = "rectangle"     # rectangle / polygon / point / line / circle
+    shape_type: str = "rectangle"     # rectangle / polygon / point / linestrip / circle
     text: str = ""                   # per-region caption / referring expression
     confidence: float = 1.0
     difficult: bool = False
