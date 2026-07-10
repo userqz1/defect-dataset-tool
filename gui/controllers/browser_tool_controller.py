@@ -1107,17 +1107,26 @@ class BrowserToolController:
     def _delete_issue_images(self, images: list) -> None:
         if not images:
             return
+        box = MessageBox(
+            "永久删除问题图片",
+            f"将永久删除 {len(images)} 张问题图片及其标注文件。\n"
+            "此操作无法恢复，确认继续？",
+            self._window(),
+        )
+        box.yesButton.setText("永久删除")
+        if not box.exec():
+            return
         from core import fileops
         from gui.workers.batch_runner import BatchRunner
 
         def task(cb):
-            return fileops.delete_pairs(images, to_trash=True, progress_cb=cb)
+            return fileops.delete_pairs(images, progress_cb=cb)
 
         def handle(result):
             n_ok = len(getattr(result, "succeeded", []))
             InfoBar.success(
                 "问题图片已删除",
-                f"{n_ok} 张已移至回收站",
+                f"{n_ok} 张已永久删除",
                 parent=self._window(), duration=4000,
                 position=InfoBarPosition.TOP,
             )
@@ -1375,21 +1384,15 @@ class BrowserToolController:
         )
 
     def _delete_duplicates(self, groups) -> None:
-        from send2trash import send2trash
-        deleted = 0
-        failed = 0
-        trashed_paths: list[str] = []
-        for g in groups:
-            for img in g.images[1:]:
-                try:
-                    send2trash(str(img.path))
-                    if img.label_path and img.label_path.exists():
-                        send2trash(str(img.label_path))
-                    deleted += 1
-                    trashed_paths.append(str(img.path))
-                except Exception:
-                    logger.exception("send2trash failed for %s", img.path)
-                    failed += 1
+        from core import fileops
+
+        duplicates = [img for group in groups for img in group.images[1:]]
+        result = fileops.delete_pairs(duplicates)
+        deleted = len(result.succeeded)
+        failed = len(result.failed)
+        deleted_paths = [str(path) for path in result.succeeded]
+        for path, error in result.failed:
+            logger.error("permanent delete failed for %s: %s", path, error)
         ds = self._rt.state.dataset
         if ds is not None:
             try:
@@ -1402,10 +1405,10 @@ class BrowserToolController:
                             "group_count": len(groups),
                             "deleted": deleted,
                             "failed": failed,
-                            "trashed": trashed_paths,
+                            "deleted_paths": deleted_paths,
                         },
                         ok=failed == 0,
-                        summary=f"删除重复图片 {deleted} 张到回收站"
+                        summary=f"永久删除重复图片 {deleted} 张"
                                 + (f"（{failed} 失败）" if failed else ""),
                     ),
                 )
@@ -1419,12 +1422,12 @@ class BrowserToolController:
                 position=InfoBarPosition.TOP,
             )
         else:
-            InfoBar.success("删除完成", f"已移除 {deleted} 张重复图片到回收站",
+            InfoBar.success("删除完成", f"已永久删除 {deleted} 张重复图片",
                             parent=self._window(), duration=5000,
                             position=InfoBarPosition.TOP)
         # Incremental: remove deleted paths from Dataset + SampleSet
-        if trashed_paths:
-            self._incremental_remove(set(trashed_paths))
+        if deleted_paths:
+            self._incremental_remove(set(deleted_paths))
 
     def _on_stats(self) -> None:
         ds = self._rt.state.dataset

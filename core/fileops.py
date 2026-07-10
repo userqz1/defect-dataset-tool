@@ -1,7 +1,7 @@
 """File operations on image+label pairs. Pure Python — no PyQt.
 
 All operations work on the (image, optional label JSON) pair as a unit.
-Destructive ops use send2trash so the user can recover from Recycle Bin.
+Destructive ops permanently remove files after the caller confirms.
 """
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from send2trash import send2trash
 
 from .models import ImageInfo
 
@@ -84,9 +82,8 @@ def _update_image_path_in_json(json_path: Path, new_image_name: str) -> None:
 
 # ---------- 删除 ----------
 
-def delete_pairs(images: list[ImageInfo], to_trash: bool = True,
-                  progress_cb=None) -> OpResult:
-    """Delete image + corresponding label JSON. Defaults to OS Recycle Bin."""
+def delete_pairs(images: list[ImageInfo], progress_cb=None) -> OpResult:
+    """Permanently delete each image and its corresponding label JSON."""
     result = OpResult()
     total = len(images)
     for i, img in enumerate(images):
@@ -94,14 +91,9 @@ def delete_pairs(images: list[ImageInfo], to_trash: bool = True,
             progress_cb(i, total, img.path.name)
         try:
             label = img.label_path or label_path_for_image(img.path)
-            if to_trash:
-                send2trash(str(img.path))
-                if label and label.is_file():
-                    send2trash(str(label))
-            else:
-                img.path.unlink(missing_ok=True)
-                if label and label.is_file():
-                    label.unlink(missing_ok=True)
+            img.path.unlink(missing_ok=True)
+            if label and label.is_file():
+                label.unlink(missing_ok=True)
             result.succeeded.append(img.path)
         except Exception as e:  # noqa: BLE001
             result.failed.append((img.path, str(e)))

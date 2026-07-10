@@ -105,7 +105,7 @@ class DedupResultDialog(MessageBoxBase):
                 CaptionLabel(f"…及其余 {len(groups) - 20} 组")
             )
 
-        self.yesButton.setText(f"删除 {total_dup} 张重复到回收站")
+        self.yesButton.setText(f"永久删除 {total_dup} 张重复（不可恢复）")
         self.cancelButton.setText("取消")
 
     @property
@@ -178,7 +178,7 @@ class QualityReviewDialog(MessageBoxBase):
         mark_btn.clicked.connect(lambda: self._choose(self.ACTION_NONE))
         move_btn = _PB("移到「质量问题」类别", self)
         move_btn.clicked.connect(lambda: self._choose(self.ACTION_MOVE))
-        del_btn = _PB("删除到回收站", self)
+        del_btn = _PB("永久删除（不可恢复）", self)
         del_btn.clicked.connect(lambda: self._choose(self.ACTION_DELETE))
         actions.addWidget(mark_btn)
         actions.addWidget(move_btn)

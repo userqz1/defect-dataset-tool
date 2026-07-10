@@ -8,8 +8,8 @@ undo primitive — review point #6:
 - Entries capture the operation's declared parameters, not full
   file-system snapshots. ``move-to-category`` records source paths at
   call time, which may no longer exist by the time you'd try to undo.
-- ``delete-duplicates`` records the trashed paths as plain strings, but
-  OS Recycle Bin mappings are not reversible from here.
+- ``delete-duplicates`` records permanently deleted paths as plain strings;
+  deleted files cannot be reconstructed from the audit log.
 - ``rename-category`` only records old/new names; a reverse play relies
   on filesystem state being identical to when it ran.
 
@@ -49,7 +49,7 @@ class HistoryEntry:
     ``summary`` is the one-line Chinese description shown in the UI.
     ``undoable`` flags whether ``try_undo_last`` knows how to reverse this
     entry — today only ``move-to-category`` and ``rename-category``. Ops
-    that go through Recycle Bin (delete-duplicates) or lose source→target
+    that permanently delete files (delete-duplicates) or lose source→target
     grouping (merge-categories) stay ``False`` until a proper snapshot
     model exists.
     """
@@ -177,7 +177,7 @@ def clear(root: Path) -> None:
 #   - ``rename-category`` — swaps old/new name, pure filesystem rename.
 #
 # Not yet supported (stay ``undoable=False``):
-#   - ``delete-duplicates`` (Recycle-Bin restore is OS-specific)
+#   - ``delete-duplicates`` (files are permanently deleted)
 #   - ``merge-categories`` (source→target grouping isn't captured)
 #   - ``split-category`` (same)
 # These will be added when we design a proper BeforeState snapshot model.

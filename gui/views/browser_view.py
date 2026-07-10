@@ -1069,12 +1069,15 @@ class BrowserView(QWidget):
         elif labeled:
             parts.append(f"含 {labeled} 份标注文件")
         # 未标注情况下,第二行是冗余的 ("XX 张图片" 已经说明),不再补
-        body = self.tr("将以下内容移至回收站，确认？\n\n") + "\n".join(parts)
-        box = MessageBox(self.tr("确认删除"), body, self.window())
+        body = self.tr(
+            "将永久删除以下内容，删除后无法恢复，确认继续？\n\n"
+        ) + "\n".join(parts)
+        box = MessageBox(self.tr("确认永久删除"), body, self.window())
+        box.yesButton.setText(self.tr("永久删除"))
         if not box.exec():
             return
         self._run(
-            lambda cb: fileops.delete_pairs(sel, to_trash=True, progress_cb=cb),
+            lambda cb: fileops.delete_pairs(sel, progress_cb=cb),
             self.tr("正在删除…"),
         )
 

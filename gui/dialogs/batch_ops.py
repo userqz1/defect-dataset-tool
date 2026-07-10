@@ -181,7 +181,7 @@ class ConvertDialog(_BatchOpBase):
         self.overwrite = CheckBox("覆盖已存在文件", self)
         self.viewLayout.addWidget(self.overwrite)
 
-        self.delete_original = CheckBox("转换后删除原图到回收站", self)
+        self.delete_original = CheckBox("转换后永久删除原图（不可恢复）", self)
         self.viewLayout.addWidget(self.delete_original)
 
     def options(self) -> ConvertOptions:
