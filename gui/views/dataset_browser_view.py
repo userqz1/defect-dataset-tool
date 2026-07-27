@@ -491,7 +491,7 @@ class DatasetBrowserView(QWidget):
         if project is None:
             return
 
-        from core.annotation_preset import CUSTOM_ID, preset_by_id
+        from core.annotation_preset import preset_by_id
         from core.project import apply_preset, save_project
         from gui.dialogs.preset_picker_dialog import PresetPickerDialog
 

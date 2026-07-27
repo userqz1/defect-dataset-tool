@@ -15,7 +15,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout
 from qfluentwidgets import (
     BodyLabel,
@@ -23,8 +22,6 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     DoubleSpinBox,
-    InfoBar,
-    InfoBarPosition,
     LineEdit,
     MessageBoxBase,
     PushButton,

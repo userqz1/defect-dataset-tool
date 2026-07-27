@@ -127,8 +127,10 @@ def _reimport(out_dir: Path, reimport_fmt: str, export_fmt: str) -> SampleSet:
     # directly (the export layout uses images/<split>/ + labels/<split>/
     # which doesn't match scan_dataset's expected <category>/images/ layout).
     from .format_in import (
-        _read_labelme, _read_yolo, _read_voc, _image_size,
-        _load_yolo_classes,
+        _read_labelme,
+        _read_yolo,
+        _read_voc,
+        _image_size,
     )
     from .unified import Sample as _S
 

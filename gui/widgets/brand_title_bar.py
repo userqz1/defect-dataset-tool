@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel
 from qfluentwidgets.window.fluent_window import FluentTitleBar
 
-from gui import i18n
 from gui.theme import T
 
 

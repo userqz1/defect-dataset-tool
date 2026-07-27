@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont, QFontMetrics, QPainter, QPen
+from PyQt6.QtGui import QAction, QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import (
     QFrame,
     QListWidget,

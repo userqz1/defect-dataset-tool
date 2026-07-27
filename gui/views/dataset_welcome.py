@@ -38,14 +38,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QMenu,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     Action,
-    BodyLabel,
     CaptionLabel,
     FluentIcon as FIF,
     IconWidget,
@@ -58,7 +56,6 @@ from qfluentwidgets import (
 )
 
 from core.project import ProjectSummary
-from core.task_types import TASK_REGISTRY
 from gui.theme import T
 
 

@@ -7,14 +7,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout
+from PyQt6.QtWidgets import QFileDialog, QHBoxLayout
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
     CheckBox,
     ComboBox,
-    FluentIcon as FIF,
     MessageBoxBase,
     PushButton,
     StrongBodyLabel,
@@ -22,8 +20,6 @@ from qfluentwidgets import (
 )
 
 from core.format_convert import (
-    ConversionHint,
-    FieldSupport,
     FORMATS,
     conversion_hints,
 )

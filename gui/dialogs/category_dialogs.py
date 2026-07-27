@@ -10,7 +10,6 @@ from qfluentwidgets import (
     ComboBox,
     LineEdit,
     PushButton,
-    SubtitleLabel,
 )
 
 from core.models import ImageInfo

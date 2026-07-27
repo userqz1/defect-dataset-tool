@@ -14,7 +14,7 @@ from PIL import Image
 
 from .annotation_formats import detect_format, load_yolo_classes
 from .labels import normalize_label
-from .models import Annotation, Shape
+from .models import Annotation
 
 
 def write_annotation(

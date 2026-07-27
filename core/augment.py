@@ -21,7 +21,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .annotation_writer import write_annotation
-from .fileops import OpResult, label_path_for_image
+from .fileops import label_path_for_image
 from .models import Annotation, Shape
 
 _log = logging.getLogger(__name__)

@@ -17,14 +17,13 @@ Pure Python — no PyQt, no GUI imports.
 """
 from __future__ import annotations
 
-import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from ..config import image_extensions
-from .rules import ClassificationResult, ClassificationRule
+from .rules import ClassificationRule
 
 
 # ---------- Data types ----------

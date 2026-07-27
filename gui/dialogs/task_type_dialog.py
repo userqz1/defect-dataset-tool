@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QVBoxLayout
+from PyQt6.QtWidgets import QFrame, QGridLayout, QVBoxLayout
 from qfluentwidgets import (
-    BodyLabel,
     FluentIcon as FIF,
     MessageBoxBase,
     StrongBodyLabel,

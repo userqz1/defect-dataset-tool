@@ -32,7 +32,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     CheckBox,
     FluentIcon as FIF,

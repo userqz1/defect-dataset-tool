@@ -5,7 +5,7 @@ from collections import Counter
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGridLayout
-from qfluentwidgets import BodyLabel, CaptionLabel, SubtitleLabel
+from qfluentwidgets import BodyLabel, CaptionLabel
 
 from core.models import Dataset
 from core.splitter import SplitResult

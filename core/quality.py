@@ -142,7 +142,6 @@ def check_annotations(
       - ``zero_area``   — a region's bounding box has 0 area (degenerate).
       - ``oob``         — region bbox extends beyond image dimensions.
     """
-    from .unified import SampleSet as _SS  # noqa: F811 — runtime import
 
     issues: list[QualityIssue] = []
     total = len(sample_set.samples)

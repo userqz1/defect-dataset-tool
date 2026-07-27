@@ -24,7 +24,6 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from gui.theme import T
 
 
 class VlmStartDialog(MessageBoxBase):

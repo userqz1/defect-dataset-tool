@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,6 @@ from core.models import Dataset, ImageInfo
 from core.target_readiness import (
     completed_paths_for_target,
     target_format_is_exportable,
-    target_format_for_schema_key,
 )
 from gui import i18n
 from gui.dialogs.op_dialogs import (
@@ -589,7 +587,6 @@ class BrowserView(QWidget):
         available (O(1) lookup by image path). Falls back to
         WorkflowState-based path resolution otherwise.
         """
-        from core.workflow import WorkStatus
 
         if self._filter_mode is FilterMode.WORK_NEW:
             accept_values = {"new", "prelabeled", "annotating"}

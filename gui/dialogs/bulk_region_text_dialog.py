@@ -9,10 +9,8 @@ runs the actual mutation in a background worker via BatchRunner.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QButtonGroup, QHBoxLayout, QVBoxLayout
+from PyQt6.QtWidgets import QButtonGroup, QHBoxLayout
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     ComboBox,
     MessageBoxBase,

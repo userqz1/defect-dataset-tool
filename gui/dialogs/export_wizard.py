@@ -8,8 +8,6 @@ Launched from the browser toolbar — no pipeline dependency.
 """
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -30,8 +28,6 @@ from qfluentwidgets import (
     CheckBox,
     DoubleSpinBox,
     FluentIcon as FIF,
-    InfoBar,
-    InfoBarPosition,
     MessageBoxBase,
     PrimaryPushButton,
     PushButton,

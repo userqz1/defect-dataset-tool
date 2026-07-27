@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from core import workflow_store
 from core.inbox import commit_items, create_batch
-from core.workflow import WorkItem, WorkStatus
+from core.workflow import WorkStatus
 
 if TYPE_CHECKING:
     from gui.app_state import AppState

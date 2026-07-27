@@ -12,7 +12,6 @@ keeps the schema definitions declarative.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
 
 from ..models import Dataset
 from .base import Slot, SlotStatus

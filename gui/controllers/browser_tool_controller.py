@@ -484,7 +484,6 @@ class BrowserToolController:
 
         # Unified model path: only when SampleSet is READY (authoritative).
         # STALE or UNAVAILABLE → fall back to pipeline (re-parse from disk).
-        from gui.app_state import SampleSetStatus
         ss = self._rt.state.sample_set
         if ss is not None and self._rt.state.sample_set_ready:
             if cat_filter is not None:
@@ -1865,7 +1864,6 @@ class BrowserToolController:
                 from core.format_in import load_sample as _load
                 from core.models import Annotation as _A, Shape as _S
                 from core.annotation_writer import write_annotation_as
-                from core.unified import Region as _R
                 try:
                     fake_img = type(img)(
                         path=img.path, category=img.category,
@@ -2067,7 +2065,6 @@ class BrowserToolController:
                  if i.batch_id == batch_id
                  and "_inbox/" in i.relative_path]
         if not items:
-            from gui import i18n
             InfoBar.info("", "该批次没有待提交的图片",
                          parent=self._window(), duration=3000,
                          position=InfoBarPosition.TOP)
@@ -2096,7 +2093,6 @@ class BrowserToolController:
                 item_ids, target, progress_cb=progress_cb)
 
         def handle(count):
-            from gui import i18n
             InfoBar.success(
                 "", f"{count} 张已提交到 {target}",
                 parent=self._window(), duration=4000,

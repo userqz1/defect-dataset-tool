@@ -196,7 +196,6 @@ def find_duplicates_from_samples(
     analysis chain reads from one source. The returned ``DuplicateGroup``
     items contain the same ``ImageInfo`` objects as the legacy path.
     """
-    from .unified import SampleSet as _SS  # noqa: F811
 
     images = [
         ImageInfo(

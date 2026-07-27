@@ -6,7 +6,6 @@ import logging
 import logging.handlers
 import sys
 import threading
-import traceback
 from pathlib import Path
 
 from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
