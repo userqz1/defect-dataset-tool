@@ -36,7 +36,7 @@ If the argument is missing or unknown, print the list above and stop.
 
 7. **Connect the dataset lifecycle.** In `main_window._on_scan_done`, forward the loaded dataset to the new view's `set_dataset`. In the empty state, ensure the view is disabled or shows its own empty-state message.
 
-8. **Verify with compile.** Run `"C:/ProgramData/miniconda3/envs/defect-tool/python.exe" -m compileall -q gui main.py`. If it fails, fix and retry once. If it fails again, revert and report the error — do not leave broken code behind.
+8. **Verify with compile.** Run `conda run -n defect-tool python -m compileall -q gui main.py`. If it fails, fix and retry once. If it fails again, revert and report the error — do not leave broken code behind.
 
 9. **Report what was done** in ≤ 10 lines: files created, files edited, nav entry added, what the user should click to reach the feature, and any follow-ups that are out of scope (tests, polish, empty-state copy).
 

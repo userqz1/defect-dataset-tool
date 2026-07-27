@@ -10,7 +10,7 @@ Steps:
 1. In a single message, launch three things in parallel:
    - Agent `core-guardian` with prompt: "Audit core/ for purity violations. Report only violations and warnings, no clean-file enumeration."
    - Agent `style-cop` with prompt: "Audit gui/views and gui/widgets against the three-layer styling rules. Report violations, borderline cases, and stats."
-   - Bash command (foreground, fast): `"C:/ProgramData/miniconda3/envs/defect-tool/python.exe" -m compileall -q core gui main.py` with description `compile check`. Capture the exit code.
+   - Shell command (foreground, fast): `conda run -n defect-tool python -m compileall -q core gui main.py` with description `compile check`. Capture the exit code.
 
 2. While agents are running, do nothing else — wait for all three to return.
 

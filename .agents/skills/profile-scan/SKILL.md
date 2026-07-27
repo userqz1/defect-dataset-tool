@@ -13,7 +13,7 @@ Steps:
    - Prints the top 25 cumulative-time functions, filtered to rows whose filename contains `core/` or `site-packages` hotspots.
    - Also prints: total images scanned, total annotations counted, Phase 1 wall time, Phase 2 wall time.
 
-2. Run the driver with the project's python: `"C:/ProgramData/miniconda3/envs/defect-tool/python.exe" <temp_file> <dataset_path>`. Use a generous timeout (up to 10 minutes) since large datasets take a while.
+2. Run the driver with the project's python: `conda run --no-capture-output -n defect-tool python <temp_file> <dataset_path>`. Use a generous timeout (up to 10 minutes) since large datasets take a while.
 
 3. Report:
    - Phase 1 and Phase 2 wall clock times.
