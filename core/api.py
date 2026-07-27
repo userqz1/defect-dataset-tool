@@ -204,6 +204,8 @@ __all__ = [
     "DuplicateGroup", "find_duplicates", "find_duplicates_from_samples",
     # Split
     "SplitOptions", "SplitResult", "split_dataset",
+    # Project
+    "WRITEBACK_FORMATS",
     # Annotation I/O
     "parse_annotation", "write_annotation",
     # History / undo
@@ -213,7 +215,7 @@ __all__ = [
     "run_export",
     # Unified model + format hub
     "BBox", "Region", "Sample", "SampleSet",
-    "load_sample", "load_samples", "load_vlm_jsonl",
+    "load_sample", "load_samples", "load_samples_from_split", "load_vlm_jsonl",
     "UnifiedExportOptions", "UnifiedExportResult",
     "export_samples", "unified_formats",
     # Format center
