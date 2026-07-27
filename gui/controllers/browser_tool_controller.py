@@ -1817,7 +1817,13 @@ class BrowserToolController:
         # Per-file formats: labelme / yolo / voc
         # Read source labels → unified model → write in project format.
         # This guarantees on-disk files always match annotation_format.
-        ext_map = {"labelme": ".json", "yolo": ".txt", "voc": ".xml"}
+        ext_map = {
+            "labelme": ".json",
+            "yolo": ".txt",
+            "yoloobb": ".txt",
+            "dota": ".txt",
+            "voc": ".xml",
+        }
         ext = ext_map.get(fmt, ".json")
         source_dir = _P(source)
 

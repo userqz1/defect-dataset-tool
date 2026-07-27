@@ -66,6 +66,8 @@ from gui.theme import T
 _FMT_DISPLAY = {
     "labelme": "LabelMe",
     "yolo": "YOLO",
+    "yolo-obb": "YOLO-OBB",
+    "yoloobb": "YOLO-OBB",
     "voc": "VOC",
     "coco": "COCO",
     "coco-seg": "COCO-seg",

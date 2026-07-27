@@ -17,7 +17,9 @@ Layout detection (决定一次、走一条路径)：
     Phase 2 (count_annotations)   — 可选的后置阶段，遍历所有 has_label 的图片解析 LabelMe JSON，
                                     更新 dataset.total_annotations。
 
-忽略目录：.git node_modules __pycache__ .idea .vscode dist build venv .venv
+忽略目录：`.` / `_` 开头的一律不当类别（.git .agents __pycache__ _inbox
+_review_* _backup_* …——应用自身与用户流水线的工作目录都走这个前缀约定），
+外加固定名单 node_modules dist build venv env。
 """
 from __future__ import annotations
 
@@ -63,8 +65,19 @@ def _scandir_safe(path: Path):
         return []
 
 
+def _ignored_dir(name: str) -> bool:
+    """Working / hidden dirs that must never be scanned as categories.
+
+    Beyond the fixed IGNORE_DIRS list, any ``.``- or ``_``-prefixed dir is
+    treated as internal by convention — ``.git`` / ``.agents`` /
+    ``__pycache__`` / ``_inbox`` / ``_review_*`` / ``_backup_*`` — both our
+    own working dirs and users' pipeline outputs follow it.
+    """
+    return name.startswith((".", "_")) or name in IGNORE_DIRS
+
+
 def _list_subdirs(root: Path) -> list[os.DirEntry]:
-    return [e for e in _scandir_safe(root) if e.is_dir() and e.name not in IGNORE_DIRS]
+    return [e for e in _scandir_safe(root) if e.is_dir() and not _ignored_dir(e.name)]
 
 
 def _has_image_file(d: Path, exts: set[str]) -> bool:
@@ -105,6 +118,17 @@ def _detect_layout(root: Path, exts: set[str]) -> str:
 
     subdirs = _list_subdirs(root)
 
+    # STRONG pair signal first: root/images (with files) + root/labels both
+    # exist → this IS the dataset. Real-world roots are often whole
+    # workspaces where sibling dirs (training runs / exported subsets /
+    # review crops) contain their own images/ trees — without this
+    # priority the standard check below hijacks the layout, the paired
+    # labels never match, and the junk dirs get scanned as categories.
+    root_images = root / IMAGE_SUBDIR
+    if (root_images.is_dir() and (root / LABEL_SUBDIR).is_dir()
+            and _has_image_file(root_images, exts)):
+        return "root_pair"
+
     # Standard layout wins over a stray cover.jpg / README.png at the root
     # (review #8). Previously a single image in the root demoted the whole
     # dataset to "single" / 未分类, which silently broke layouts where the
@@ -113,12 +137,12 @@ def _detect_layout(root: Path, exts: set[str]) -> str:
         if (Path(e.path) / IMAGE_SUBDIR).is_dir():
             return "standard"
 
-    # Single-category paired layout produced by many export/cleaning
-    # pipelines: root/images and root/labels are siblings. Without this
-    # branch the generic "flat" detector treats the images directory as
-    # a category and looks for labels inside root/images, so every existing
-    # root/labels/*.json appears missing.
-    root_images = root / IMAGE_SUBDIR
+    # Weaker pair signal (images/ with files but no labels/ dir yet):
+    # still the single-category paired layout produced by many export /
+    # cleaning pipelines. Without this branch the generic "flat" detector
+    # treats the images directory as a category and looks for labels
+    # inside root/images, so every existing root/labels/*.json appears
+    # missing.
     if root_images.is_dir() and _has_image_file(root_images, exts):
         return "root_pair"
 
@@ -147,7 +171,7 @@ def _walk(start: Path, exts: set[str], depth: int):
     if any(e.is_file() and os.path.splitext(e.name)[1].lower() in exts for e in entries):
         yield start
     for e in entries:
-        if e.is_dir() and e.name not in IGNORE_DIRS:
+        if e.is_dir() and not _ignored_dir(e.name):
             yield from _walk(Path(e.path), exts, depth + 1)
 
 

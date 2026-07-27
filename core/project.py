@@ -28,7 +28,7 @@ _DEFAULT_TARGET_FORMATS: dict[TaskType, str] = {
     TaskType.MULTI_LABEL: "CSV",
     TaskType.ANOMALY: "MVTec",
     TaskType.DETECTION: "YOLO",
-    TaskType.ORIENTED_DET: "JSONL",
+    TaskType.ORIENTED_DET: "YOLO-OBB",
     TaskType.SEMANTIC_SEG: "JSONL",
     TaskType.INSTANCE_SEG: "JSONL",
     TaskType.KEYPOINT: "LabelMe JSON",

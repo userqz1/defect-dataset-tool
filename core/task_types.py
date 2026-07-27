@@ -100,7 +100,7 @@ TASK_REGISTRY: dict[TaskType, TaskTypeInfo] = {
         needs_shapes=True,
         needs_image_label=False,
         valid_shape_types=("polygon",),
-        export_formats=("JSONL", "LLaVA", "ShareGPT", "Swift"),
+        export_formats=("YOLO-OBB", "DOTA", "LabelMe JSON", "JSONL", "LLaVA", "ShareGPT", "Swift"),
         augment_updates_shapes=True,
     ),
     TaskType.SEMANTIC_SEG: TaskTypeInfo(

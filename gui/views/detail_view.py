@@ -108,12 +108,37 @@ _SHAPE_CHOICES: tuple[tuple[str, object, str, str], ...] = (
 # ── Region ↔ Shape bridge (unified model ↔ legacy viewer model) ────
 
 def _region_to_shape(r: Region) -> Shape:
-    """Convert a unified Region to a legacy Shape for ImageViewer."""
-    if r.shape_type == "rectangle" and r.bbox:
+    """Convert a unified Region to a legacy Shape for ImageViewer.
+
+    Geometry conventions differ between the two models and MUST be
+    translated per shape type, not guessed from whichever field is set:
+
+    * ``circle`` — core keeps the circle's **bbox**; the viewer wants
+      ``[centre, edge]``.  Handing the bbox corners straight through made
+      every reloaded circle render at the top-left corner with a radius
+      √2× the half-diagonal (≈2.8× too big).
+    * ``point``  — core keeps a degenerate bbox *and* keypoints; taking the
+      bbox first produced two duplicated points, which then defeated the
+      ``len(points) < 2`` guards in the YOLO/VOC writers.
+    """
+    if r.shape_type == "circle" and r.bbox:
+        cx, cy = (r.bbox.x1 + r.bbox.x2) / 2.0, (r.bbox.y1 + r.bbox.y2) / 2.0
+        rad = (r.bbox.x2 - r.bbox.x1) / 2.0
+        pts = [(cx, cy), (cx + rad, cy)]
+    elif r.shape_type == "point":
+        if r.keypoints:
+            pts = [(r.keypoints[0][0], r.keypoints[0][1])]
+        elif r.bbox:
+            pts = [((r.bbox.x1 + r.bbox.x2) / 2.0,
+                    (r.bbox.y1 + r.bbox.y2) / 2.0)]
+        else:
+            pts = []
+    elif r.shape_type == "rectangle" and r.bbox:
         pts = [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y2)]
     elif r.polygon:
         pts = list(r.polygon)
     elif r.bbox:
+        # rectangle / ellipse — both are stored as their bounding box.
         pts = [(r.bbox.x1, r.bbox.y1), (r.bbox.x2, r.bbox.y2)]
     elif r.keypoints:
         pts = [(x, y) for x, y, _ in r.keypoints]
@@ -124,18 +149,28 @@ def _region_to_shape(r: Region) -> Shape:
 
 
 def _shape_to_region(s: Shape) -> Region:
-    """Convert a legacy Shape back to a unified Region."""
+    """Convert a legacy Shape back to a unified Region.
+
+    Inverse of :func:`_region_to_shape` — see its note on per-type
+    conventions.  A circle's ``[centre, edge]`` must become the circle's
+    bbox, NOT ``BBox.from_points`` of those two points (that would be a
+    quarter-size box hanging off the centre).
+    """
     region = Region(label=s.label, shape_type=s.shape_type, text=s.text)
-    if s.shape_type == "rectangle" and len(s.points) >= 2:
+    if s.shape_type == "circle" and len(s.points) >= 2:
+        (cx, cy), (ex, ey) = s.points[0], s.points[1]
+        rad = ((ex - cx) ** 2 + (ey - cy) ** 2) ** 0.5
+        region.bbox = BBox(cx - rad, cy - rad, cx + rad, cy + rad)
+    elif s.shape_type == "rectangle" and len(s.points) >= 2:
         region.bbox = BBox.from_points(s.points)
     elif s.shape_type in ("polygon", "linestrip") and s.points:
         region.polygon = list(s.points)
         region.bbox = BBox.from_points(s.points)
     elif s.shape_type == "point" and s.points:
         region.keypoints = [(p[0], p[1], 2) for p in s.points]
-        if s.points:
-            region.bbox = BBox.from_points(s.points)
+        region.bbox = BBox.from_points(s.points)
     else:
+        # ellipse and anything else whose points already are its bbox
         if s.points:
             region.bbox = BBox.from_points(s.points)
     return region
@@ -893,6 +928,12 @@ class DetailView(QWidget):
         if fmt:
             self._annotation_format = fmt
 
+    def _apply_polygon_constraints(self) -> None:
+        if self._task_type is TaskType.ORIENTED_DET:
+            self.viewer.set_polygon_constraints(min_points=4, point_limit=4)
+        else:
+            self.viewer.set_polygon_constraints()
+
     def set_write_enabled(self, enabled: bool) -> None:
         """Flip the write gate.  DatasetBrowserView drives this from
         ``AppState.scan_active_changed`` so save handlers refuse while
@@ -945,6 +986,7 @@ class DetailView(QWidget):
             return
         self._task_type = new_task_type
         self._spec = new_spec
+        self._apply_polygon_constraints()
         self._rebuild_panes()
         self._update_topbar_for_spec()
         self._apply_toolbar_compact()
@@ -1072,6 +1114,8 @@ class DetailView(QWidget):
         }
         if project.task_type not in shape_tasks:
             return ()
+        if project.task_type is TaskType.ORIENTED_DET:
+            return ("polygon",)
         return ("rectangle", "polygon", "point", "circle", "ellipse", "linestrip")
 
     # ════════════════════════════════════════════════════════════════

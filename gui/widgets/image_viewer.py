@@ -93,6 +93,8 @@ class ImageViewer(QGraphicsView):
         # 多边形绘制状态
         self._poly_points: list[QPointF] = []
         self._temp_poly_item: QGraphicsPolygonItem | None = None
+        self._polygon_min_points: int | None = None
+        self._polygon_point_limit: int | None = None
 
         # Bottom-corner HUD (zoom controls + cursor coords + pixel value).
         # Cached QImage of the pixmap so per-move pixel sampling is cheap.
@@ -205,6 +207,11 @@ class ImageViewer(QGraphicsView):
 
     def load_pixmap(self, pix: QPixmap) -> None:
         """Set a pre-loaded pixmap, replacing scene contents."""
+        # Drop any in-progress drawing FIRST. scene.clear() below destroys the
+        # temp items' C++ objects while our Python refs survive, so a later
+        # mouse-move would touch a deleted object (hard crash); the collected
+        # polygon vertices would also leak onto the next image.
+        self._discard_in_progress_draw()
         self._scene.clear()
         self._shape_items.clear()
         self._handle_items.clear()
@@ -234,10 +241,17 @@ class ImageViewer(QGraphicsView):
             return
         for shape in annotation.shapes:
             item = self._make_shape_item(shape)
-            if item is not None:
-                item.setVisible(self._annotation_visible)
-                self._scene.addItem(item)
-                self._shape_items.append(item)
+            if item is None:
+                # MUST stay index-aligned with annotation.shapes: _hit_test,
+                # select_shape, delete_shape_at and the panes all treat a
+                # _shape_items index as a shapes index. Skipping an
+                # undrawable shape (unknown shape_type from another tool,
+                # too few points) used to shift every later index — clicking
+                # one box then pressing Del deleted a different one.
+                item = QGraphicsRectItem(QRectF(0, 0, 0, 0))
+            item.setVisible(self._annotation_visible)
+            self._scene.addItem(item)
+            self._shape_items.append(item)
 
     def get_annotation(self) -> Annotation | None:
         return self._annotation
@@ -252,6 +266,9 @@ class ImageViewer(QGraphicsView):
         else:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.unsetCursor()
+            # A half-drawn polygon must not survive leaving edit mode —
+            # otherwise its vertices reappear on the next shape/image.
+            self._discard_in_progress_draw()
             self._clear_selection_highlight()
             self._clear_handle_items()
             self._clear_resize_state()
@@ -269,11 +286,45 @@ class ImageViewer(QGraphicsView):
         self._cancel_polygon()
         self._draw_shape_type = shape_type
 
+    def set_polygon_constraints(
+        self,
+        *,
+        min_points: int | None = None,
+        point_limit: int | None = None,
+    ) -> None:
+        """Constrain polygon drawing for task-specific tools such as OBB."""
+        self._polygon_min_points = min_points
+        self._polygon_point_limit = point_limit
+        if (point_limit is not None
+                and self._draw_shape_type == "polygon"
+                and len(self._poly_points) >= point_limit):
+            self.finish_polygon()
+
     def _cancel_polygon(self) -> None:
-        if self._temp_poly_item is not None:
-            self._scene.removeItem(self._temp_poly_item)
-            self._temp_poly_item = None
+        item, self._temp_poly_item = self._temp_poly_item, None
+        if item is not None:
+            try:
+                self._scene.removeItem(item)
+            except RuntimeError:
+                # Already destroyed by a scene.clear() — nothing to remove.
+                pass
         self._poly_points = []
+
+    def _discard_in_progress_draw(self) -> None:
+        """Abandon any half-drawn shape (polygon vertices / rubber-band box).
+
+        Called when the canvas is about to be replaced or edit mode ends, so
+        no drawing state survives into the next image.
+        """
+        self._cancel_polygon()
+        item, self._temp_rect_item = self._temp_rect_item, None
+        if item is not None:
+            try:
+                self._scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._drawing = False
+        self._draw_start = None
 
     def finish_polygon(self) -> None:
         """Commit the in-progress polygon / polyline (Enter key or double-click).
@@ -282,6 +333,9 @@ class ImageViewer(QGraphicsView):
         needs 3+ and closes.  Both accumulate via the same click-to-add path.
         """
         min_pts = 2 if self._draw_shape_type == "linestrip" else 3
+        if (self._draw_shape_type == "polygon"
+                and self._polygon_min_points is not None):
+            min_pts = self._polygon_min_points
         if len(self._poly_points) >= min_pts and self._annotation is not None:
             shape = Shape(
                 label=self._draw_label,
@@ -828,11 +882,16 @@ class ImageViewer(QGraphicsView):
                     if hit >= 0:
                         self.select_shape(hit)
                         return
+                scene_pos = self._clamp_to_scene(scene_pos)
                 self._poly_points.append(scene_pos)
                 self._update_temp_polygon(scene_pos)
                 self._clear_selection_highlight()
                 self._selected_index = -1
                 self.selection_changed.emit(-1)
+                if (self._draw_shape_type == "polygon"
+                        and self._polygon_point_limit is not None
+                        and len(self._poly_points) >= self._polygon_point_limit):
+                    self.finish_polygon()
                 return
             # 矩形模式：优先点选已有 shape
             hit = self._hit_test(scene_pos)
@@ -900,6 +959,7 @@ class ImageViewer(QGraphicsView):
     def _update_temp_polygon(self, hover_pos: QPointF) -> None:
         if not self._poly_points:
             return
+        hover_pos = self._clamp_to_scene(hover_pos)
         pts = list(self._poly_points) + [hover_pos]
         poly = QPolygonF(pts)
         if self._temp_poly_item is None:
@@ -918,7 +978,15 @@ class ImageViewer(QGraphicsView):
 
     def mouseReleaseEvent(self, event):  # type: ignore[override]
         if self._resizing:
-            self._apply_resize(self.mapToScene(event.pos()))
+            # Only commit geometry if the user actually DRAGGED.
+            # ``_resize_changed`` is set exclusively by _apply_resize, which
+            # runs from mouseMove — so it stays False for a plain click.
+            # Without this guard, merely clicking to select a shape snapped
+            # the nearest edge/vertex to the click point (grab tolerance is
+            # 9/scale scene px — tens of pixels on a zoomed-out large image)
+            # and silently marked the annotation dirty.
+            if self._resize_changed:
+                self._apply_resize(self.mapToScene(event.pos()))
             changed = self._resize_changed
             selected = self._resize_index
             self._clear_resize_state()

@@ -157,6 +157,42 @@ class TestParseYolo:
         for x, y in s.points:
             assert 0 <= x <= 1 and 0 <= y <= 1
 
+    def test_yolo_obb_four_points(self, tmp_path):
+        img_p = _touch(tmp_path / "a.jpg", _make_png())
+        p = _touch(
+            tmp_path / "a.txt",
+            "0 0.10 0.20 0.80 0.10 0.90 0.70 0.20 0.80\n",
+        )
+        r = parse_yolo(p, image_path=img_p, class_names=["plate"])
+        assert r.ok
+        s = r.annotation.shapes[0]
+        assert s.label == "plate"
+        assert s.shape_type == "polygon"
+        assert len(s.points) == 4
+        assert r.coord_space == "pixel"
+
+    def test_yolo_seg_many_points_not_misread_as_dota(self, tmp_path):
+        p = _touch(
+            tmp_path / "a.txt",
+            "0 0.10 0.10 0.80 0.10 0.90 0.50 0.50 0.90 0.20 0.60\n",
+        )
+        r = parse_yolo(p, class_names=["mask"])
+        assert r.ok
+        s = r.annotation.shapes[0]
+        assert s.label == "mask"
+        assert s.shape_type == "polygon"
+        assert len(s.points) == 5
+
+    def test_dota_labeltxt_line(self, tmp_path):
+        p = _touch(tmp_path / "a.txt", "10 20 80 10 90 70 20 80 plate 0\n")
+        r = parse_yolo(p)
+        assert r.ok
+        s = r.annotation.shapes[0]
+        assert s.label == "plate"
+        assert s.shape_type == "polygon"
+        assert len(s.points) == 4
+        assert r.coord_space == "pixel"
+
 
 class TestLoadYoloClasses:
     def test_from_classes_txt(self, tmp_path):

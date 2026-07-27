@@ -66,6 +66,16 @@ _reg(FormatInfo(
     classification=FieldSupport.PARTIAL,
 ))
 _reg(FormatInfo(
+    key="yoloobb", display_name="YOLO-OBB TXT", file_ext=".txt",
+    bbox=FieldSupport.FULL, polygon=FieldSupport.FULL,
+    classification=FieldSupport.PARTIAL,
+))
+_reg(FormatInfo(
+    key="dota", display_name="DOTA labelTxt", file_ext=".txt",
+    bbox=FieldSupport.FULL, polygon=FieldSupport.FULL,
+    classification=FieldSupport.PARTIAL,
+))
+_reg(FormatInfo(
     key="voc", display_name="Pascal VOC XML", file_ext=".xml",
     bbox=FieldSupport.FULL, classification=FieldSupport.PARTIAL,
 ))
@@ -190,7 +200,10 @@ def conversion_hints(src_key: str, dst_key: str) -> ConversionHint:
 
 def available_import_formats() -> list[str]:
     """Formats that can be imported (have readers)."""
-    return ["labelme", "yolo", "voc", "coco", "classification", "vlm_jsonl"]
+    return [
+        "labelme", "yolo", "yoloobb", "dota", "voc", "coco",
+        "classification", "vlm_jsonl",
+    ]
 
 
 def available_export_formats() -> list[str]:

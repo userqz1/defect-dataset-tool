@@ -282,3 +282,45 @@ def _make_png() -> bytes:
     ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
     raw = zlib.compress(b"\x00\xff\xff\xff")
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", raw) + chunk(b"IEND", b"")
+
+
+# ---- root_pair priority + working-dir ignore (workspace-root datasets) ----
+
+class TestWorkspaceRootDataset:
+    """A dataset root is often a whole workspace: the real data lives in
+    root/images + root/labels while sibling dirs hold training runs,
+    review crops (_review_*), backups (_backup_*), caches… Those must
+    neither hijack layout detection nor be scanned as categories."""
+
+    def test_root_pair_wins_over_workspace_junk(self, tmp_path):
+        _touch(tmp_path / "images" / "a.jpg")
+        _touch(tmp_path / "labels" / "a.json", b"{}")
+        # Junk siblings that used to hijack detection into "standard":
+        _touch(tmp_path / "det3cls" / "images" / "t.jpg")   # training subset
+        _touch(tmp_path / "_review_x" / "crop.jpg")         # review crops
+        _touch(tmp_path / ".agents" / "d.jpg")              # dot dir
+        assert _detect_layout(tmp_path, IMG_EXTS) == "root_pair"
+
+    def test_root_pair_scan_only_sees_paired_data(self, tmp_path):
+        _touch(tmp_path / "images" / "a.jpg")
+        _touch(tmp_path / "images" / "b.jpg")
+        _touch(tmp_path / "labels" / "a.json", b"{}")
+        _touch(tmp_path / "det3cls" / "images" / "t.jpg")
+        _touch(tmp_path / "_review_x" / "crop.jpg")
+        ds = scan_dataset(tmp_path, IMG_EXTS)
+        assert ds.layout == "root_pair"
+        imgs = [i for c in ds.categories for i in c.images]
+        assert {i.path.name for i in imgs} == {"a.jpg", "b.jpg"}
+        by_name = {i.path.name: i for i in imgs}
+        assert by_name["a.jpg"].has_label       # labels/a.json paired
+        assert not by_name["b.jpg"].has_label
+
+    def test_underscore_and_dot_dirs_never_become_categories(self, tmp_path):
+        _touch(tmp_path / "cats" / "images" / "a.jpg")
+        _touch(tmp_path / "_backup_old" / "b.jpg")
+        _touch(tmp_path / "__pycache__" / "c.jpg")
+        _touch(tmp_path / ".agents" / "d.jpg")
+        ds = scan_dataset(tmp_path, IMG_EXTS)
+        assert ds.layout == "standard"
+        assert [c.name for c in ds.categories] == ["cats"]
+        assert ds.total_images == 1

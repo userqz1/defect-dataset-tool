@@ -25,6 +25,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from .labels import normalize_label
+from .oriented_box import normalized_quad_coords, region_to_quad
 from .unified import BBox, Region, Sample, SampleSet
 
 # ──────────────────────────────────────────────────────────────────────
@@ -365,6 +366,130 @@ def _write_yolo(ss: SampleSet, opts: ExportOptions,
 
 
 # ── COCO ──────────────────────────────────────────────────────────────
+
+def _write_yolo_obb(ss: SampleSet, opts: ExportOptions,
+                    progress_cb) -> ExportResult:
+    """Write Ultralytics YOLO-OBB labels.
+
+    Label line format: ``class x1 y1 x2 y2 x3 y3 x4 y4`` with normalized
+    coordinates. Four-point polygons stay oriented; bboxes become
+    axis-aligned quads.
+    """
+    out = opts.out_dir
+    report = ExportResult()
+    cls_list = ss.class_names
+    cls_idx = {c: i for i, c in enumerate(cls_list)}
+
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    for i, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(i, total, sample.image_path.name)
+        try:
+            iw, ih = sample.image_width, sample.image_height
+            img_dir = out / "images" / split
+            lbl_dir = out / "labels" / split
+            if opts.copy_images:
+                _copy_image(sample, img_dir, report)
+
+            lines: list[str] = []
+            for r in sample.regions:
+                if iw <= 0 or ih <= 0:
+                    continue
+                label = normalize_label(r.label)
+                if label not in cls_idx:
+                    continue
+                quad = region_to_quad(
+                    r, image_width=iw, image_height=ih, clamp=True)
+                if quad is None:
+                    continue
+                coords = normalized_quad_coords(quad, iw, ih)
+                lines.append(
+                    f"{cls_idx[label]} "
+                    + " ".join(f"{c:.6f}" for c in coords))
+            lbl_dir.mkdir(parents=True, exist_ok=True)
+            (lbl_dir / (sample.image_path.stem + ".txt")).write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            report.written_labels += 1
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    (out / "classes.txt").write_text(
+        "\n".join(cls_list) + "\n", encoding="utf-8")
+    yaml = ["path: .", "task: obb"]
+    if ss.train or ss.unsplit:
+        yaml.append("train: images/train")
+    if ss.val:
+        yaml.append("val: images/val")
+    if ss.test:
+        yaml.append("test: images/test")
+    yaml += [f"nc: {len(cls_list)}",
+             "names: [" + ", ".join(f"'{c}'" for c in cls_list) + "]"]
+    (out / "data.yaml").write_text("\n".join(yaml) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
+
+def _dota_label(label: str) -> str:
+    """DOTA class names are whitespace-delimited in labelTxt files."""
+    return normalize_label(label).replace(" ", "_")
+
+
+def _write_dota(ss: SampleSet, opts: ExportOptions,
+                progress_cb) -> ExportResult:
+    """Write DOTA-style oriented labels.
+
+    Label line format: ``x1 y1 x2 y2 x3 y3 x4 y4 class difficult`` in pixel
+    coordinates. Output is split as ``images/{split}`` + ``labelTxt/{split}``.
+    """
+    out = opts.out_dir
+    report = ExportResult()
+
+    all_samples = [(n, s) for n, batch in _iter_splits(ss) for s in batch]
+    total = len(all_samples)
+
+    for i, (split, sample) in enumerate(all_samples):
+        if progress_cb:
+            progress_cb(i, total, sample.image_path.name)
+        try:
+            iw, ih = sample.image_width, sample.image_height
+            img_dir = out / "images" / split
+            lbl_dir = out / "labelTxt" / split
+            if opts.copy_images:
+                _copy_image(sample, img_dir, report)
+
+            lines: list[str] = []
+            for r in sample.regions:
+                label = _dota_label(r.label)
+                if not label:
+                    continue
+                quad = region_to_quad(
+                    r, image_width=iw, image_height=ih, clamp=True)
+                if quad is None:
+                    continue
+                coords = [v for pt in quad for v in pt]
+                difficult = 1 if r.difficult else 0
+                lines.append(
+                    " ".join(f"{c:.1f}" for c in coords)
+                    + f" {label} {difficult}")
+            lbl_dir.mkdir(parents=True, exist_ok=True)
+            (lbl_dir / (sample.image_path.stem + ".txt")).write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            report.written_labels += 1
+        except Exception as e:
+            report.skipped.append((sample.image_path, str(e)))
+
+    class_names = [_dota_label(c) for c in ss.class_names]
+    (out / "classes.txt").write_text(
+        "\n".join(class_names) + "\n", encoding="utf-8")
+
+    if progress_cb:
+        progress_cb(total, total, "")
+    return report
+
 
 def _write_coco(ss: SampleSet, opts: ExportOptions,
                 progress_cb) -> ExportResult:
@@ -1045,6 +1170,8 @@ def _write_swift(ss: SampleSet, opts: ExportOptions,
 
 _WRITERS.update({
     "yolo": _write_yolo,
+    "yoloobb": _write_yolo_obb,
+    "dota": _write_dota,
     "coco": _write_coco,
     "voc": _write_voc,
     "labelme": _write_labelme,

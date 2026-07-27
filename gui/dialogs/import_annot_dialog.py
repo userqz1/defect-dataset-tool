@@ -24,6 +24,8 @@ from qfluentwidgets import (
 _FORMAT_ITEMS = [
     ("labelme", "LabelMe JSON (.json)"),
     ("yolo", "YOLO TXT (.txt)"),
+    ("yoloobb", "YOLO-OBB TXT (.txt)"),
+    ("dota", "DOTA labelTxt (.txt)"),
     ("voc", "Pascal VOC XML (.xml)"),
     ("coco", "COCO JSON (.json)"),
     ("vlm_jsonl", "VLM JSONL — LLaVA / ShareGPT / Swift (.jsonl)"),

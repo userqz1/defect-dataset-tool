@@ -20,6 +20,7 @@ class TestRegistry:
         keys = {s.key for s in all_schemas()}
         assert keys == {
             "YOLO", "COCO", "VOC", "LabelMe JSON",
+            "YOLO-OBB", "DOTA",
             "ImageFolder", "MVTec", "PairedFolder",
             "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift",
         }
@@ -51,6 +52,11 @@ class TestRegistry:
         from core.api import schemas_for_task
         ano = {s.key for s in schemas_for_task(TaskType.ANOMALY)}
         assert "MVTec" in ano
+
+    def test_oriented_detection_includes_obb_formats(self):
+        from core.api import schemas_for_task
+        obb = {s.key for s in schemas_for_task(TaskType.ORIENTED_DET)}
+        assert {"YOLO-OBB", "DOTA"} <= obb
 
 
 # ---------- Per-schema slot semantics ----------

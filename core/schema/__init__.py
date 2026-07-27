@@ -24,6 +24,7 @@ from ..task_types import TaskType
 from .base import ComplianceReport, Schema, Slot, SlotKind, SlotStatus
 from .coco import COCO_SCHEMA
 from .csv import CSV_SCHEMA
+from .dota import DOTA_SCHEMA
 from .imagefolder import IMAGEFOLDER_SCHEMA
 from .jsonl import JSONL_SCHEMA
 from .labelme import LABELME_SCHEMA
@@ -34,6 +35,7 @@ from .sharegpt import SHAREGPT_SCHEMA
 from .swift import SWIFT_SCHEMA
 from .voc import VOC_SCHEMA
 from .yolo import YOLO_SCHEMA
+from .yolo_obb import YOLO_OBB_SCHEMA
 
 
 _REGISTRY: dict[str, Schema] = {}
@@ -64,6 +66,8 @@ def schemas_for_task(task_type: TaskType) -> list[Schema]:
 # (§1.2 "80% users"), generic tabular/flat middle, VLM specialties last.
 
 register(YOLO_SCHEMA)
+register(YOLO_OBB_SCHEMA)
+register(DOTA_SCHEMA)
 register(COCO_SCHEMA)
 register(VOC_SCHEMA)
 register(LABELME_SCHEMA)

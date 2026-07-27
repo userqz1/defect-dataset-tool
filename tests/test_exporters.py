@@ -50,6 +50,7 @@ class TestRegistryComplete:
     def test_all_schemas_registered(self):
         expected = {
             "YOLO", "COCO", "VOC", "LabelMe JSON",
+            "YOLO-OBB", "DOTA",
             "ImageFolder", "MVTec", "PairedFolder",
             "CSV", "JSONL", "ShareGPT", "LLaVA", "Swift",
         }
@@ -298,6 +299,50 @@ class TestSegmentationExport:
         assert parts[0].isdigit()
         for v in parts[1:]:
             assert 0.0 <= float(v) <= 1.0
+
+
+class TestOrientedBoxExport:
+    def _obb_set(self, tmp_path):
+        from core.unified import BBox, Region
+        quad = [(10.0, 20.0), (80.0, 10.0),
+                (90.0, 70.0), (20.0, 80.0)]
+        region = Region(label="plate", polygon=quad,
+                        bbox=BBox.from_points(quad), shape_type="polygon")
+        return _one_region_set(tmp_path, 100, 100, region)
+
+    def test_yolo_obb_writes_four_point_lines(self, tmp_path):
+        out = tmp_path / "obb_yolo"
+        export_samples(self._obb_set(tmp_path), "YOLO-OBB",
+                       ExportOptions(out_dir=out, copy_images=False))
+        txt = next((out / "labels" / "train").glob("*.txt")).read_text().strip()
+        parts = txt.split()
+        assert len(parts) == 9, parts
+        assert parts[0].isdigit()
+        for v in parts[1:]:
+            assert 0.0 <= float(v) <= 1.0
+        assert "task: obb" in (out / "data.yaml").read_text(encoding="utf-8")
+
+    def test_dota_writes_pixel_quad_lines(self, tmp_path):
+        out = tmp_path / "obb_dota"
+        export_samples(self._obb_set(tmp_path), "DOTA",
+                       ExportOptions(out_dir=out, copy_images=False))
+        txt = next((out / "labelTxt" / "train").glob("*.txt")).read_text().strip()
+        parts = txt.split()
+        assert len(parts) == 10, parts
+        assert parts[8] == "plate"
+        assert parts[9] == "0"
+
+    def test_yolo_obb_does_not_flatten_segmentation_polygons(self, tmp_path):
+        from core.unified import BBox, Region
+        tri = [(10.0, 10.0), (90.0, 10.0), (50.0, 90.0)]
+        region = Region(label="crack", polygon=tri,
+                        bbox=BBox.from_points(tri), shape_type="polygon")
+        ss = _one_region_set(tmp_path, 100, 100, region)
+        out = tmp_path / "obb_skip_seg"
+        export_samples(ss, "YOLO-OBB",
+                       ExportOptions(out_dir=out, copy_images=False))
+        txt = next((out / "labels" / "train").glob("*.txt")).read_text()
+        assert txt == ""
 
 
 class TestEllipse:

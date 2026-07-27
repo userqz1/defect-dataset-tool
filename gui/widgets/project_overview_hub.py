@@ -70,6 +70,8 @@ _KIND_FILE = "file"
 _FMT_DISPLAY = {
     "labelme": "LabelMe JSON",
     "yolo": "YOLO",
+    "yolo-obb": "YOLO-OBB",
+    "yoloobb": "YOLO-OBB",
     "voc": "Pascal VOC",
     "coco": "COCO",
     "coco-seg": "COCO-seg",

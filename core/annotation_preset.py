@@ -101,11 +101,11 @@ PRESETS: tuple[AnnotationPreset, ...] = (
     ),
     AnnotationPreset(
         id="oriented_dota",
-        display_name="旋转框检测 · JSONL",
-        description="多边形旋转框,导出为可训练 JSONL",
+        display_name="旋转框检测 · YOLO-OBB",
+        description="四点旋转框,导出为 YOLO-OBB 或 DOTA",
         task_type=TaskType.ORIENTED_DET,
         caption=False, conversations=False, grounding=False,
-        target_export="JSONL",
+        target_export="YOLO-OBB",
     ),
     AnnotationPreset(
         id="vlm_llava",

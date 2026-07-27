@@ -20,7 +20,10 @@ from pathlib import Path
 from .models import Category, Dataset, ImageInfo
 
 DEFAULT_DB = Path.home() / ".dataforge" / "index.sqlite"
-CACHE_VERSION = "layout-root-pair-v2"
+# v3: root_pair 优先于 standard（根级 images+labels 配对赢过“子目录里有
+# images/ 就算多类别”），且 . / _ 开头的工作目录不再被扫成类别。升版让旧
+# 缓存全部失效，强制按新布局逻辑重扫。
+CACHE_VERSION = "layout-root-pair-v3"
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:

@@ -23,6 +23,7 @@ from xml.etree import ElementTree as ET
 from .annotation import ParseResult, parse_labelme
 from .labels import normalize_label
 from .models import Annotation, Shape
+from .oriented_box import denormalized_quad_coords, normalize_quad
 
 LABEL_EXTENSIONS = {".json", ".txt", ".xml"}
 
@@ -186,6 +187,13 @@ def _image_size(image_path: Path | None) -> tuple[int, int] | None:
         return None
 
 
+def _float_parts(parts: list[str]) -> list[float] | None:
+    try:
+        return [float(p) for p in parts]
+    except ValueError:
+        return None
+
+
 def parse_yolo(
     label_path: Path,
     image_path: Path | None = None,
@@ -221,6 +229,49 @@ def parse_yolo(
         if not line or line.startswith("#"):
             continue
         parts = line.split()
+        if len(parts) >= 10 and _float_parts([parts[8]]) is None:
+            dota_coords = _float_parts(parts[:8])
+            if dota_coords is not None:
+                label = normalize_label(parts[8])
+                if not label:
+                    continue
+                quad = normalize_quad(
+                    [(dota_coords[i], dota_coords[i + 1])
+                     for i in range(0, 8, 2)]
+                )
+                if quad is None:
+                    continue
+                coord_space = "pixel"
+                shapes.append(Shape(
+                    label=label, shape_type="polygon", points=quad))
+                continue
+
+        if len(parts) >= 7 and len(parts) % 2 == 1:
+            coord_values = _float_parts(parts[1:])
+            if coord_values is not None and len(coord_values) % 2 == 0:
+                try:
+                    cls = int(float(parts[0]))
+                except ValueError:
+                    continue
+                if class_names:
+                    label = (normalize_label(class_names[cls])
+                             if 0 <= cls < len(class_names) else f"#{cls}")
+                else:
+                    label = str(cls)
+                label = normalize_label(label)
+                if not label:
+                    continue
+                quad = None
+                if len(coord_values) == 8:
+                    quad = denormalized_quad_coords(coord_values, iw, ih)
+                pts = quad or [
+                    (coord_values[i] * iw, coord_values[i + 1] * ih)
+                    for i in range(0, len(coord_values), 2)
+                ]
+                if len(pts) >= 3:
+                    shapes.append(Shape(
+                        label=label, shape_type="polygon", points=pts))
+                    continue
         if len(parts) < 5:
             continue
         try:
@@ -229,6 +280,7 @@ def parse_yolo(
         except ValueError:
             continue
         # 反归一化到像素坐标（若有 image size）；否则留作归一化。
+        cxp, cyp = cx * iw, cy * ih
         cxp, cyp = cx * iw, cy * ih
         wp, hp = w * iw, h * ih
         x1, y1 = cxp - wp / 2, cyp - hp / 2

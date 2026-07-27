@@ -24,8 +24,10 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
+from .dataset import UNCATEGORIZED
 from .labels import normalize_label
 from .models import Dataset, ImageInfo
+from .oriented_box import denormalized_quad_coords, normalize_quad
 from .unified import BBox, Region, Sample, SampleSet
 
 logger = logging.getLogger(__name__)
@@ -79,7 +81,7 @@ def load_sample(
     try:
         if fmt == "labelme":
             _read_labelme(sample, img.label_path, _prefetched_labelme)
-        elif fmt == "yolo":
+        elif fmt in {"yolo", "yoloobb", "dota"}:
             # YOLO bboxes are normalized — we need real image size before
             # _read_yolo runs, and the .txt itself carries none.
             if sample.image_width <= 0 or sample.image_height <= 0:
@@ -100,8 +102,17 @@ def load_sample(
     if sample.image_width <= 0 or sample.image_height <= 0:
         sample.image_width, sample.image_height = _image_size(img.path)
 
-    # For image-level tasks: derive image_labels from category if empty
-    if not sample.image_labels and img.category:
+    # For image-level tasks: derive image_labels from the directory category.
+    #
+    # ONLY for genuinely image-level samples. A region-bearing sample
+    # (detection / segmentation) must NOT pick up its folder name as a class:
+    # image_labels feed SampleSet.class_names, which is the export class
+    # registry, so the folder name would appear as a phantom class in
+    # YOLO classes.txt / data.yaml / COCO categories AND shift every real
+    # class id by one. The synthetic "(未分类)" placeholder is never a real
+    # class, so it is excluded outright.
+    if (not sample.image_labels and img.category
+            and img.category != UNCATEGORIZED and not sample.regions):
         sample.image_labels = [img.category]
 
     return sample
@@ -440,6 +451,13 @@ def _read_labelme(sample: Sample, json_path: Path,
 # YOLO reader
 # ──────────────────────────────────────────────────────────────────────
 
+def _float_parts(parts: list[str]) -> list[float] | None:
+    try:
+        return [float(p) for p in parts]
+    except ValueError:
+        return None
+
+
 def _read_yolo(sample: Sample, txt_path: Path,
                class_names: list[str] | None) -> None:
     try:
@@ -457,11 +475,31 @@ def _read_yolo(sample: Sample, txt_path: Path,
         if not line or line.startswith("#"):
             continue
         parts = line.split()
+        if len(parts) >= 10 and _float_parts([parts[8]]) is None:
+            dota_coords = _float_parts(parts[:8])
+            if dota_coords is not None:
+                label = normalize_label(parts[8])
+                if not label:
+                    continue
+                quad = normalize_quad(
+                    [(dota_coords[i], dota_coords[i + 1])
+                     for i in range(0, 8, 2)]
+                )
+                if quad is None:
+                    continue
+                sample.regions.append(Region(
+                    label=label,
+                    bbox=BBox.from_points(quad),
+                    polygon=quad,
+                    shape_type="polygon",
+                    difficult=(parts[9] == "1"),
+                ))
+                continue
+
         if len(parts) < 5:
             continue
         try:
             cls_id = int(float(parts[0]))
-            cx, cy, w, h = (float(x) for x in parts[1:5])
         except ValueError:
             continue
 
@@ -472,6 +510,30 @@ def _read_yolo(sample: Sample, txt_path: Path,
         label = normalize_label(label)
         if not label:
             continue
+
+        coord_values = _float_parts(parts[1:])
+        if coord_values is None:
+            continue
+        if len(coord_values) >= 6 and len(coord_values) % 2 == 0:
+            quad = None
+            if len(coord_values) == 8:
+                quad = denormalized_quad_coords(coord_values, iw, ih)
+            pts = quad or [
+                (coord_values[i] * iw, coord_values[i + 1] * ih)
+                for i in range(0, len(coord_values), 2)
+            ]
+            if len(pts) >= 3:
+                sample.regions.append(Region(
+                    label=label,
+                    bbox=BBox.from_points(pts),
+                    polygon=pts,
+                    shape_type="polygon",
+                ))
+                continue
+
+        if len(coord_values) < 4:
+            continue
+        cx, cy, w, h = coord_values[:4]
 
         bbox = BBox.from_yolo(cx, cy, w, h, iw, ih)
         conf = float(parts[5]) if len(parts) > 5 else 1.0

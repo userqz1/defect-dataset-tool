@@ -33,6 +33,10 @@ def schema_key_for_target_format(target_format: str) -> str:
     normalized = normalize_target_format(target_format)
     if normalized in {"yolo", "yoloultralytics", "ultralytics"}:
         return "YOLO"
+    if normalized in {"yoloobb", "ultralyticsobb", "obb"}:
+        return "YOLO-OBB"
+    if normalized in {"dota", "dotalabeltxt"}:
+        return "DOTA"
     if normalized in {"coco", "cocodetection"}:
         return "COCO"
     if normalized in {"voc", "pascalvoc"}:
@@ -108,7 +112,8 @@ def sample_is_complete_for_target(
         return bool(sample.image_labels or sample.category)
     if target in {"bbox", "box", "detection", "objectdetection"}:
         return any(_region_has_geometry(r) for r in sample.regions)
-    if target in {"orientedbbox", "orientedbox", "orienteddetection"}:
+    if target in {"orientedbbox", "orientedbox", "orienteddetection",
+                  "yoloobb", "ultralyticsobb", "obb", "dota", "dotalabeltxt"}:
         return any(_region_has_polygon(r) for r in sample.regions)
     if target in {"segmentation", "semanticsegmentation", "instancesegmentation"}:
         return any(_region_has_polygon(r) for r in sample.regions)

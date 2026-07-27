@@ -103,6 +103,14 @@ class MainWindow(FluentWindow):
         from gui.widgets.brand_title_bar import BrandTitleBar
         self._brand_bar = BrandTitleBar(self)
         self.setTitleBar(self._brand_bar)
+        # 闪退取证②（长期保留）：qfluentwidgets 把标题栏 X 的 clicked 直连
+        # C++ 的 close 槽，closeEvent 的栈分不清"用户点的 X"还是"代码投递
+        # 的关闭"。这里在 X 按下时单独记一条 —— 日志里有它 + closeEvent =
+        # 用户关闭；只有 closeEvent 没有它 = 有东西在偷偷关主窗口。
+        _close_btn = getattr(self._brand_bar, "closeBtn", None)
+        if _close_btn is not None:
+            _close_btn.pressed.connect(
+                lambda: logger.info("titleBar close button pressed (user)"))
 
         from core.user_settings import load_settings
         s = load_settings()
@@ -481,6 +489,16 @@ class MainWindow(FluentWindow):
         save_settings(UserSettings(theme=name))
 
     def closeEvent(self, e):
+        # 闪退取证（长期保留）：记录这次关闭由谁触发。spontaneous=True 是
+        # 系统/用户级关闭（Alt+F4、任务栏）；False 时栈里会显示调用
+        # close() 的代码路径 —— 点标题栏 X 也是 False，但栈里会出现
+        # qfluentwidgets titlebar 的帧，能区分"用户点的"还是"代码关的"。
+        import traceback
+        logger.info(
+            "MainWindow.closeEvent: spontaneous=%s; caller stack:\n%s",
+            e.spontaneous(),
+            "".join(traceback.format_stack(limit=25)),
+        )
         self._state.close_dataset()
         self.browser.cleanup()
         # Process any pending deleteLater calls from workers that just
