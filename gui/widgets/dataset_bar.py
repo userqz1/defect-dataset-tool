@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     FluentIcon as FIF,
+    PushButton,
     ToolButton,
 )
 
@@ -264,11 +265,14 @@ class DatasetBar(QFrame):
         self._catalog_btn.toggled.connect(self.catalog_toggled.emit)
         lay.addWidget(self._catalog_btn)
 
-        # "Open another dataset" is a secondary in-workbench action —
-        # the primary entry lives on the home page.  Render as a small
-        # tool button (icon-only) instead of the v3 PrimaryPushButton.
-        self._open_btn = ToolButton(FIF.FOLDER)
-        self._open_btn.setToolTip(i18n.t("ds.open_dir"))
+        # Switching datasets is the one in-workbench action users could
+        # not find: as an icon-only ToolButton its meaning lived entirely
+        # in a tooltip, and the other two routes (nav-rail home, brand
+        # block) are icon-only too. It carries a visible label now.
+        # NEVER setFixedWidth here — CLAUDE.md gotcha: an icon + CJK-text
+        # button clips its label. Let it shrink-wrap.
+        self._open_btn = PushButton(FIF.FOLDER, i18n.t("ds.open_dir"))
+        self._open_btn.setToolTip(i18n.t("ds.open_dir.tip"))
         self._open_btn.clicked.connect(self.open_clicked.emit)
         lay.addWidget(self._open_btn)
 
@@ -310,7 +314,8 @@ class DatasetBar(QFrame):
                       self._stat_ratio, self._stat_flagged,
                       self._stat_pending, self._stat_review, self._stat_ready):
             cell.retranslate()
-        self._open_btn.setToolTip(i18n.t("ds.open_dir"))
+        self._open_btn.setText(i18n.t("ds.open_dir"))
+        self._open_btn.setToolTip(i18n.t("ds.open_dir.tip"))
         self._loading_label.setText(i18n.t("ds.loading"))
         if self._annotation_format:
             self.set_annotation_format(self._annotation_format)
