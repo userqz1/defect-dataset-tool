@@ -106,11 +106,17 @@ class ImageViewer(QGraphicsView):
     # ---------- 底部 HUD（缩放 / 坐标 / 像素值）----------
 
     def _build_hud(self) -> None:
-        """A floating status strip in the bottom-left of the viewport:
-        zoom −/+, zoom %, fit / 1:1, then cursor coords + pixel RGB.
+        """A status strip *below* the image: zoom %, fit / 1:1, then cursor
+        coords + pixel RGB.
 
-        Lives on the viewport so it floats over the image and never steals
-        toolbar space (mature editors keep zoom out of the top ribbon)."""
+        It used to float over the bottom-left of the viewport, where it
+        covered a corner of the image — bad in an annotation tool, since
+        that corner may be exactly what you need to see or draw on. It is
+        now given its own reserved strip via ``setViewportMargins``, so the
+        scene simply has no room to render underneath it. That is Qt's own
+        mechanism for locked areas inside a scroll area, which means the
+        reservation survives zoom, pan and scrollbar toggling for free.
+        """
         # Parent to the VIEW, not the viewport: QGraphicsView scrolls its
         # viewport's child widgets when zoom pans the scene, and the viewport
         # also resizes when scrollbars toggle — both would drift the HUD.
@@ -151,20 +157,36 @@ class ImageViewer(QGraphicsView):
         for w in (self._hud_zoom_lbl, self._hud_fit, self._hud_actual, sep,
                   self._hud_coord, self._hud_swatch, self._hud_pixel):
             lay.addWidget(w)
+        lay.addStretch(1)   # readouts stay left-aligned across the strip
         self._hud.adjustSize()
-        self._hud.raise_()
+        # Place it immediately, not only on the first resizeEvent — a viewer
+        # that is measured before it is ever resized would otherwise report
+        # the strip parked at (0, 0), overlapping the image.
+        self._position_hud()
+
+    def _hud_height(self) -> int:
+        return self._hud.sizeHint().height()
+
+    def _reserve_hud_strip(self) -> None:
+        """Carve the strip out of the scrollable area, not out of the image.
+
+        Everything the view draws is clipped to the viewport, so shrinking
+        the viewport is what makes the no-overlap guarantee structural
+        rather than a matter of stacking order.
+        """
+        self.setViewportMargins(0, 0, 0, self._hud_height())
 
     def _position_hud(self) -> None:
         if not hasattr(self, "_hud"):
             return
         self._hud.adjustSize()
-        margin = T.PAD
-        # Anchor to the view's own height (constant during zoom/scroll) and
-        # reserve the horizontal scrollbar's height so the spot is the same
-        # whether or not the scrollbar is currently showing — no drift.
-        sb_h = self.horizontalScrollBar().sizeHint().height()
-        y = self.height() - self._hud.height() - margin - sb_h
-        self._hud.move(margin, max(margin, y))
+        self._reserve_hud_strip()
+        # Anchor to the viewport rather than to self: Qt owns where the
+        # scrollbars land inside the frame, and the viewport rect already
+        # accounts for them.
+        vp = self.viewport().geometry()
+        self._hud.setGeometry(vp.left(), vp.bottom() + 1,
+                              vp.width(), self._hud_height())
         self._hud.raise_()
 
     def _update_hud_zoom(self, scale: float) -> None:

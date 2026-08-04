@@ -26,12 +26,6 @@ from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 from gui.widgets.image_viewer import ImageViewer  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    yield app
-
-
 class _Catcher(QWidget):
     """Stands in for DetailView: records keys that bubble up to it."""
 

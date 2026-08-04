@@ -785,13 +785,15 @@ QFrame#detailTopBar {
     border-bottom: 1px solid $BORDER;
 }
 
-/* Bottom-corner viewer HUD — floating zoom controls + cursor coords +
- * pixel readout. An opaque rounded panel so it stays legible over any
- * image. Lives on the QGraphicsView viewport, out of the top ribbon. */
+/* Viewer status strip — zoom controls + cursor coords + pixel readout.
+ * Docked under the image in a strip reserved by setViewportMargins, so it
+ * never covers pixels. Square + top-rule (not a floating rounded card)
+ * because it now reads as an edge of the canvas, not an overlay on it. */
 QFrame#viewerHud {
     background-color: $CONTENT;
-    border: 1px solid $BORDER;
-    border-radius: 6px;
+    border: none;
+    border-top: 1px solid $BORDER;
+    border-radius: 0px;
 }
 CaptionLabel#viewerHudInfo {
     color: $TEXT_2;

@@ -4,15 +4,45 @@
 dataset and returns a ``Dataset`` pointing at it. Previously defined in
 tests/test_exporters.py; moved here so all test files share one builder
 instead of each rolling its own.
+
+``qapp`` is the single QApplication for the whole session — see its
+docstring for why per-module ones are actively harmful here.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image
+
+
+# Strong, module-level reference to the QApplication. Load-bearing: if the
+# QApplication is garbage-collected between test modules, qfluentwidgets'
+# global ``qconfig`` singleton is destroyed with it, and every widget built
+# afterwards dies with "wrapped C/C++ object of type QConfig has been
+# deleted". Two GUI test modules each owning a module-scoped app is exactly
+# how that reproduces.
+_QAPP = None
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """One offscreen QApplication shared by every GUI test.
+
+    Skips cleanly where PyQt6 is absent, matching the rest of the suite.
+    """
+    global _QAPP
+    pytest.importorskip("PyQt6", reason="GUI test needs PyQt6")
+    # Must be set before the QApplication is constructed.
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    if _QAPP is None:
+        _QAPP = QApplication.instance() or QApplication([])
+    return _QAPP
 
 from core.models import Category, Dataset, ImageInfo
 
