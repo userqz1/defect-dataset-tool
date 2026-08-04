@@ -398,6 +398,27 @@ class ThumbnailGrid(QListWidget):
         item.setData(ROLE_PIX, pix)
         item.setData(ROLE_DIM, (w, h))
 
+    def reveal_path(self, path: str) -> bool:
+        """Scroll the row for *path* into view and make it the selection.
+
+        Returns False when the path has no row — the caller is expected to
+        have materialized the chunk containing it first.
+        """
+        row = self._path_to_row.get(path)
+        if row is None:
+            return False
+        item = self.item(row)
+        if item is None:
+            return False
+        self.clearSelection()
+        self.setCurrentItem(item)
+        item.setSelected(True)
+        # PositionAtCenter rather than EnsureVisible: after walking out to
+        # a far chunk the target would otherwise land hard against the
+        # bottom edge, which reads as "the list just jumped somewhere".
+        self.scrollToItem(item, self.ScrollHint.PositionAtCenter)
+        return True
+
     def selected_images(self) -> list[ImageInfo]:
         return [
             item.data(ROLE_IMG)

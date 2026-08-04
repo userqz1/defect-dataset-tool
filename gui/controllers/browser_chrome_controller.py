@@ -75,7 +75,17 @@ class BrowserChromeController:
         self._rt.browser_stack.setCurrentWidget(self._rt.detail)
 
     def back_to_browser(self) -> None:
+        """Return to the grid, landing on whatever image detail was showing.
+
+        Read the image *before* swapping widgets: the swap hides
+        DetailView, and its hideEvent flushes a pending autosave, which is
+        exactly the kind of side effect that should not run between
+        reading the index and using it.
+        """
+        img = self._rt.detail.current_image()
         self._rt.browser_stack.setCurrentWidget(self._rt.browser)
+        if img is not None:
+            self._rt.browser.reveal_image(img)
 
     def on_stack_changed(self, index: int) -> None:
         """Swap the right ContextPanel's page based on drill state.

@@ -849,6 +849,17 @@ class DetailView(QWidget):
             self._images = [image]
         self._load_current()
 
+    def current_image(self) -> ImageInfo | None:
+        """The image on screen right now, or None.
+
+        The workbench uses this on drill-out to put the grid back on
+        whatever the user paged to — ``_index`` moves with A/D and the
+        arrow keys, so it is usually not the image they drilled in on.
+        """
+        if 0 <= self._index < len(self._images):
+            return self._images[self._index]
+        return None
+
     def prev_image(self) -> None:
         if not self._images:
             return

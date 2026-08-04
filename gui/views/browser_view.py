@@ -719,6 +719,52 @@ class BrowserView(QWidget):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(LOAD_INDICATOR_HOLD_MS, self._end_load_more)
 
+    def reveal_image(self, img) -> bool:
+        """Materialize, scroll to and select *img*. Returns False if absent.
+
+        Needed because the grid is infinite-scroll: only the first
+        ``CHUNK_SIZE`` items exist as widgets, so an image the user reached
+        by paging through DetailView (say the 612th) is not merely
+        off-screen — it has no row yet. Drill-out used to just swap the
+        stacked widget, leaving the user at whatever chunk they entered
+        from with no way to find where they had got to.
+
+        Chunks are appended directly rather than through ``_load_more``:
+        that path is debounced against scroll bursts and would drop most
+        of the calls needed to walk out to a far index.
+        """
+        if img is None:
+            return False
+        target = str(img.path)
+        index = next(
+            (i for i, cand in enumerate(self._filtered)
+             if str(cand.path) == target),
+            -1,
+        )
+        if index < 0:
+            # Filtered out (category/search/state changed while in detail),
+            # or deleted. Leave the grid where it is rather than guessing.
+            return False
+
+        while self._visible_count <= index:
+            start = self._visible_count
+            end = min(start + CHUNK_SIZE, len(self._filtered))
+            if end <= start:
+                break
+            chunk = self._filtered[start:end]
+            self._thumb_pending += len(chunk)
+            self.grid.append_images(
+                chunk,
+                quality_map=self._state.quality_issue_paths,
+                target_complete_paths=self._annotated_cache,
+            )
+            self._visible_count = end
+        if self._thumb_pending > 0:
+            self._thumb_bar.show()
+            self._thumb_bar.start()
+        self._refresh_footer()
+        return self.grid.reveal_path(target)
+
     def _end_load_more(self) -> None:
         """Hide the in-flight indicator + release the debounce gate."""
         self._loading_more_label.setVisible(False)
