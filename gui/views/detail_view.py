@@ -320,6 +320,14 @@ class DetailView(QWidget):
         self._inflight_prefetch: set[str] = set()
         # Dirty flag for unsaved-changes prompt on navigate-away.
         self._dirty: bool = False
+        # Autosave. ``shapes_changed`` fires on mouse *release*, so this
+        # is already one event per finished edit rather than one per
+        # dragged pixel; the timer exists to coalesce bursts (renaming a
+        # label right after moving a node) into a single write.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(600)
+        self._autosave_timer.timeout.connect(self._autosave_fire)
         # Per-image local undo stack — captures shape state *before*
         # destructive edits so the global 撤销 button (and Ctrl+Z) can
         # restore it. Cleared whenever the user navigates to a
@@ -1302,6 +1310,10 @@ class DetailView(QWidget):
         except OSError:
             self._label_mtime_at_load = None
         self._dirty = False
+        # Belt-and-braces: navigation flushes via _confirm_discard, but a
+        # timer left armed here would fire against the newly-loaded image
+        # and write it under the previous one's dirty flag.
+        self._autosave_timer.stop()
 
         # Refresh panes (shape list, caption, conversations, status).
         self._repaint_panes(img)
@@ -1456,8 +1468,58 @@ class DetailView(QWidget):
             return
         self.change_category_requested.emit(current, target)
 
+    # ---------- autosave ----------
+
+    @staticmethod
+    def _autosave_enabled() -> bool:
+        """Read the pref per call so toggling Settings takes effect at once."""
+        from core.user_settings import load_settings
+        return load_settings().autosave
+
+    def _mark_dirty(self) -> None:
+        """Flag unsaved state and, under autosave, schedule the write."""
+        self._dirty = True
+        if self._autosave_enabled():
+            self._autosave_timer.start()
+
+    def _autosave_fire(self) -> None:
+        if self._dirty and self._autosave_enabled():
+            self._on_save()
+
+    def _flush_autosave(self) -> None:
+        """Write any pending edit *now*.
+
+        Called before anything that changes which image ``_on_save``
+        would target. Letting the timer fire on its own after a
+        navigation would write the previous image's edits into the
+        current image's context.
+        """
+        self._autosave_timer.stop()
+        if self._dirty and self._autosave_enabled():
+            self._on_save()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        """Flush before the view goes away.
+
+        Leaving the workbench, switching stage, or closing the window all
+        hide this view; a 600 ms debounce window is small but it is not
+        zero, and losing the last box drawn is exactly the failure
+        autosave is meant to prevent.
+        """
+        self._flush_autosave()
+        super().hideEvent(event)
+
     def _confirm_discard(self) -> bool:
-        """Return True if it's OK to discard unsaved changes (or none)."""
+        """Return True if it's OK to discard unsaved changes (or none).
+
+        Under autosave there is nothing to discard — flush instead of
+        asking. Every navigation path already funnels through here, so
+        this is also what guarantees the pending write lands before the
+        view moves to another image.
+        """
+        if self._autosave_enabled():
+            self._flush_autosave()
+            return True
         if not self._dirty:
             return True
         box = MessageBox(
@@ -1583,7 +1645,7 @@ class DetailView(QWidget):
         self._project_class_names.append(label)
 
     def _on_shapes_changed(self) -> None:
-        self._dirty = True
+        self._mark_dirty()
         # Commit any in-flight region-text edit BEFORE we replace
         # self._annotation with the viewer's new state — otherwise the
         # editor's pending text is silently dropped along with the old
@@ -1706,7 +1768,7 @@ class DetailView(QWidget):
         # Re-render so the shape's color tracks the new label, then refresh
         # the list + 类别 combo and keep the renamed row selected.
         self.viewer.set_annotation(self._annotation)
-        self._dirty = True
+        self._mark_dirty()
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
         if self._vlm_pane is not None and self._vlm_pane.has_grounding:
@@ -1779,7 +1841,7 @@ class DetailView(QWidget):
         label, snapshot = self._undo_stack.pop()
         self._annotation.shapes = snapshot
         self.viewer.set_annotation(self._annotation)
-        self._dirty = True
+        self._mark_dirty()
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
         if self._vlm_pane is not None and self._vlm_pane.has_grounding:
@@ -1953,7 +2015,7 @@ class DetailView(QWidget):
         sample = self._find_sample(img)
         if sample is not None:
             sample.image_labels = new_labels
-        self._dirty = True
+        self._mark_dirty()
 
         # Disk write — best-effort.  A failure here shouldn't abort the
         # interactive flow; the in-memory state is already updated and

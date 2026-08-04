@@ -191,6 +191,23 @@ class SettingsView(QFrame):
         self._i18n_refs.append((self._cat_show, "settings.catalog.show"))
         self._i18n_refs.append((self._cat_hide, "settings.catalog.hide"))
 
+        # Autosave — read live by DetailView, so no signal to wire; the
+        # only job here is persisting the flag.
+        self._autosave_on = _seg_btn("")
+        self._autosave_off = _seg_btn("")
+        (self._autosave_on if settings.autosave
+         else self._autosave_off).setChecked(True)
+        g = QButtonGroup(self); g.setExclusive(True)
+        g.addButton(self._autosave_on); g.addButton(self._autosave_off)
+        self._autosave_on.clicked.connect(lambda: self._set_autosave(True))
+        self._autosave_off.clicked.connect(lambda: self._set_autosave(False))
+        body.addWidget(self._row(
+            FIF.SAVE, "settings.autosave",
+            _seg_group(self._autosave_on, self._autosave_off),
+        ))
+        self._i18n_refs.append((self._autosave_on, "settings.autosave.on"))
+        self._i18n_refs.append((self._autosave_off, "settings.autosave.off"))
+
         # Project annotation-format migration lives in 项目中心 → 格式中心,
         # not here. Settings is for global preferences only.
 
@@ -269,6 +286,11 @@ class SettingsView(QFrame):
         self.theme_changed.emit(key)
         s = load_settings()
         s.theme = key
+        save_settings(s)
+
+    def _set_autosave(self, on: bool) -> None:
+        s = load_settings()
+        s.autosave = on
         save_settings(s)
 
     def _refresh_cache_size(self) -> None:
