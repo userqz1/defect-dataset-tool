@@ -9,6 +9,7 @@ from PyQt6.QtGui import (
     QBrush,
     QColor,
     QImage,
+    QKeyEvent,
     QPainter,
     QPen,
     QPixmap,
@@ -550,6 +551,25 @@ class ImageViewer(QGraphicsView):
         factor = 1.18 if event.angleDelta().y() > 0 else 1 / 1.18
         self._apply_zoom(factor, event.position().toPoint())
         event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
+        """Let the prev/next-image keys bubble up to DetailView.
+
+        ``QGraphicsView`` claims the arrow keys to scroll its viewport, so
+        once the user clicks the image — which annotating always does —
+        Left/Right stop reaching ``DetailView.keyPressEvent`` and image
+        navigation silently dies. ``A``/``D`` kept working the whole time
+        precisely because QGraphicsView does *not* handle them and Qt
+        bubbles unhandled keys to the parent; ignoring the arrows here
+        puts them on that same path.
+
+        Nothing is lost: panning is mouse-drag driven and zoom is on the
+        wheel, so the viewport never needed keyboard scrolling.
+        """
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            event.ignore()
+            return
+        super().keyPressEvent(event)
 
     def leaveEvent(self, event) -> None:
         """Cancel in-progress drawing when mouse leaves the viewport."""
