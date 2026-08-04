@@ -508,8 +508,17 @@ class DetailView(QWidget):
         self.move_cat_btn.clicked.connect(self._on_move_category)
         lay.addWidget(self.move_cat_btn)
 
-        self.delete_img_btn = ToolButton(FIF.DELETE)
-        self.delete_img_btn.setToolTip("删除当前图片 (永久，不可恢复)")
+        # Labelled, and NOT a bare trash icon. The annotation pane's
+        # "delete shape" button is a ToolButton(FIF.DELETE); an identical
+        # icon here made the two indistinguishable at a glance, which is
+        # unacceptable when one drops a box that Ctrl+Z restores and the
+        # other unlinks a file with no recycle bin and no undo. The word
+        # 图片 plus the wider button shape is the disambiguator.
+        # (detail_view once had the *shape* delete in this toolbar and it
+        # was deliberately moved into the annotation pane for the same
+        # reason — see the note further down this method.)
+        self.delete_img_btn = PushButton(FIF.REMOVE_FROM, "删除图片")
+        self.delete_img_btn.setToolTip("删除当前图片及其标注 (永久，不可恢复)")
         self.delete_img_btn.clicked.connect(self._on_delete_image)
         lay.addWidget(self.delete_img_btn)
 
@@ -575,6 +584,11 @@ class DetailView(QWidget):
         # lowest-priority icons keeps save/delete/shape tools from colliding.
         self.move_cat_btn.setVisible(w >= 1020)
         self.help_btn.setVisible(w >= 1120)
+        # Peer of 改分类 — both are image-level actions. Never degrade this
+        # one to icon-only when space is tight: an unlabelled trash next
+        # to the annotation pane's identical one is the exact confusion
+        # this button was relabelled to avoid. Hide it outright instead.
+        self.delete_img_btn.setVisible(w >= 1020)
 
     def _build_sidebar(self) -> QFrame:
         # Renamed object name — the widget is now hosted inside the
