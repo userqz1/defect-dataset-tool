@@ -267,6 +267,8 @@ class DatasetBrowserView(QWidget):
 
         self._detail.change_category_requested.connect(
             self._tools.change_category)
+        self._detail.delete_image_requested.connect(
+            self._tools.delete_current_image)
         self._browser.dataset_changed.connect(
             lambda: self._session.rescan(force=True)
         )

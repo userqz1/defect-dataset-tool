@@ -114,6 +114,9 @@ class BrowserView(QWidget):
         # scrolls near the bottom; reset to CHUNK_SIZE on filter /
         # category / search change so the user sees the new top.
         self._visible_count: int = CHUNK_SIZE
+        # Path to land on after the next render — see
+        # request_reveal_after_render.
+        self._reveal_after_render: str | None = None
         self._filtered: list[ImageInfo] = []
         # Per-category image-list cache (review #8). Rebuilt on category
         # switch / dataset change; reused across filter + search typing
@@ -662,6 +665,13 @@ class BrowserView(QWidget):
 
         self._refresh_footer()
 
+        # Consume any pending "land here" request. Popped first so a
+        # target that has since been filtered out or deleted doesn't stay
+        # armed and hijack a later, unrelated render.
+        pending, self._reveal_after_render = self._reveal_after_render, None
+        if pending:
+            self._reveal_path(pending)
+
     def _refresh_empty_hint(self) -> None:
         """Pick the right empty-state copy for the current view.
 
@@ -719,6 +729,39 @@ class BrowserView(QWidget):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(LOAD_INDICATOR_HOLD_MS, self._end_load_more)
 
+    def request_reveal_after_render(self, path: str | None) -> None:
+        """Land on *path* the next time the grid re-renders.
+
+        A delete mutates the dataset, which re-runs the filter and calls
+        ``_show_page`` — and that resets to the first chunk and scrolls to
+        the top. Without this the user is thrown back to image 1 every
+        time they delete, which is the opposite of what deleting from a
+        position should do.
+        """
+        self._reveal_after_render = path or None
+
+    def neighbour_after_removing(self, doomed) -> str | None:
+        """Path of the image the cursor should land on once *doomed* is gone.
+
+        The one after the last victim, falling back to the one before the
+        first — i.e. the cursor holds its place rather than jumping.
+        Returns None when everything visible is being deleted.
+        """
+        victims = {str(i.path) for i in doomed}
+        after = [str(i.path) for i in self._filtered
+                 if str(i.path) not in victims]
+        if not after:
+            return None
+        last_victim_at = max(
+            (n for n, i in enumerate(self._filtered)
+             if str(i.path) in victims),
+            default=-1,
+        )
+        for i in self._filtered[last_victim_at + 1:]:
+            if str(i.path) not in victims:
+                return str(i.path)
+        return after[-1]
+
     def reveal_image(self, img) -> bool:
         """Materialize, scroll to and select *img*. Returns False if absent.
 
@@ -733,9 +776,9 @@ class BrowserView(QWidget):
         that path is debounced against scroll bursts and would drop most
         of the calls needed to walk out to a far index.
         """
-        if img is None:
-            return False
-        target = str(img.path)
+        return self._reveal_path(str(img.path)) if img is not None else False
+
+    def _reveal_path(self, target: str) -> bool:
         index = next(
             (i for i, cand in enumerate(self._filtered)
              if str(cand.path) == target),
@@ -1119,6 +1162,9 @@ class BrowserView(QWidget):
         box.yesButton.setText(self.tr("永久删除"))
         if not box.exec():
             return
+        # Work out where to land *before* the delete, while the doomed
+        # images are still in _filtered and their neighbours are known.
+        self.request_reveal_after_render(self.neighbour_after_removing(sel))
         self._run(
             lambda cb: fileops.delete_pairs(sel, progress_cb=cb),
             self.tr("正在删除…"),

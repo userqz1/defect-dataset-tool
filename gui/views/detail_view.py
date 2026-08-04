@@ -258,6 +258,10 @@ class DetailView(QWidget):
     # Payload: (ImageInfo, new_category_name).  DatasetBrowserView owns
     # the fileops + rescan.
     change_category_requested = pyqtSignal(object, str)
+    # Permanently delete the current image + its label, without going back
+    # to the grid to hunt for it. Payload: ImageInfo. The shell owns the
+    # fileops + in-memory dataset update.
+    delete_image_requested = pyqtSignal(object)
     # Workflow status transition — (ImageInfo, new_status_value)
     work_status_changed = pyqtSignal(object, str)
     # VLM caption saved — (ImageInfo, caption_text)
@@ -503,6 +507,11 @@ class DetailView(QWidget):
         self.move_cat_btn.setToolTip("改分类 (把当前图移到其他类别)")
         self.move_cat_btn.clicked.connect(self._on_move_category)
         lay.addWidget(self.move_cat_btn)
+
+        self.delete_img_btn = ToolButton(FIF.DELETE)
+        self.delete_img_btn.setToolTip("删除当前图片 (永久，不可恢复)")
+        self.delete_img_btn.clicked.connect(self._on_delete_image)
+        lay.addWidget(self.delete_img_btn)
 
         self.help_btn = ToolButton(FIF.HELP)
         self.help_btn.setToolTip("快捷键帮助")
@@ -1478,6 +1487,56 @@ class DetailView(QWidget):
         if not target or target == current.category:
             return
         self.change_category_requested.emit(current, target)
+
+    def _on_delete_image(self) -> None:
+        """Permanently delete the image on screen, then move to the next.
+
+        Confirmed every time. Deletion does not go to the Recycle Bin and
+        there is no undo for it, and this button lives on a surface the
+        user is clicking constantly while annotating — the one place a
+        misclick is most likely and least recoverable.
+        """
+        if self._block_write_if_scanning():
+            return
+        img = self.current_image()
+        if img is None:
+            return
+        label_note = "及其标注文件" if img.has_label else ""
+        box = MessageBox(
+            "确认永久删除",
+            f"将永久删除 {img.path.name}{label_note}。\n"
+            "删除后无法恢复，确认继续？",
+            self.window(),
+        )
+        box.yesButton.setText("永久删除")
+        box.cancelButton.setText("取消")
+        if not box.exec():
+            return
+        # Drop the pending autosave: writing an annotation for a file we
+        # are about to delete would recreate the label sidecar.
+        self._autosave_timer.stop()
+        self._dirty = False
+        self.delete_image_requested.emit(img)
+
+    def drop_current_and_advance(self) -> bool:
+        """Forget the current image and show the next one.
+
+        Called by the shell once the file is actually gone. Returns False
+        when nothing is left, in which case it has already asked to go
+        back to the grid — there is no image to annotate.
+        """
+        if not (0 <= self._index < len(self._images)):
+            return False
+        del self._images[self._index]
+        if not self._images:
+            self.back_requested.emit()
+            return False
+        # Staying on the same index lands on what *was* the next image;
+        # only clamp when the deleted one was last.
+        self._index = min(self._index, len(self._images) - 1)
+        self._dirty = False
+        self._load_current()
+        return True
 
     # ---------- autosave ----------
 

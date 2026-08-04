@@ -48,6 +48,9 @@ class BrowserToolController:
     def change_category(self, image, target: str) -> None:
         self._on_change_category(image, target)
 
+    def delete_current_image(self, image) -> None:
+        self._on_delete_current_image(image)
+
     def add_to_split(self, bucket: str, images: list) -> None:
         self._on_add_to_split(bucket, images)
 
@@ -1102,6 +1105,49 @@ class BrowserToolController:
                 self._session.rescan(force=True)
 
         BatchRunner(self._rt.shell, "改分类").run(task=task, on_done=handle)
+
+    def _on_delete_current_image(self, image) -> None:
+        """Delete one image from DetailView and keep the user annotating.
+
+        Deliberately synchronous and without a progress dialog: it is a
+        single unlink, and a modal in the middle of an annotation loop
+        costs more than it tells. DetailView has already confirmed.
+
+        Uses the in-memory removal path (as quality/dedup delete do)
+        rather than a rescan — a rescan would flip ``scan_active``, which
+        gates writes and would stall the annotating the user is trying to
+        continue.
+        """
+        from core import fileops
+
+        detail = self._rt.detail
+        browser = self._rt.browser
+        path = str(image.path)
+        # Pick the landing spot before the grid's model loses the image.
+        browser.request_reveal_after_render(
+            browser.neighbour_after_removing([image]))
+
+        result = fileops.delete_pairs([image])
+        if result.fail_count:
+            _, err = result.failed[0]
+            InfoBar.error(
+                "删除失败", err,
+                parent=self._window(), duration=5000,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        # Advance the viewer first: _incremental_remove emits
+        # dataset_changed, and letting the grid re-render while DetailView
+        # still holds the deleted image invites a repaint against a
+        # stale row.
+        detail.drop_current_and_advance()
+        self._incremental_remove({path})
+        InfoBar.success(
+            "", f"已删除 {image.path.name}",
+            parent=self._window(), duration=2500,
+            position=InfoBarPosition.TOP,
+        )
 
     def _delete_issue_images(self, images: list) -> None:
         if not images:
