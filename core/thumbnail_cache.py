@@ -1,6 +1,7 @@
 """On-disk thumbnail cache. Pure Python — no PyQt."""
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 
@@ -34,11 +35,19 @@ class ThumbnailCache:
             return data  # type: ignore[return-value]
         try:
             with Image.open(path) as im:
+                # Let the JPEG decoder scale down *while* decoding (DCT
+                # scaling) instead of decoding full resolution and then
+                # throwing 99% of the pixels away.  Decoding dominates
+                # thumbnail cost — on 5120x5120 source JPEGs this alone
+                # is ~4x.  No-op for formats that don't support it (PNG,
+                # BMP), and quality is unchanged because ``thumbnail``
+                # still finishes the job with LANCZOS from an
+                # intermediate that is never smaller than the target.
+                im.draft("RGB", (size, size))
                 im = ImageOps.exif_transpose(im)
                 im.thumbnail((size, size), Image.Resampling.LANCZOS)
                 if im.mode not in ("RGB", "L"):
                     im = im.convert("RGB")
-                import io
                 buf = io.BytesIO()
                 im.save(buf, format="JPEG", quality=85)
                 data = buf.getvalue()
