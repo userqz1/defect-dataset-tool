@@ -36,7 +36,16 @@ conda run --no-capture-output -n defect-tool python -m pytest tests/test_splitte
 # `python -m ruff` fails with "No module named ruff" until you install it:
 conda run -n defect-tool python -m pip install -e ".[dev]"
 conda run -n defect-tool python -m ruff check .
+
+# Package the desktop app (PyInstaller is NOT in requirements — install once)
+conda run -n defect-tool python -m pip install pyinstaller -i https://pypi.tuna.tsinghua.edu.cn/simple
+conda run --no-capture-output -n defect-tool python -m PyInstaller DataForge.spec --noconfirm
+# → dist/DataForge/DataForge.exe (onedir, ~244 MB)
 ```
+
+`DataForge.spec` is hand-written and tracked (`.gitignore` ignores `*.spec` but whitelists this one). It carries the two things that are easy to get wrong and expensive to rediscover: the data-file mapping — `assets/`, `gui/styles/`, `config/` must land at those exact relative paths because `main.py`, `gui/theme.py` and `core/config.py` locate them via `__file__`, which under PyInstaller points into the extraction dir — and `collect_all("qfluentwidgets")`, without which the app starts completely unstyled. Build is **onedir, not onefile**: onefile re-extracts the ~200 MB Qt payload on every launch (5-15 s startup) and that extract step is also what trips antivirus heuristics.
+
+Verify a build by *running the exe*, not by trusting the build log: the packaged app writes to `~/.dataforge/logs/app.log` like the dev one, so a clean startup there (0 ERROR, no style complaints) is the real signal.
 
 If a long-lived shell (e.g. the agent's) doesn't recognize `conda` — a stale PATH snapshot from before conda was added — reload PATH from the registry first (portable, no hardcoded path):
 `$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')`

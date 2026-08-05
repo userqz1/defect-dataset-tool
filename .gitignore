@@ -19,7 +19,11 @@ ENV/
 build/
 dist/
 *.egg-info/
+# Generated specs stay out, but DataForge.spec is hand-written and is the
+# only record of how the app is packaged — data-file mapping, why onedir,
+# what is excluded. Losing it means rediscovering all of that.
 *.spec
+!DataForge.spec
 
 # IDE
 .idea/
