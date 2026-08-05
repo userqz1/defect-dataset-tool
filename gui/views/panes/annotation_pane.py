@@ -45,6 +45,14 @@ from gui.widgets.image_viewer import color_for_label
 # project has never seen gets typed.
 NEW_CLASS_ENTRY = "＋ 新建类别…"
 
+# Vertical padding QSS puts inside every shapeList item
+# (``QListWidget#shapeList::item { padding: 6px 10px }``). It is carved
+# out of the area the row widget gets, but setSizeHint is measured in
+# whole-item pixels — so the widget's own height has to be reported PLUS
+# this, or the row is handed less than it asked for and the class name
+# gets clipped mid-glyph.
+_ITEM_V_PADDING = 12
+
 
 class AnnotationPane(QWidget):
     """传统标注 segment body — shape list."""
@@ -158,7 +166,9 @@ class AnnotationPane(QWidget):
                 for i in range(len(shapes)):
                     item = QListWidgetItem()
                     widget = self._build_row_widget(i)
-                    item.setSizeHint(widget.sizeHint())
+                    hint = widget.sizeHint()
+                    hint.setHeight(hint.height() + _ITEM_V_PADDING)
+                    item.setSizeHint(hint)
                     self.shape_list.addItem(item)
                     self.shape_list.setItemWidget(item, widget)
             else:
@@ -243,8 +253,11 @@ class AnnotationPane(QWidget):
         combo = ComboBox()
         combo.setObjectName("shapeRowClass")
         # No setFixedWidth — CLAUDE.md gotcha: class names are arbitrary
-        # length and a fixed width clips them.
+        # length and a fixed width clips them. A minimum *height* is fine
+        # and necessary: CJK and latin share a line height, and without a
+        # floor the row layout compresses the combo below its text.
         combo.setMinimumWidth(150)
+        combo.setMinimumHeight(combo.sizeHint().height())
         combo.addItems(self._class_options(self._labels[i]))
         combo.setCurrentText(self._labels[i])
         combo.setToolTip("改为其他类别（也可用 1-9 快捷键）")

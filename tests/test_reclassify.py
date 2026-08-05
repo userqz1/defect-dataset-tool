@@ -203,6 +203,42 @@ def test_row_count_change_does_rebuild(qapp):
     assert _combo(pane, 0).currentText() == "marked_loose"
 
 
+def test_class_name_is_not_vertically_clipped(qapp):
+    """The row must actually GET the height it asks for.
+
+    QSS gives every shapeList item ``padding: 6px 10px``, carved out of
+    the area the row widget receives. setSizeHint is measured in whole
+    item pixels, so reporting only the widget's own height handed the row
+    12px less than it needed and the class name was cut mid-glyph.
+    """
+    pane = _pane_with_rows(["unmarked_normal", "marked_loose"])
+    pane.resize(420, 260)
+    pane.show()
+    QApplication.processEvents()
+    try:
+        for row in (0, 1):
+            combo = _combo(pane, row)
+            wanted = combo.sizeHint().height()
+            assert combo.height() >= wanted, (
+                f"row {row}: combo squashed to {combo.height()}px, "
+                f"needs {wanted}px"
+            )
+            assert combo.height() >= combo.fontMetrics().height() + 6, (
+                f"row {row}: no room for the text"
+            )
+    finally:
+        pane.hide()
+
+
+def test_item_hint_accounts_for_the_qss_item_padding(qapp):
+    from gui.views.panes.annotation_pane import _ITEM_V_PADDING
+    pane = _pane_with_rows(["marked_loose"])
+    item = pane.shape_list.item(0)
+    widget = pane.shape_list.itemWidget(item)
+    assert item.sizeHint().height() == (
+        widget.sizeHint().height() + _ITEM_V_PADDING)
+
+
 def test_refreshing_emits_nothing(qapp):
     """Populating the combos must not read as the user picking classes."""
     pane = _pane_with_rows(["marked_loose"])
