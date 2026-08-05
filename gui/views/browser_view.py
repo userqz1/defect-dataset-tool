@@ -239,6 +239,19 @@ class BrowserView(QWidget):
         # toggles that one card without affecting others, so users can
         # build a multi-selection by clicking the checkboxes directly
         # (see ThumbnailGrid.mousePressEvent).
+        # Resume marker. Annotation runs across many sittings, and coming
+        # back to "which one was I on?" is a real cost — scrolling to the
+        # first unlabelled image is not the same answer, since people stop
+        # mid-run for all sorts of reasons. Hidden entirely when there is
+        # nothing to resume, so it never sits there dead.
+        # No setFixedWidth: the text carries a Chinese label plus a count
+        # and would be clipped (CLAUDE.md). Height is fine to pin.
+        self._resume_btn = PushButton("继续上次")
+        self._resume_btn.setFixedHeight(T.CONTROL_HEIGHT)
+        self._resume_btn.setVisible(False)
+        self._resume_btn.clicked.connect(self._on_resume_clicked)
+        filter_bar.addWidget(self._resume_btn)
+
         self._select_all_btn = PushButton(i18n.t("filter.select_all"))
         self._select_all_btn.setFixedHeight(T.CONTROL_HEIGHT)
         self._select_all_btn.setEnabled(False)
@@ -513,6 +526,9 @@ class BrowserView(QWidget):
         # Tree + distribution now live in CatalogPanel (owned by the outer
         # DatasetBrowserView). We only drive the grid-side state here.
         self._apply_filter_and_show()
+        # After the filter runs, so the entry resolves against the list
+        # the user is actually looking at.
+        self.refresh_resume_hint()
 
     def on_thumb_ready(self, path: str, jpeg_bytes: bytes, w: int, h: int) -> None:
         self.grid.on_thumb_ready(path, jpeg_bytes, w, h)
@@ -761,6 +777,49 @@ class BrowserView(QWidget):
             if str(i.path) not in victims:
                 return str(i.path)
         return after[-1]
+
+    def refresh_resume_hint(self) -> None:
+        """Show (or hide) the 继续上次 entry for the loaded dataset.
+
+        Resolved against the *current* image list, not the stored path
+        alone: a marker that survives but points at something filtered
+        out of view would be an entry that goes nowhere when clicked.
+        """
+        btn = getattr(self, "_resume_btn", None)
+        if btn is None:
+            return
+        ds = self._state.dataset
+        root = getattr(ds, "root_path", None) if ds is not None else None
+        if root is None:
+            btn.setVisible(False)
+            return
+        from core.last_position import recall
+        pos = recall(root)
+        if pos is None:
+            btn.setVisible(False)
+            return
+        images = self._all_images()
+        target = str(pos.image)
+        index = next(
+            (i for i, cand in enumerate(images) if str(cand.path) == target),
+            -1,
+        )
+        if index < 0:
+            btn.setVisible(False)
+            return
+        self._resume_target = images[index]
+        btn.setText(f"继续上次 · 第 {index + 1}/{len(images)} 张")
+        when = f"\n上次退出：{pos.saved_at}" if pos.saved_at else ""
+        btn.setToolTip(f"回到 {pos.image.name}{when}")
+        btn.setVisible(True)
+
+    def _on_resume_clicked(self) -> None:
+        img = getattr(self, "_resume_target", None)
+        if img is None:
+            return
+        # Open against the full list, the same one drill-in uses, so
+        # A/D keeps walking the whole dataset from there.
+        self.image_activated.emit(img, self._all_images())
 
     def reveal_image(self, img) -> bool:
         """Materialize, scroll to and select *img*. Returns False if absent.

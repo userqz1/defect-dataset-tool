@@ -71,6 +71,11 @@ class BrowserChromeController:
         bl.set_batches(all_batch_summaries(wf))
 
     def activate_detail(self, img, imgs) -> None:
+        # Tell detail which dataset it is annotating so it can record a
+        # resume marker as the user moves through the images.
+        ds = self._rt.state.dataset
+        self._rt.detail.set_dataset_root(
+            getattr(ds, "root_path", None) if ds is not None else None)
         self._rt.detail.show_image(img, imgs)
         self._rt.browser_stack.setCurrentWidget(self._rt.detail)
 
@@ -86,6 +91,10 @@ class BrowserChromeController:
         self._rt.browser_stack.setCurrentWidget(self._rt.browser)
         if img is not None:
             self._rt.browser.reveal_image(img)
+        # The hide above flushed detail's resume marker, so re-read it —
+        # otherwise the entry keeps advertising wherever the previous
+        # session stopped.
+        self._rt.browser.refresh_resume_hint()
 
     def on_stack_changed(self, index: int) -> None:
         """Swap the right ContextPanel's page based on drill state.

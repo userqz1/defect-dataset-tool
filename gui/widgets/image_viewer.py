@@ -990,6 +990,20 @@ class ImageViewer(QGraphicsView):
             self._selected_index = -1
             self.selection_changed.emit(-1)
             return
+        # Browse mode: a left click still *picks* the box under the
+        # cursor, so the shape list can highlight the matching row.
+        # Everything that mutates an annotation — drawing, resizing,
+        # node dragging — stays behind the edit-mode gate above; this
+        # only moves the selection. The event is still handed to super()
+        # afterwards, so click-drag panning is unaffected.
+        if (not self._edit_mode
+                and event.button() == Qt.MouseButton.LeftButton
+                and self._pix_item is not None):
+            hit = self._hit_test(self.mapToScene(event.pos()))
+            if hit >= 0:
+                self.select_shape(hit)
+            elif self._selected_index >= 0:
+                self.select_shape(-1)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore[override]

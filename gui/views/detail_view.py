@@ -45,6 +45,8 @@ caller-visible API.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
@@ -332,6 +334,16 @@ class DetailView(QWidget):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.setInterval(600)
         self._autosave_timer.timeout.connect(self._autosave_fire)
+        # Resume marker. Debounced for the same reason autosave is:
+        # holding A/D walks dozens of images a second and each write is a
+        # read-modify-write of the positions file. 1.5 s after the user
+        # settles is soon enough — hideEvent flushes it anyway, so an
+        # abrupt exit still records where they were.
+        self._dataset_root: Path | None = None
+        self._position_timer = QTimer(self)
+        self._position_timer.setSingleShot(True)
+        self._position_timer.setInterval(1500)
+        self._position_timer.timeout.connect(self._persist_position)
         # Per-image local undo stack — captures shape state *before*
         # destructive edits so the global 撤销 button (and Ctrl+Z) can
         # restore it. Cleared whenever the user navigates to a
@@ -864,6 +876,22 @@ class DetailView(QWidget):
             self._images = [image]
         self._load_current()
 
+    def set_dataset_root(self, root: Path | None) -> None:
+        """Which dataset the resume marker belongs to.
+
+        Set on drill-in. Without it nothing is recorded — better than
+        filing every dataset's position under one key.
+        """
+        self._dataset_root = Path(root) if root else None
+
+    def _persist_position(self) -> None:
+        """Write the resume marker for the image on screen."""
+        img = self.current_image()
+        if self._dataset_root is None or img is None:
+            return
+        from core.last_position import remember
+        remember(self._dataset_root, img.path)
+
     def current_image(self) -> ImageInfo | None:
         """The image on screen right now, or None.
 
@@ -1177,6 +1205,7 @@ class DetailView(QWidget):
         )
         self.info_name.setText(img.path.name)
         self.info_path.setText(str(img.path.parent))
+        self._position_timer.start()
 
         self._load_generation += 1
         gen = self._load_generation
@@ -1541,6 +1570,10 @@ class DetailView(QWidget):
         autosave is meant to prevent.
         """
         self._flush_autosave()
+        # Same reasoning for the resume marker: leaving is exactly when
+        # "where was I" becomes worth knowing.
+        self._position_timer.stop()
+        self._persist_position()
         super().hideEvent(event)
 
     def _confirm_discard(self) -> bool:

@@ -136,3 +136,67 @@ def test_hiding_annotations_hides_the_markers(qapp):
     v.set_annotation_visible(False)
     v.select_shape(1)
     assert v._handle_items == [], "markers drawn while annotations are hidden"
+
+
+@pytest.mark.parametrize("target", [0, 1])
+def test_clicking_a_box_on_the_canvas_selects_it_in_browse_mode(qapp, target):
+    """The other direction: canvas → list.
+
+    Shape hit-testing lived entirely inside ``if self._edit_mode``, so a
+    left click in browse mode only panned — nothing was selected, and the
+    list never highlighted the matching row.
+    """
+    v = _viewer()
+    v.resize(400, 340)
+    v.show()
+    QApplication.processEvents()
+    try:
+        assert not v._edit_mode
+        (sx, sy), (ex, ey) = _shapes()[target].points[:2]
+        pt = v.mapFromScene((sx + ex) / 2, (sy + ey) / 2)
+        QTest.mouseClick(v.viewport(), Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier, pt)
+        QApplication.processEvents()
+        assert v._selected_index == target
+        assert v._handle_items, "selection drew no markers"
+    finally:
+        v.hide()
+
+
+def test_clicking_empty_canvas_clears_the_selection(qapp):
+    v = _viewer()
+    v.resize(400, 340)
+    v.show()
+    QApplication.processEvents()
+    try:
+        v.select_shape(0)
+        # Far corner: outside every shape in _shapes().
+        QTest.mouseClick(v.viewport(), Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier,
+                         v.mapFromScene(5, 195))
+        QApplication.processEvents()
+        assert v._selected_index == -1
+        assert v._handle_items == []
+    finally:
+        v.hide()
+
+
+def test_browse_mode_click_does_not_touch_the_annotation(qapp):
+    """Selecting must never be an edit — no shape added, moved or dropped."""
+    v = _viewer()
+    v.resize(400, 340)
+    v.show()
+    QApplication.processEvents()
+    try:
+        before = [(s.label, s.shape_type, list(s.points))
+                  for s in v._annotation.shapes]
+        for x, y in ((45, 45), (5, 195), (95, 95)):
+            QTest.mouseClick(v.viewport(), Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.NoModifier,
+                             v.mapFromScene(x, y))
+            QApplication.processEvents()
+        after = [(s.label, s.shape_type, list(s.points))
+                 for s in v._annotation.shapes]
+        assert after == before
+    finally:
+        v.hide()
