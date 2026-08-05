@@ -15,7 +15,7 @@ frees ribbon space (the topbar was overcrowded).
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -29,7 +29,6 @@ from qfluentwidgets import (
     Action,
     BodyLabel,
     CaptionLabel,
-    EditableComboBox,
     FluentIcon as FIF,
     RoundMenu,
     ToolButton,
@@ -54,10 +53,9 @@ class AnnotationPane(QWidget):
     # the delete through the viewer (so shapes_changed fires + the
     # canvas repaints in one path).
     delete_shape_requested = pyqtSignal(int)
-    # A row's class dropdown was picked or typed into → reclassify that
-    # shape. Payload is (row, new_label); DetailView normalizes the
-    # label, updates the shape, and refreshes the canvas + list. Same
-    # signal the 1-9 shortcuts land on.
+    # Double-click a row (or right-click "重命名") → rename that shape's
+    # label in place. Payload is (row, new_label); DetailView normalizes
+    # the label, updates the shape, and refreshes the canvas + list.
     rename_shape_requested = pyqtSignal(int, str)
 
     def __init__(
@@ -70,17 +68,16 @@ class AnnotationPane(QWidget):
         # Track the live count of real shapes so currentRowChanged can
         # filter out the "（无标注）" placeholder row from emit-back.
         self._shape_count: int = 0
-        # Raw label / shape_type per row, so a row can be rebuilt without
-        # re-reading the annotation.
+        # Raw label / shape_type per row — lets us reformat a row after an
+        # inline rename without re-reading the annotation. _editing_row marks
+        # the row whose inline editor is open.
         self._labels: list[str] = []
         self._types: list[str] = []
-        # Project classes offered by each row's class dropdown. Retyping a
+        self._editing_row: int = -1
+        # Project classes, for the right-click "改为类别" list. Retyping a
         # class name to reclassify a box is the slow path; picking an
         # existing one should not require typing at all.
         self._class_names: list[str] = []
-        # True while refresh_shape_list is populating the row combos, so
-        # their setCurrentIndex isn't mistaken for a user pick.
-        self._syncing_rows: bool = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -114,12 +111,14 @@ class AnnotationPane(QWidget):
         # around its setCurrentRow call so we won't loop back.
         self.shape_list.currentRowChanged.connect(
             self._on_current_row_changed)
-        # Each row hosts its own editable class dropdown, so the list
-        # itself never edits: an item editor would render underneath the
-        # row widget and be invisible.
+        # Inline rename: double-click a row edits just the label. We drive
+        # editing manually (NoEditTriggers) so the editor shows the raw
+        # label, not the "● label (type)" display string.
         self.shape_list.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
-        # Right-click on a row → "删除此标注" context menu.
+        self.shape_list.itemDoubleClicked.connect(self._begin_rename)
+        self.shape_list.itemDelegate().closeEditor.connect(self._end_rename)
+        # Right-click on a row → "重命名" / "删除此标注" context menu.
         self.shape_list.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu)
         self.shape_list.customContextMenuRequested.connect(
@@ -136,20 +135,12 @@ class AnnotationPane(QWidget):
         self._shape_count = len(shapes)
         self._labels = [s.label for s in shapes]
         self._types = [s.shape_type for s in shapes]
+        self._editing_row = -1
         if shapes:
-            # Row widgets are built with their combos pre-set; without this
-            # gate each setCurrentIndex would look like a user pick and fire
-            # a rename back at the shape we are merely displaying.
-            self._syncing_rows = True
-            try:
-                for i in range(len(shapes)):
-                    item = QListWidgetItem()
-                    widget = self._build_row_widget(i)
-                    item.setSizeHint(widget.sizeHint())
-                    self.shape_list.addItem(item)
-                    self.shape_list.setItemWidget(item, widget)
-            finally:
-                self._syncing_rows = False
+            for i in range(len(shapes)):
+                item = QListWidgetItem(self._format_row(i))
+                item.setForeground(color_for_label(self._labels[i]))
+                self.shape_list.addItem(item)
         else:
             placeholder = QListWidgetItem("（无标注）")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -186,78 +177,46 @@ class AnnotationPane(QWidget):
         if 0 <= row < self._shape_count:
             self.delete_shape_requested.emit(row)
 
+    def _format_row(self, i: int) -> str:
+        return f"●  {self._labels[i]}   ({self._types[i]})"
 
-    def _build_row_widget(self, i: int) -> QWidget:
-        """One list row: colour dot + class dropdown + shape type.
+    def _begin_rename(self, item: QListWidgetItem) -> None:
+        """Double-click / "重命名" → edit just the raw label in place."""
+        row = self.shape_list.row(item)
+        if not (0 <= row < self._shape_count):
+            return
+        self._editing_row = row
+        # Show the raw label (not "● label (type)") in the editor.
+        self.shape_list.blockSignals(True)
+        item.setText(self._labels[row])
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        self.shape_list.blockSignals(False)
+        self.shape_list.editItem(item)
 
-        The dropdown is the point — reclassifying used to mean retyping
-        the class name. Deliberately NOT editable: an editable combo
-        emits on every keystroke, which would fire a rename per
-        character. Brand-new class names still go through the
-        right-click 重命名, which is the rare case.
+    def _end_rename(self, *_args) -> None:
+        """Editor closed (commit or cancel) → reformat the row; emit if changed.
+
+        On cancel the model text is untouched (still the raw label we set),
+        so ``new_label == orig`` and nothing is emitted.  The actual rename is
+        deferred one tick so the editor fully tears down before DetailView
+        rebuilds the list in response.
         """
-        row = QWidget()
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(T.GAP_XS, 2, T.GAP_XS, 2)
-        lay.setSpacing(T.GAP_XS)
-
-        dot = BodyLabel("●")
-        dot.setObjectName("shapeRowDot")
-        # Inline colour, deliberately. This is a *category-identity*
-        # colour — the same hash-derived one the canvas paints the box
-        # with, so row and box agree at a glance — not a theme colour, and
-        # CLAUDE.md carves those out from the tokens rule precisely
-        # because they must stay put across light/dark. It is per-instance
-        # and computed, so QSS placeholders cannot express it, and a
-        # QPalette would lose to the global stylesheet. The value still
-        # comes from color_for_label, never a literal.
-        dot.setStyleSheet(f"color: {color_for_label(self._labels[i]).name()}")
-        lay.addWidget(dot)
-
-        combo = EditableComboBox()
-        combo.setObjectName("shapeRowClass")
-        # No setFixedWidth — CLAUDE.md gotcha: class names are CJK-ish and
-        # arbitrary length; a fixed width clips them.
-        combo.setMinimumWidth(150)
-        options = list(self._class_names)
-        if self._labels[i] not in options:
-            # The shape's own class may not be in the project list yet
-            # (imported data, a name typed once). Never let opening the
-            # dropdown silently retarget the shape.
-            options.insert(0, self._labels[i])
-        combo.addItems(options)
-        combo.setCurrentText(self._labels[i])
-        combo.setToolTip("选择已有类别，或直接输入新类别名")
-        # Commit on pick and on finished-typing only. currentTextChanged
-        # would fire once per keystroke, renaming the shape to every
-        # prefix of what is being typed.
-        # qfluentwidgets' EditableComboBox subclasses QLineEdit directly,
-        # so editingFinished lives on the widget — there is no lineEdit().
-        combo.activated.connect(
-            lambda _n, r=i, c=combo: self._on_row_class_committed(r, c))
-        combo.editingFinished.connect(
-            lambda r=i, c=combo: self._on_row_class_committed(r, c))
-        lay.addWidget(combo, 1)
-
-        kind = CaptionLabel(f"({self._types[i]})")
-        kind.setObjectName("shapeRowType")
-        lay.addWidget(kind)
-        return row
-
-    def _on_row_class_committed(self, row: int, combo) -> None:
-        """A row's class was picked or typed. Ignored while rebuilding."""
-        if self._syncing_rows:
+        row = self._editing_row
+        self._editing_row = -1
+        if not (0 <= row < self._shape_count):
             return
-        if not (0 <= row < len(self._labels)):
+        item = self.shape_list.item(row)
+        if item is None:
             return
-        new_label = combo.currentText().strip()
-        if not new_label or new_label == self._labels[row]:
-            return
-        # Selecting the row first means the canvas highlights the shape the
-        # user is about to change — otherwise a mis-click retargets a box
-        # they cannot see.
-        self.shape_list.setCurrentRow(row)
-        self.rename_shape_requested.emit(row, new_label)
+        new_label = item.text().strip()
+        orig = self._labels[row]
+        self.shape_list.blockSignals(True)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        item.setText(self._format_row(row))  # restore "● label (type)"
+        self.shape_list.blockSignals(False)
+        if new_label and new_label != orig:
+            QTimer.singleShot(
+                0, lambda: self.rename_shape_requested.emit(row, new_label))
 
     def _on_list_context_menu(self, pos) -> None:
         """Right-click on a list row → "删除此标注"."""
@@ -271,12 +230,25 @@ class AnnotationPane(QWidget):
             return
         self.shape_list.setCurrentRow(row)
 
-        # No "改为类别" / "重命名" entries: each row now carries an editable
-        # class dropdown that does both, right where the label is. A menu
-        # duplicating it would be a third way to do one thing — and the
-        # inline rename editor cannot work here anyway, since it renders
-        # underneath the row widget.
         menu = RoundMenu(parent=self.shape_list)
+        current = self._labels[row] if row < len(self._labels) else ""
+        others = [c for c in self._class_names if c and c != current]
+        if others:
+            # Reclassify without typing. Numbered to match the 1-9
+            # shortcuts, so the menu doubles as the cheatsheet for them.
+            sub = RoundMenu("改为类别", parent=menu)
+            sub.setIcon(FIF.TAG)
+            for name in others:
+                slot = self._class_names.index(name)
+                prefix = f"{slot + 1}  " if slot < 9 else "    "
+                sub.addAction(Action(
+                    f"{prefix}{name}",
+                    triggered=lambda _=False, r=row, c=name:
+                        self.rename_shape_requested.emit(r, c)))
+            menu.addMenu(sub)
+        menu.addAction(Action(
+            FIF.EDIT, "重命名",
+            triggered=lambda: self._begin_rename(item)))
         menu.addAction(Action(
             FIF.DELETE, i18n.t("annotation.delete_this"),
             triggered=lambda: self.delete_shape_requested.emit(row)))
