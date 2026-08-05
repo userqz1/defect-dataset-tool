@@ -46,6 +46,13 @@ def view(qapp, monkeypatch):
     # Build the vocabulary the way production does, so the pane gets it
     # through the real sync path rather than by assignment here.
     v._project_class_names = list(CLASSES)
+    # Shortcut: publish the vocabulary directly. Fine for the tests below,
+    # which are about what happens *after* the pane knows its classes —
+    # but note it bypasses _repaint_panes, so it proves nothing about the
+    # vocabulary reaching the pane on a real image load. That gap is what
+    # let a browse-mode bug ship green; see
+    # test_row_dropdowns_are_populated_in_browse_mode, which drives the
+    # real path instead.
     v._refresh_label_combo()
     # Write gate + autosave are exercised elsewhere; keep this about the
     # reclassify logic.
@@ -59,6 +66,55 @@ def _press(widget, key) -> None:
         widget,
         QKeyEvent(QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier),
     )
+
+
+def test_row_dropdowns_are_populated_in_browse_mode(qapp):
+    """The real image-load path, with edit mode OFF.
+
+    _refresh_label_combo is the only thing that publishes the class
+    vocabulary, and _repaint_panes used to call it only when
+    edit_btn.isChecked(). Browsing without toggling edit therefore left
+    every row's dropdown holding just its own class plus "＋ 新建类别…",
+    so a box could not be reclassified at all — and the 1-9 shortcuts and
+    the right-click menu were empty for the same reason.
+
+    Drive _repaint_panes, not _refresh_label_combo: calling the latter
+    directly is what hid this.
+    """
+    from pathlib import Path
+
+    from core.models import ImageInfo
+    from qfluentwidgets import ComboBox
+
+    v = DetailView()
+    img = QImage(200, 200, QImage.Format.Format_RGB32)
+    img.fill(0x202020)
+    v.viewer.load_pixmap(QPixmap.fromImage(img))
+    info = ImageInfo(path=Path("a.png"), category="cat")
+    v._images = [info]
+    v._index = 0
+    v._annotation = _annotation()
+    v.viewer.set_annotation(v._annotation)
+    v._project_class_names = list(CLASSES)
+
+    pane = v._annotation_pane
+    assert pane is not None, "default spec should carry an annotation pane"
+    assert not v.edit_btn.isChecked(), "this test is about browse mode"
+
+    v._repaint_panes(info)
+
+    for row in range(len(v._annotation.shapes)):
+        widget = pane.shape_list.itemWidget(pane.shape_list.item(row))
+        combo = widget.findChild(ComboBox)
+        items = [combo.itemText(i) for i in range(combo.count())]
+        for cls in CLASSES:
+            assert cls in items, (
+                f"row {row}: {cls} missing in browse mode — "
+                f"only got {items}"
+            )
+    # Same vocabulary behind the 1-9 shortcuts and the right-click menu.
+    for cls in CLASSES:
+        assert cls in v._quick_labels
 
 
 def test_number_key_reassigns_the_selected_shape(view):

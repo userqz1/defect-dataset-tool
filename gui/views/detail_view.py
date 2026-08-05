@@ -1381,10 +1381,18 @@ class DetailView(QWidget):
             self._status_pane.set_status(
                 sample.work_status if sample else "")
 
-        # Rebuild label combo if edit mode is on — label set may have
-        # changed across images.
-        if self.edit_btn.isChecked():
-            self._refresh_label_combo()
+        # Unconditional, and it has to stay that way. This call does two
+        # jobs: it rebuilds the top-bar draw-label combo (only meaningful
+        # in edit mode, which is why this used to be gated on
+        # edit_btn.isChecked()) and it publishes the class vocabulary —
+        # _quick_labels plus annotation_pane.set_class_names. Three
+        # surfaces consume that vocabulary and all three are live while
+        # merely browsing: the class dropdown on every shape-list row,
+        # the 1-9 shortcuts, and the right-click 改为类别 menu. Gated,
+        # they were all empty in view mode — each row's dropdown offered
+        # nothing but its own class, so reclassifying was impossible
+        # without first toggling edit mode.
+        self._refresh_label_combo()
         self._update_completion_card(img)
 
     def _update_completion_card(self, img: ImageInfo | None = None) -> None:
