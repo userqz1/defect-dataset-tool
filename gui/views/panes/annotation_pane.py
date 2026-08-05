@@ -74,6 +74,10 @@ class AnnotationPane(QWidget):
         self._labels: list[str] = []
         self._types: list[str] = []
         self._editing_row: int = -1
+        # Project classes, for the right-click "改为类别" list. Retyping a
+        # class name to reclassify a box is the slow path; picking an
+        # existing one should not require typing at all.
+        self._class_names: list[str] = []
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -227,6 +231,21 @@ class AnnotationPane(QWidget):
         self.shape_list.setCurrentRow(row)
 
         menu = RoundMenu(parent=self.shape_list)
+        current = self._labels[row] if row < len(self._labels) else ""
+        others = [c for c in self._class_names if c and c != current]
+        if others:
+            # Reclassify without typing. Numbered to match the 1-9
+            # shortcuts, so the menu doubles as the cheatsheet for them.
+            sub = RoundMenu("改为类别", parent=menu)
+            sub.setIcon(FIF.TAG)
+            for name in others:
+                slot = self._class_names.index(name)
+                prefix = f"{slot + 1}  " if slot < 9 else "    "
+                sub.addAction(Action(
+                    f"{prefix}{name}",
+                    triggered=lambda _=False, r=row, c=name:
+                        self.rename_shape_requested.emit(r, c)))
+            menu.addMenu(sub)
         menu.addAction(Action(
             FIF.EDIT, "重命名",
             triggered=lambda: self._begin_rename(item)))
@@ -234,6 +253,10 @@ class AnnotationPane(QWidget):
             FIF.DELETE, i18n.t("annotation.delete_this"),
             triggered=lambda: self.delete_shape_requested.emit(row)))
         menu.exec(self.shape_list.viewport().mapToGlobal(pos))
+
+    def set_class_names(self, names: list[str]) -> None:
+        """Project classes offered by the right-click "改为类别" list."""
+        self._class_names = [n for n in names if n]
 
     def _section_label(self, text: str) -> CaptionLabel:
         lbl = CaptionLabel(text.upper())

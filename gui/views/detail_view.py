@@ -289,6 +289,10 @@ class DetailView(QWidget):
         self._annotation_format: str = "labelme"
         self._target_format: str = ""
         self._project_class_names: list[str] = []
+        # Ordered class vocabulary behind the 1-9 reclassify shortcuts.
+        # Rebuilt by _refresh_label_combo; see there for why it is shared
+        # with the annotation pane's context menu.
+        self._quick_labels: list[str] = []
         # Guards the shape dropdown against re-entrant signals when we
         # sync it programmatically (shortcut-driven / repopulate).
         self._syncing_shape_combo: bool = False
@@ -711,6 +715,10 @@ class DetailView(QWidget):
                 # Double-click / "重命名" a list row → rename that shape's label.
                 self._annotation_pane.rename_shape_requested.connect(
                     self._on_pane_rename_shape)
+                # Seed the "改为类别" list; a pane rebuilt after the last
+                # combo refresh would otherwise have an empty one until
+                # the next image load.
+                self._annotation_pane.set_class_names(self._quick_labels)
                 entries.append((
                     DetailSegment.ANNOTATION, "annotation",
                     self._annotation_segment_text(), self._annotation_pane,
@@ -1652,6 +1660,12 @@ class DetailView(QWidget):
             if current:
                 self.label_combo.setCurrentText(current)
         self.label_combo.blockSignals(False)
+        # One ordered vocabulary shared by the 1-9 shortcuts and the
+        # right-click "改为类别" list, so "press 3" and the menu's "3"
+        # are always the same class. Sorted, hence stable across images.
+        self._quick_labels = list(existing)
+        if self._annotation_pane is not None:
+            self._annotation_pane.set_class_names(self._quick_labels)
         if hasattr(self, "viewer"):
             self.viewer.set_draw_label(
                 self.label_combo.currentText() or "object")
@@ -1786,6 +1800,10 @@ class DetailView(QWidget):
         # Re-render so the shape's color tracks the new label, then refresh
         # the list + 类别 combo and keep the renamed row selected.
         self.viewer.set_annotation(self._annotation)
+        # set_annotation drops the canvas selection, so restore it. Without
+        # this the 1-9 reclassify shortcuts are single-shot: correcting a
+        # mistaken key would need re-clicking the box first.
+        self.viewer.select_shape(idx)
         self._mark_dirty()
         if self._annotation_pane is not None:
             self._annotation_pane.refresh_shape_list(self._annotation)
@@ -1795,6 +1813,27 @@ class DetailView(QWidget):
         self._update_completion_card()
         self.save_btn.setToolTip("保存标注 (Ctrl+S) — 有未保存修改")
         self.viewer.select_shape(idx)
+
+    def _reclassify_selected(self, slot: int) -> None:
+        """Assign the *slot*-th known class to the selected shape.
+
+        Retyping a class name to reclassify a box was the only way to do
+        it, which is far too slow when sweeping a set of boxes onto the
+        right classes. ``_quick_labels`` is the same ordered vocabulary
+        the right-click "改为类别" list numbers itself against, so the
+        menu is the discoverable form of this shortcut.
+
+        Silent when nothing is selected or the slot is empty — a stray
+        digit while panning should do nothing, not surface an error.
+        """
+        if not (0 <= slot < len(self._quick_labels)):
+            return
+        idx = self.viewer.selected_index()
+        if idx < 0:
+            return
+        # Reuses the rename path: undo snapshot, canvas re-render, dirty
+        # marking and list refresh all already live there.
+        self._on_pane_rename_shape(idx, self._quick_labels[slot])
 
     def _delete_selected_shape(self) -> None:
         """Delete-on-canvas wrapper that snapshots before the cut.
@@ -2276,6 +2315,8 @@ class DetailView(QWidget):
               and (e.modifiers() & Qt.KeyboardModifier.ControlModifier)):
             if self.edit_btn.isChecked():
                 self._on_save()
+        elif Qt.Key.Key_1 <= e.key() <= Qt.Key.Key_9:
+            self._reclassify_selected(e.key() - Qt.Key.Key_1)
         elif e.key() == Qt.Key.Key_Escape:
             self._on_back_clicked()
         else:

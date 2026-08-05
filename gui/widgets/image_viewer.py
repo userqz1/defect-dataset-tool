@@ -372,6 +372,12 @@ class ImageViewer(QGraphicsView):
         else:
             self._cancel_polygon()
 
+    def selected_index(self) -> int:
+        """Index of the selected shape, or -1. Companion to has_selection."""
+        if not self.has_selection():
+            return -1
+        return self._selected_index
+
     def has_selection(self) -> bool:
         """True when a shape is currently selected on the canvas.
 

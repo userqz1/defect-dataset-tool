@@ -118,6 +118,7 @@ class ShortcutsDialog(_OpDialogBase):
         ("K", "关键点"),
         ("Enter", "闭合多边形"),
         ("Del", "删除选中标注"),
+        ("1 – 9", "把选中标注改为第 N 个类别"),
         ("Ctrl+S", "保存标注"),
         ("Ctrl+Z", "撤销形状编辑"),
         ("Tab", "下一张未完成"),
