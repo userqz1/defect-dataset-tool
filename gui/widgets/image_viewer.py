@@ -672,17 +672,37 @@ class ImageViewer(QGraphicsView):
 
     def _update_selection_handles(self) -> None:
         self._clear_handle_items()
-        if not self._edit_mode or not self._annotation_visible:
+        if not self._annotation_visible:
             return
         positions = self._selection_handle_points(self._selected_index)
         if not positions:
             return
         size = self._handle_size_scene()
+        if self._edit_mode:
+            pen = QPen(QColor(T.ACCENT))
+            brush = QBrush(QColor(T.CONTENT))
+        else:
+            # Browse mode used to draw nothing here, so picking a row in
+            # the shape list changed only the outline width (2.0 → 3.5) —
+            # far too quiet to find one box among many. Mark the vertices
+            # anyway, but as *markers*, not grab handles: nothing is
+            # draggable until edit mode is on, so they are drawn smaller
+            # and in the shape's own category colour, which reads as
+            # "this is the box you picked" rather than as an affordance.
+            size *= 0.66
+            colour = QColor(T.ACCENT)
+            shapes = self._annotation.shapes if self._annotation else []
+            if 0 <= self._selected_index < len(shapes):
+                colour = color_for_label(shapes[self._selected_index].label)
+            # Category-coloured fill ties the marker to its box, but a
+            # light rim is what makes it readable — filled in the same
+            # colour as the outline it sits on, the marker disappears
+            # into the line at a glance, which defeats the point.
+            pen = QPen(QColor(T.CONTENT))
+            brush = QBrush(colour)
         half = size / 2
-        pen = QPen(QColor(T.ACCENT))
         pen.setWidthF(1.5)
         pen.setCosmetic(True)
-        brush = QBrush(QColor(T.CONTENT))
         for pos in positions:
             item = QGraphicsRectItem(
                 QRectF(pos.x() - half, pos.y() - half, size, size)

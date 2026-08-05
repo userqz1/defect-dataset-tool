@@ -15,7 +15,7 @@ frees ribbon space (the topbar was overcrowded).
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -268,7 +268,40 @@ class AnnotationPane(QWidget):
         kind = CaptionLabel(f"({self._types[i]})")
         kind.setObjectName("shapeRowType")
         lay.addWidget(kind)
+
+        # The dropdown stretches across most of the row and, being a real
+        # interactive widget, consumes the press instead of letting it
+        # reach the list viewport — so clicking the class name (the
+        # obvious target) selected nothing and the canvas never
+        # highlighted the box. Only the few-pixel colour dot worked,
+        # because plain QLabels ignore the press and it propagates.
+        # Filter every part of the row and select on press; the filter
+        # never consumes, so the dropdown still opens normally.
+        for w in (row, dot, combo, kind):
+            w.installEventFilter(self)
         return row
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt override
+        if event.type() == QEvent.Type.MouseButtonPress:
+            row = self._row_of_widget(obj)
+            if row >= 0:
+                self.shape_list.setCurrentRow(row)
+        return super().eventFilter(obj, event)
+
+    def _row_of_widget(self, obj) -> int:
+        """Which list row *obj* lives in, or -1.
+
+        Walks the item widgets rather than caching an index on the
+        widget: rows are rebuilt wholesale on every refresh, so a stale
+        cached index would silently select the wrong shape.
+        """
+        for r in range(self.shape_list.count()):
+            widget = self.shape_list.itemWidget(self.shape_list.item(r))
+            if widget is None:
+                continue
+            if widget is obj or widget.isAncestorOf(obj):
+                return r
+        return -1
 
     def _on_row_class_picked(self, row: int, combo) -> None:
         """A row's dropdown was used. Ignored while we are populating."""
