@@ -23,6 +23,10 @@ _ACTION_LABELS = {
     "split-category": "拆分类别",
     "move-to-category": "移动到类别",
     "batch-rename": "批量重命名",
+    # The three permanent-delete kinds. Named apart so the history reads
+    # as "which delete was this", not just "something got deleted".
+    "delete-images": "永久删除图片",
+    "delete-issue-images": "永久删除问题图片",
     "delete-duplicates": "删除重复",
 }
 

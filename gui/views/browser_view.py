@@ -1168,6 +1168,25 @@ class BrowserView(QWidget):
         self._run(
             lambda cb: fileops.delete_pairs(sel, progress_cb=cb),
             self.tr("正在删除…"),
+            # Audit only — undoable stays False because the files are
+            # unlinked, not trashed. This is the record of *what* went,
+            # which is the one thing still recoverable after the fact.
+            # Moving files was already logged; permanently destroying
+            # them was not, which was plainly an oversight.
+            #
+            # No path list here on purpose: params are built before the op
+            # runs, so any list written now is what was *requested*.
+            # _record_history fills in ``deleted_paths`` from the result,
+            # so the log names the files that actually went.
+            history={
+                "action": "delete-images",
+                "params": {
+                    "requested_count": len(sel),
+                    "labeled_count": labeled,
+                },
+                "summary": f"永久删除 {len(sel)} 张图片"
+                           + (f"（含 {labeled} 份标注）" if labeled else ""),
+            },
         )
 
     def _do_move(self, sel: list[ImageInfo]) -> None:
@@ -1360,6 +1379,7 @@ class BrowserView(QWidget):
             ok_count=getattr(result, "ok_count", 0),
             fail_count=getattr(result, "fail_count", 0),
             moves=getattr(result, "moves", None),
+            succeeded=getattr(result, "succeeded", None),
         )
         if result.fail_count:
             details = "\n".join(f"{p}\n  → {err}" for p, err in result.failed[:200])
@@ -1386,7 +1406,8 @@ class BrowserView(QWidget):
 
     def _record_history(self, ok: bool, ok_count: int = 0,
                          fail_count: int = 0, error: str = "",
-                         moves: dict[str, str] | None = None) -> None:
+                         moves: dict[str, str] | None = None,
+                         succeeded: list | None = None) -> None:
         """Append a single JSONL entry for the just-finished metadata op.
 
         No-op when the caller didn't pass ``history=`` to _run (pure image
@@ -1408,6 +1429,10 @@ class BrowserView(QWidget):
         params = dict(hist.get("params", {}))
         if moves:
             params["moves"] = moves
+        # Outcome, not intent: for a permanent delete the whole value of
+        # the record is naming the files that are actually gone.
+        if succeeded is not None:
+            params["deleted_paths"] = [str(p) for p in succeeded]
         try:
             _hist.append(
                 self._state.dataset.root_path,

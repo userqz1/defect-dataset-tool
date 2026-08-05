@@ -1103,6 +1103,39 @@ class BrowserToolController:
 
         BatchRunner(self._rt.shell, "改分类").run(task=task, on_done=handle)
 
+    def _log_permanent_delete(self, action: str, deleted: list[str],
+                              failed: int, summary: str) -> None:
+        """Append the audit record for a permanent delete.
+
+        Never ``undoable``: the files are unlinked, not trashed, so there
+        is nothing to reverse. The entry exists so that afterwards the
+        question "which files did I just destroy?" has an answer — the
+        one thing still recoverable once the bytes are gone.
+
+        Failures are swallowed: the delete already happened, and losing a
+        log line must not surface as an error for an op that succeeded.
+        """
+        ds = self._rt.state.dataset
+        if ds is None:
+            return
+        from core import history as _hist
+        try:
+            _hist.append(
+                ds.root_path,
+                _hist.HistoryEntry.now(
+                    action=action,
+                    params={
+                        "deleted_count": len(deleted),
+                        "failed_count": failed,
+                        "deleted_paths": deleted,
+                    },
+                    ok=failed == 0,
+                    summary=summary + (f"（{failed} 失败）" if failed else ""),
+                ),
+            )
+        except Exception:
+            logger.exception("history append failed for %s", action)
+
     def _delete_issue_images(self, images: list) -> None:
         if not images:
             return
@@ -1123,6 +1156,16 @@ class BrowserToolController:
 
         def handle(result):
             n_ok = len(getattr(result, "succeeded", []))
+            n_fail = len(getattr(result, "failed", []))
+            deleted_paths = {str(p) for p in result.succeeded}
+            # Record before any UI work: a blocking InfoBar/dialog must not
+            # be able to swallow the only trace of a permanent delete.
+            self._log_permanent_delete(
+                action="delete-issue-images",
+                deleted=sorted(deleted_paths),
+                failed=n_fail,
+                summary=f"永久删除问题图片 {n_ok} 张",
+            )
             InfoBar.success(
                 "问题图片已删除",
                 f"{n_ok} 张已永久删除",
@@ -1132,7 +1175,6 @@ class BrowserToolController:
             self._rt.state.set_quality_issues(None)
             # Incremental: remove deleted paths from Dataset + SampleSet
             # instead of a full filesystem rescan.
-            deleted_paths = {str(p) for p in result.succeeded}
             if deleted_paths:
                 self._incremental_remove(deleted_paths)
 

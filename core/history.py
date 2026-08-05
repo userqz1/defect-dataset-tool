@@ -176,11 +176,18 @@ def clear(root: Path) -> None:
 #     to populate that map at record time.
 #   - ``rename-category`` — swaps old/new name, pure filesystem rename.
 #
-# Not yet supported (stay ``undoable=False``):
-#   - ``delete-duplicates`` (files are permanently deleted)
+# Never undoable — the files are unlinked, not trashed, so there is
+# nothing to reverse. These entries are pure audit: they answer "which
+# files did that destroy?", which is all that survives the operation.
+#   - ``delete-images`` (grid selection delete)
+#   - ``delete-issue-images`` (quality review delete)
+#   - ``delete-duplicates`` (dedup delete)
+# All three record ``deleted_paths``.
+#
+# Not yet supported, but reversible in principle (stay ``undoable=False``
+# until a proper BeforeState snapshot model exists):
 #   - ``merge-categories`` (source→target grouping isn't captured)
 #   - ``split-category`` (same)
-# These will be added when we design a proper BeforeState snapshot model.
 
 
 def find_last_undoable(root: Path) -> "HistoryEntry | None":
