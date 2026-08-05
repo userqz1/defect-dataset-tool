@@ -4,9 +4,6 @@ Any delete mutates the dataset, which re-runs the filter and calls
 ``_show_page`` — that resets to the first chunk and scrolls to the top.
 The fix is a one-shot "land here after the next render" request, armed
 *before* the delete while the victims' neighbours are still known.
-
-Also covers DetailView's advance-after-delete, which has to leave the
-viewer on the following image rather than reloading the deleted one.
 """
 from __future__ import annotations
 
@@ -21,7 +18,6 @@ pytest.importorskip("PyQt6", reason="GUI test")
 from core.models import ImageInfo  # noqa: E402
 from gui.app_state import AppState  # noqa: E402
 from gui.views.browser_view import CHUNK_SIZE, BrowserView  # noqa: E402
-from gui.views.detail_view import DetailView  # noqa: E402
 
 
 def _images(n: int) -> list[ImageInfo]:
@@ -99,45 +95,3 @@ def test_a_target_that_vanished_is_dropped_quietly(view):
 def test_none_target_disarms(view):
     view.request_reveal_after_render(None)
     assert view._reveal_after_render is None
-
-
-# ---------- DetailView advance ----------
-
-@pytest.fixture
-def detail(qapp, monkeypatch):
-    d = DetailView()
-    monkeypatch.setattr(d, "_load_current", lambda: None)
-    return d
-
-
-def test_advance_lands_on_the_following_image(detail):
-    imgs = _images(5)
-    detail._images = list(imgs)
-    detail._index = 2
-    assert detail.drop_current_and_advance() is True
-    assert len(detail._images) == 4
-    assert detail.current_image().path == imgs[3].path
-
-
-def test_advance_from_the_last_image_steps_back(detail):
-    imgs = _images(3)
-    detail._images = list(imgs)
-    detail._index = 2
-    assert detail.drop_current_and_advance() is True
-    assert detail.current_image().path == imgs[1].path
-
-
-def test_advance_on_the_only_image_goes_back_to_the_grid(detail):
-    seen = []
-    detail.back_requested.connect(lambda: seen.append(1))
-    detail._images = _images(1)
-    detail._index = 0
-    assert detail.drop_current_and_advance() is False
-    assert seen == [1]
-    assert detail._images == []
-
-
-def test_advance_with_no_image_is_a_noop(detail):
-    detail._images = []
-    detail._index = -1
-    assert detail.drop_current_and_advance() is False
