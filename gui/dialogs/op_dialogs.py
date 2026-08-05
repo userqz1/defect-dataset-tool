@@ -39,6 +39,27 @@ class MoveToCategoryDialog(_OpDialogBase):
         return self.combo.currentText()
 
 
+class NewClassNameDialog(_OpDialogBase):
+    """Type a class name that isn't in the project's list yet.
+
+    The shape list's per-row dropdown is deliberately non-editable — an
+    editable one there churned a QLineEdit subclass on every list rebuild
+    and destabilised the app — so "a name I haven't used before" needs
+    somewhere to go. This is it, reached from the dropdown's
+    "＋ 新建类别…" entry.
+    """
+
+    def __init__(self, current: str = "", parent=None) -> None:
+        super().__init__(self.tr("新建类别"), parent)
+        self.name_edit = LineEdit(self)
+        self.name_edit.setText(current)
+        self.name_edit.selectAll()
+        self._add_row(self.tr("类别名称"), self.name_edit)
+
+    def name(self) -> str:
+        return self.name_edit.text().strip()
+
+
 class ProgressDialog(_OpDialogBase):
     """Fluent 风格的进度对话框。
 

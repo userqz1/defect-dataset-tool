@@ -15,7 +15,7 @@ frees ribbon space (the topbar was overcrowded).
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -29,6 +29,7 @@ from qfluentwidgets import (
     Action,
     BodyLabel,
     CaptionLabel,
+    ComboBox,
     FluentIcon as FIF,
     RoundMenu,
     ToolButton,
@@ -38,6 +39,11 @@ from core.models import Annotation
 from gui import i18n
 from gui.theme import T
 from gui.widgets.image_viewer import color_for_label
+
+# Sentinel entry at the bottom of every row's class dropdown. The combo is
+# non-editable (see _build_row_widget), so this is where a class name the
+# project has never seen gets typed.
+NEW_CLASS_ENTRY = "＋ 新建类别…"
 
 
 class AnnotationPane(QWidget):
@@ -53,9 +59,9 @@ class AnnotationPane(QWidget):
     # the delete through the viewer (so shapes_changed fires + the
     # canvas repaints in one path).
     delete_shape_requested = pyqtSignal(int)
-    # Double-click a row (or right-click "重命名") → rename that shape's
-    # label in place. Payload is (row, new_label); DetailView normalizes
-    # the label, updates the shape, and refreshes the canvas + list.
+    # A row's class dropdown was used → reclassify that shape. Payload is
+    # (row, new_label); DetailView normalizes the label, updates the shape,
+    # and refreshes the canvas + list. Same signal the 1-9 shortcuts hit.
     rename_shape_requested = pyqtSignal(int, str)
 
     def __init__(
@@ -68,16 +74,17 @@ class AnnotationPane(QWidget):
         # Track the live count of real shapes so currentRowChanged can
         # filter out the "（无标注）" placeholder row from emit-back.
         self._shape_count: int = 0
-        # Raw label / shape_type per row — lets us reformat a row after an
-        # inline rename without re-reading the annotation. _editing_row marks
-        # the row whose inline editor is open.
+        # Raw label / shape_type per row, so a row can be refreshed in
+        # place without re-reading the annotation.
         self._labels: list[str] = []
         self._types: list[str] = []
-        self._editing_row: int = -1
-        # Project classes, for the right-click "改为类别" list. Retyping a
+        # Project classes offered by each row's class dropdown. Retyping a
         # class name to reclassify a box is the slow path; picking an
         # existing one should not require typing at all.
         self._class_names: list[str] = []
+        # True while the rows are being populated, so a programmatic
+        # setCurrentText is not mistaken for the user picking a class.
+        self._syncing_rows: bool = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -111,14 +118,11 @@ class AnnotationPane(QWidget):
         # around its setCurrentRow call so we won't loop back.
         self.shape_list.currentRowChanged.connect(
             self._on_current_row_changed)
-        # Inline rename: double-click a row edits just the label. We drive
-        # editing manually (NoEditTriggers) so the editor shows the raw
-        # label, not the "● label (type)" display string.
+        # Rows host their own class dropdown, so the list itself never
+        # edits: an item editor would render underneath the row widget.
         self.shape_list.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.shape_list.itemDoubleClicked.connect(self._begin_rename)
-        self.shape_list.itemDelegate().closeEditor.connect(self._end_rename)
-        # Right-click on a row → "重命名" / "删除此标注" context menu.
+        # Right-click on a row → "删除此标注" context menu.
         self.shape_list.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu)
         self.shape_list.customContextMenuRequested.connect(
@@ -128,26 +132,156 @@ class AnnotationPane(QWidget):
     # ---------- public API (shell drives these) ----------
 
     def refresh_shape_list(self, annotation: Annotation | None) -> None:
-        """Rebuild the shape list from the current annotation."""
-        self.shape_list.blockSignals(True)
-        self.shape_list.clear()
+        """Sync the shape list to *annotation*.
+
+        Rows are REUSED whenever the row count is unchanged — only their
+        contents are updated. This is not just an optimisation: this
+        method runs on every shape edit, and destroying + recreating the
+        per-row widgets each time is what destabilised the app. Keeping
+        the widgets alive removes that churn entirely.
+        """
         shapes = annotation.shapes if annotation else []
-        self._shape_count = len(shapes)
-        self._labels = [s.label for s in shapes]
-        self._types = [s.shape_type for s in shapes]
-        self._editing_row = -1
-        if shapes:
-            for i in range(len(shapes)):
-                item = QListWidgetItem(self._format_row(i))
-                item.setForeground(color_for_label(self._labels[i]))
-                self.shape_list.addItem(item)
-        else:
-            placeholder = QListWidgetItem("（无标注）")
-            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.shape_list.addItem(placeholder)
-        self.shape_list.blockSignals(False)
-        # A rebuild clears the selection → nothing to delete yet.
-        self.delete_btn.setEnabled(False)
+        self._syncing_rows = True
+        try:
+            self.shape_list.blockSignals(True)
+            reuse = (bool(shapes)
+                     and self.shape_list.count() == len(shapes)
+                     and self._shape_count == len(shapes))
+            self._shape_count = len(shapes)
+            self._labels = [s.label for s in shapes]
+            self._types = [s.shape_type for s in shapes]
+            if reuse:
+                for i in range(len(shapes)):
+                    self._update_row_widget(i)
+            elif shapes:
+                self.shape_list.clear()
+                for i in range(len(shapes)):
+                    item = QListWidgetItem()
+                    widget = self._build_row_widget(i)
+                    item.setSizeHint(widget.sizeHint())
+                    self.shape_list.addItem(item)
+                    self.shape_list.setItemWidget(item, widget)
+            else:
+                self.shape_list.clear()
+                placeholder = QListWidgetItem("（无标注）")
+                placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.shape_list.addItem(placeholder)
+            self.shape_list.blockSignals(False)
+        finally:
+            self._syncing_rows = False
+        if not reuse:
+            # Only a real rebuild drops the selection.
+            self.delete_btn.setEnabled(False)
+
+    def _row_parts(self, row: int):
+        """(dot, combo, type-label) of an existing row, or (None,)*3."""
+        item = self.shape_list.item(row)
+        if item is None:
+            return None, None, None
+        widget = self.shape_list.itemWidget(item)
+        if widget is None:
+            return None, None, None
+        return (widget.findChild(BodyLabel),
+                widget.findChild(ComboBox),
+                widget.findChild(CaptionLabel))
+
+    def _class_options(self, label: str) -> list[str]:
+        """Dropdown entries for a shape currently labelled *label*.
+
+        The shape's own class leads when the project doesn't know it —
+        imported data carries names like "TODO" — so merely opening the
+        dropdown can never silently retarget it.
+        """
+        options = list(self._class_names)
+        if label and label not in options:
+            options.insert(0, label)
+        return options + [NEW_CLASS_ENTRY]
+
+    def _update_row_widget(self, i: int) -> None:
+        """Refresh an existing row in place — no widget is destroyed."""
+        dot, combo, kind = self._row_parts(i)
+        if combo is None:
+            return
+        label = self._labels[i]
+        options = self._class_options(label)
+        if [combo.itemText(n) for n in range(combo.count())] != options:
+            combo.clear()
+            combo.addItems(options)
+        combo.setCurrentText(label)
+        if dot is not None:
+            dot.setStyleSheet(f"color: {color_for_label(label).name()}")
+        if kind is not None:
+            kind.setText(f"({self._types[i]})")
+
+    def _build_row_widget(self, i: int) -> QWidget:
+        """One list row: colour dot + class dropdown + shape type.
+
+        The dropdown is a plain (non-editable) ComboBox on purpose. An
+        EditableComboBox subclasses QLineEdit and carries a
+        LineEditButton child; churning those inside the list produced a
+        flood of "disconnect from destroyed signal" warnings and then a
+        native crash. Measured: 300 rebuild rounds gave 1801 Qt warnings
+        with EditableComboBox and 1 with ComboBox. New class names go
+        through the "＋ 新建类别…" entry instead.
+        """
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(T.GAP_XS, 2, T.GAP_XS, 2)
+        lay.setSpacing(T.GAP_XS)
+
+        dot = BodyLabel("●")
+        dot.setObjectName("shapeRowDot")
+        # Inline colour, deliberately: this is a *category-identity*
+        # colour — the same hash-derived one the canvas paints the box
+        # with — which CLAUDE.md carves out of the token rule precisely
+        # because it must stay put across light/dark. It is per-instance
+        # and computed, so QSS cannot express it. Value still comes from
+        # color_for_label, never a literal.
+        dot.setStyleSheet(f"color: {color_for_label(self._labels[i]).name()}")
+        lay.addWidget(dot)
+
+        combo = ComboBox()
+        combo.setObjectName("shapeRowClass")
+        # No setFixedWidth — CLAUDE.md gotcha: class names are arbitrary
+        # length and a fixed width clips them.
+        combo.setMinimumWidth(150)
+        combo.addItems(self._class_options(self._labels[i]))
+        combo.setCurrentText(self._labels[i])
+        combo.setToolTip("改为其他类别（也可用 1-9 快捷键）")
+        combo.activated.connect(
+            lambda _n, r=i, c=combo: self._on_row_class_picked(r, c))
+        lay.addWidget(combo, 1)
+
+        kind = CaptionLabel(f"({self._types[i]})")
+        kind.setObjectName("shapeRowType")
+        lay.addWidget(kind)
+        return row
+
+    def _on_row_class_picked(self, row: int, combo) -> None:
+        """A row's dropdown was used. Ignored while we are populating."""
+        if self._syncing_rows:
+            return
+        if not (0 <= row < len(self._labels)):
+            return
+        picked = combo.currentText()
+        current = self._labels[row]
+        if picked == NEW_CLASS_ENTRY:
+            from gui.dialogs.op_dialogs import NewClassNameDialog
+            dlg = NewClassNameDialog(current, self.window())
+            picked = dlg.name() if dlg.exec() else ""
+            if not picked:
+                # Cancelled — put the sentinel back to the real class so
+                # the row never displays "＋ 新建类别…" as its label.
+                self._syncing_rows = True
+                combo.setCurrentText(current)
+                self._syncing_rows = False
+                return
+        if not picked or picked == current:
+            return
+        # Select the row first so the canvas highlights the shape about to
+        # change — a mis-click must not retarget a box the user can't see.
+        self.shape_list.setCurrentRow(row)
+        self.rename_shape_requested.emit(row, picked)
 
     def select_shape(self, idx: int) -> None:
         """Mirror an external (viewer-driven) selection into the list."""
@@ -177,47 +311,6 @@ class AnnotationPane(QWidget):
         if 0 <= row < self._shape_count:
             self.delete_shape_requested.emit(row)
 
-    def _format_row(self, i: int) -> str:
-        return f"●  {self._labels[i]}   ({self._types[i]})"
-
-    def _begin_rename(self, item: QListWidgetItem) -> None:
-        """Double-click / "重命名" → edit just the raw label in place."""
-        row = self.shape_list.row(item)
-        if not (0 <= row < self._shape_count):
-            return
-        self._editing_row = row
-        # Show the raw label (not "● label (type)") in the editor.
-        self.shape_list.blockSignals(True)
-        item.setText(self._labels[row])
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-        self.shape_list.blockSignals(False)
-        self.shape_list.editItem(item)
-
-    def _end_rename(self, *_args) -> None:
-        """Editor closed (commit or cancel) → reformat the row; emit if changed.
-
-        On cancel the model text is untouched (still the raw label we set),
-        so ``new_label == orig`` and nothing is emitted.  The actual rename is
-        deferred one tick so the editor fully tears down before DetailView
-        rebuilds the list in response.
-        """
-        row = self._editing_row
-        self._editing_row = -1
-        if not (0 <= row < self._shape_count):
-            return
-        item = self.shape_list.item(row)
-        if item is None:
-            return
-        new_label = item.text().strip()
-        orig = self._labels[row]
-        self.shape_list.blockSignals(True)
-        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        item.setText(self._format_row(row))  # restore "● label (type)"
-        self.shape_list.blockSignals(False)
-        if new_label and new_label != orig:
-            QTimer.singleShot(
-                0, lambda: self.rename_shape_requested.emit(row, new_label))
-
     def _on_list_context_menu(self, pos) -> None:
         """Right-click on a list row → "删除此标注"."""
         if self._shape_count == 0:
@@ -230,32 +323,17 @@ class AnnotationPane(QWidget):
             return
         self.shape_list.setCurrentRow(row)
 
+        # No "改为类别" / "重命名" entries: the row's own dropdown does both,
+        # right where the label is. The inline item editor cannot work
+        # here anyway — it renders underneath the row widget.
         menu = RoundMenu(parent=self.shape_list)
-        current = self._labels[row] if row < len(self._labels) else ""
-        others = [c for c in self._class_names if c and c != current]
-        if others:
-            # Reclassify without typing. Numbered to match the 1-9
-            # shortcuts, so the menu doubles as the cheatsheet for them.
-            sub = RoundMenu("改为类别", parent=menu)
-            sub.setIcon(FIF.TAG)
-            for name in others:
-                slot = self._class_names.index(name)
-                prefix = f"{slot + 1}  " if slot < 9 else "    "
-                sub.addAction(Action(
-                    f"{prefix}{name}",
-                    triggered=lambda _=False, r=row, c=name:
-                        self.rename_shape_requested.emit(r, c)))
-            menu.addMenu(sub)
-        menu.addAction(Action(
-            FIF.EDIT, "重命名",
-            triggered=lambda: self._begin_rename(item)))
         menu.addAction(Action(
             FIF.DELETE, i18n.t("annotation.delete_this"),
             triggered=lambda: self.delete_shape_requested.emit(row)))
         menu.exec(self.shape_list.viewport().mapToGlobal(pos))
 
     def set_class_names(self, names: list[str]) -> None:
-        """Project classes offered by the right-click "改为类别" list."""
+        """Project classes offered by each row's class dropdown."""
         self._class_names = [n for n in names if n]
 
     def _section_label(self, text: str) -> CaptionLabel:

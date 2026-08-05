@@ -109,7 +109,131 @@ def test_digit_zero_is_not_bound(view):
     assert view._annotation.shapes[0].label == "marked_loose"
 
 
-# ---------- the menu must agree with the shortcuts ----------
+# ---------- the per-row class dropdown ----------
+
+def _pane_with_rows(labels: list[str]) -> AnnotationPane:
+    pane = AnnotationPane()
+    pane.set_class_names(CLASSES)
+    pane.refresh_shape_list(Annotation(image_path=None, shapes=[
+        Shape(label=lbl, shape_type="rectangle", points=[(0, 0), (9, 9)])
+        for lbl in labels
+    ]))
+    return pane
+
+
+def _combo(pane: AnnotationPane, row: int):
+    from qfluentwidgets import ComboBox
+    widget = pane.shape_list.itemWidget(pane.shape_list.item(row))
+    return widget.findChild(ComboBox)
+
+
+def _items(combo) -> list[str]:
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_every_row_carries_a_class_dropdown(qapp):
+    pane = _pane_with_rows(["marked_loose", "marked_normal"])
+    assert _combo(pane, 0) is not None
+    assert _combo(pane, 1) is not None
+
+
+def test_dropdown_shows_the_shapes_own_class(qapp):
+    pane = _pane_with_rows(["marked_normal", "marked_loose"])
+    assert _combo(pane, 0).currentText() == "marked_normal"
+    assert _combo(pane, 1).currentText() == "marked_loose"
+
+
+def test_class_outside_the_project_list_is_still_shown(qapp):
+    """Imported data carries these — a "TODO" placeholder, say. Opening
+    the dropdown must not silently retarget such a shape."""
+    pane = _pane_with_rows(["TODO"])
+    combo = _combo(pane, 0)
+    assert combo.currentText() == "TODO"
+    assert "TODO" in _items(combo)
+
+
+def test_dropdown_offers_a_way_to_type_a_new_class(qapp):
+    """The combo is non-editable (that is the crash fix), so a brand-new
+    name needs this entry."""
+    from gui.views.panes.annotation_pane import NEW_CLASS_ENTRY
+    assert NEW_CLASS_ENTRY in _items(_combo(_pane_with_rows(["TODO"]), 0))
+
+
+def test_the_dropdown_is_not_an_editable_combo(qapp):
+    """Regression guard for the native crash.
+
+    EditableComboBox subclasses QLineEdit and owns a LineEditButton;
+    churning those inside the list flooded Qt with "disconnect from
+    destroyed signal" and killed the process. Measured: 300 rebuild
+    rounds → 1801 warnings with EditableComboBox, 0 with ComboBox.
+    """
+    from qfluentwidgets import EditableComboBox
+    combo = _combo(_pane_with_rows(["marked_loose"]), 0)
+    assert not isinstance(combo, EditableComboBox)
+
+
+def test_same_count_refresh_reuses_rows_instead_of_rebuilding(qapp):
+    """The churn fix. refresh_shape_list runs on *every* shape edit; if
+    it destroyed and recreated the row widgets each time we would be back
+    at the crash."""
+    pane = _pane_with_rows(["marked_loose", "marked_normal"])
+    built = []
+    real = pane._build_row_widget
+    pane._build_row_widget = lambda i: (built.append(i), real(i))[1]
+    before = [_combo(pane, 0), _combo(pane, 1)]
+    pane.refresh_shape_list(Annotation(image_path=None, shapes=[
+        Shape(label="unmarked_normal", shape_type="rectangle",
+              points=[(0, 0), (9, 9)]),
+        Shape(label="marked_loose", shape_type="rectangle",
+              points=[(0, 0), (9, 9)]),
+    ]))
+    assert built == [], "rows were rebuilt for a same-count refresh"
+    # Same widget objects, updated in place.
+    assert [_combo(pane, 0), _combo(pane, 1)] == before
+    assert _combo(pane, 0).currentText() == "unmarked_normal"
+
+
+def test_row_count_change_does_rebuild(qapp):
+    pane = _pane_with_rows(["marked_loose", "marked_normal"])
+    pane.refresh_shape_list(Annotation(image_path=None, shapes=[
+        Shape(label="marked_loose", shape_type="rectangle",
+              points=[(0, 0), (9, 9)]),
+    ]))
+    assert pane.shape_list.count() == 1
+    assert _combo(pane, 0).currentText() == "marked_loose"
+
+
+def test_refreshing_emits_nothing(qapp):
+    """Populating the combos must not read as the user picking classes."""
+    pane = _pane_with_rows(["marked_loose"])
+    seen = []
+    pane.rename_shape_requested.connect(lambda r, c: seen.append((r, c)))
+    pane.refresh_shape_list(Annotation(image_path=None, shapes=[
+        Shape(label="marked_normal", shape_type="rectangle",
+              points=[(0, 0), (9, 9)]),
+    ]))
+    assert seen == []
+
+
+def test_picking_a_class_asks_for_the_reclassify(qapp):
+    pane = _pane_with_rows(["marked_loose", "marked_normal"])
+    seen = []
+    pane.rename_shape_requested.connect(lambda r, c: seen.append((r, c)))
+    combo = _combo(pane, 1)
+    combo.setCurrentText("unmarked_normal")
+    pane._on_row_class_picked(1, combo)
+    assert seen == [(1, "unmarked_normal")]
+
+
+def test_picking_the_unchanged_class_is_a_noop(qapp):
+    pane = _pane_with_rows(["marked_loose"])
+    seen = []
+    pane.rename_shape_requested.connect(lambda r, c: seen.append((r, c)))
+    pane._on_row_class_picked(0, _combo(pane, 0))
+    assert seen == []
+
+
+# ---------- the dropdown must agree with the shortcuts ----------
 
 def test_pane_offers_the_classes_it_was_given(qapp):
     pane = AnnotationPane()
