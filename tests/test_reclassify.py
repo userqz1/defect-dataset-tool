@@ -203,6 +203,39 @@ def test_row_count_change_does_rebuild(qapp):
     assert _combo(pane, 0).currentText() == "marked_loose"
 
 
+def test_dropdown_lists_every_class_when_rows_are_built_first(qapp):
+    """DetailView refreshes the shape list BEFORE pushing the class
+    vocabulary — that is the order at all four of its call sites. Built
+    in that order, the dropdowns used to hold only the shape's own class
+    plus "＋ 新建类别…", making every other class unreachable.
+    """
+    from gui.views.panes.annotation_pane import NEW_CLASS_ENTRY
+    pane = AnnotationPane()
+    # Production order: rows first, vocabulary second.
+    pane.refresh_shape_list(Annotation(image_path=None, shapes=[
+        Shape(label="unmarked_loose", shape_type="rectangle",
+              points=[(0, 0), (9, 9)]),
+    ]))
+    pane.set_class_names(CLASSES)
+
+    items = _items(_combo(pane, 0))
+    for cls in CLASSES:
+        assert cls in items, f"{cls} missing — cannot reclassify to it"
+    assert "unmarked_loose" in items      # its own class, kept
+    assert NEW_CLASS_ENTRY in items
+    assert _combo(pane, 0).currentText() == "unmarked_loose"
+
+
+def test_updating_the_vocabulary_does_not_retarget_shapes(qapp):
+    pane = _pane_with_rows(["marked_loose", "TODO"])
+    seen = []
+    pane.rename_shape_requested.connect(lambda r, c: seen.append((r, c)))
+    pane.set_class_names(CLASSES + ["extra_class"])
+    assert seen == []
+    assert _combo(pane, 0).currentText() == "marked_loose"
+    assert _combo(pane, 1).currentText() == "TODO"
+
+
 def test_class_name_is_not_vertically_clipped(qapp):
     """The row must actually GET the height it asks for.
 

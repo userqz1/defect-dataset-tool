@@ -346,8 +346,26 @@ class AnnotationPane(QWidget):
         menu.exec(self.shape_list.viewport().mapToGlobal(pos))
 
     def set_class_names(self, names: list[str]) -> None:
-        """Project classes offered by each row's class dropdown."""
-        self._class_names = [n for n in names if n]
+        """Set the classes every row's dropdown offers.
+
+        Also refreshes rows that already exist. DetailView calls
+        ``refresh_shape_list`` *before* it pushes the vocabulary — that is
+        the order at all four of its call sites — so a row built first
+        would otherwise keep whatever list was current for the previous
+        image, or an empty one on the very first load. Updating here means
+        the pane is correct regardless of the order it is driven in,
+        rather than depending on four callers staying in step.
+        """
+        cleaned = [n for n in names if n]
+        if cleaned == self._class_names:
+            return
+        self._class_names = cleaned
+        self._syncing_rows = True
+        try:
+            for i in range(len(self._labels)):
+                self._update_row_widget(i)
+        finally:
+            self._syncing_rows = False
 
     def _section_label(self, text: str) -> CaptionLabel:
         lbl = CaptionLabel(text.upper())
